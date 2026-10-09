@@ -232,10 +232,18 @@ export async function wikiFor(question, examHtmlPath) {
       const picked = question.wikiRefs
         .map((r) => all.find((s) => s.heading.trim() === String(r.heading).trim()))
         .filter(Boolean)
-        .map((s) => ({ ...s, score: 999 }));
+        .map((s) => ({ ...s, score: 1, fit: 1 }));
       if (picked.length) {
-        const rest = contentSections(all).filter((s) => !picked.some((p) => p.heading === s.heading));
-        return { noteName: first.note, notePath: path, sections: [...picked, ...rest], auto: false };
+        // 지정된 섹션 → 나머지 본문 → 참고(Cheat Sheet·목차) 순. 자동 매칭 경로와 목록 구성을 맞춘다.
+        const isPicked = (s) => picked.some((p) => p.heading === s.heading);
+        const body = contentSections(all).filter((s) => !isPicked(s)).map((s) => ({ ...s, score: 0, fit: 0 }));
+        const extra = all
+          .filter((s) => !isPicked(s) && !body.some((b) => b.heading === s.heading))
+          .map((s) => ({ ...s, score: 0, fit: 0, extra: true }));
+        return {
+          noteName: first.note, notePath: path, auto: false,
+          sections: [...picked, ...body, ...extra],
+        };
       }
     }
   }

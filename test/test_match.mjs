@@ -3,7 +3,7 @@
 // 왜 따로 있나: test_phase3은 "예외 없이 1등이 나오는가"만 봤지 **그게 맞는 섹션인가**는
 // 거의 안 봤다. 그래서 알레르기비염 문항에 "미각성 비염"을 띄우는 걸 못 잡았다(2026-10-09).
 // 여기 정답지는 문항과 노트 섹션을 사람이 직접 읽고 단 것이다.
-import { readFileSync, writeFileSync, rmSync } from 'fs';
+import { readFileSync, writeFileSync, rmSync, readdirSync, existsSync } from 'fs';
 import { pathToFileURL } from 'url';
 
 const PWA = '/Users/hyunminkang/Documents/medical-study-pwa';
@@ -108,6 +108,63 @@ const secsOpt = [{ heading: '1. 미각성 비염', text: '콜린성 반사.\n(�
                  { heading: '2. 국소 스테로이드제 약리', text: '비강 스테로이드의 작용과 안전성.' }];
 ok('족보 오답 선지가 매칭을 끌고 가지 않는다',
   W.rankSections({ q: '비강 스테로이드의 안전성은?', opts: [], explain: '' }, secsOpt)[0].heading.startsWith('2.'));
+
+// ── wikiRefs(수동 지정) 경로 — 2026-10-09 도입. 자동 매칭보다 **항상** 우선해야 한다.
+{
+  const labeled = [
+    ['응급_중환자/1015_전문심장소생술ACLS_모의고사', 13],
+    ['응급_중환자/1012_환경의학_모의고사', 18],
+    ['두경부_피부/0929_두경부피부_알레르기비염부비동염비부비동종양_모의고사', 6],
+  ];
+  for (const [exam, n] of labeled) {
+    const h = readFileSync(`${V}/06_모의고사/${exam}.html`, 'utf8');
+    const qs = JSON.parse(h.match(/const QUESTIONS = (\[[\s\S]*?\]);\s*\nconst LECTURE_NAME/)[1]);
+    const withRefs = qs.filter((q) => Array.isArray(q.wikiRefs) && q.wikiRefs.length);
+    ok(`${exam.split('/')[1].slice(0, 24)}: 전 문항에 wikiRefs`,
+      withRefs.length === qs.length && qs.length === n, `${withRefs.length}/${qs.length}`);
+
+    // 지정한 heading이 노트에 실제로 있어야 한다 — 오타 하나면 앱이 조용히 자동매칭으로 떨어진다
+    let bad = 0;
+    for (const q of qs) {
+      for (const r of q.wikiRefs || []) {
+        let found = null;
+        for (const root of ['98_예습노트_보관', '02_Wiki', '01_임종평_전범위']) {
+          for (const sub of readdirSync(`${V}/${root}`)) {
+            const c = `${V}/${root}/${sub}/${r.note}.md`;
+            if (existsSync(c)) { found = c; break; }
+          }
+          if (found) break;
+        }
+        if (!found) { bad++; continue; }
+        const heads = W.splitSections(readFileSync(found, 'utf8')).map((x) => x.heading);
+        if (!heads.includes(r.heading.trim())) bad++;
+      }
+    }
+    ok(`${exam.split('/')[1].slice(0, 24)}: heading이 노트에 실존`, bad === 0, `${bad}건 불일치`);
+  }
+}
+
+// Cheat Sheet를 가리키는 wikiRefs도 살아남아야 한다 —
+// contentSections가 "0. Exam Cheat Sheet"를 매칭 후보에서 빼기 때문에 그냥 두면 사라진다.
+// (환경의학 노트에는 익수·저체온 대단원이 없어서 그 문항들이 Cheat Sheet를 가리킨다.)
+{
+  const h = readFileSync(`${V}/06_모의고사/응급_중환자/1012_환경의학_모의고사.html`, 'utf8');
+  const qs = JSON.parse(h.match(/const QUESTIONS = (\[[\s\S]*?\]);\s*\nconst LECTURE_NAME/)[1]);
+  const cheat = qs.filter((q) => (q.wikiRefs || []).some((r) => /Cheat Sheet/.test(r.heading)));
+  ok('익수·저체온 문항은 Cheat Sheet를 가리킨다', cheat.length === 7, `${cheat.length}개`);   // Q1~4,9,12,13
+
+  const all = W.splitSections(readFileSync(
+    `${V}/98_예습노트_보관/응급_중환자/1012_응급중환자_환경의학.md`, 'utf8'));
+  const body = W.contentSections(all);
+  ok('Cheat Sheet는 자동 매칭 후보에서 빠진다',
+    !body.some((s) => /Cheat Sheet/.test(s.heading)));
+  // wikiFor와 같은 방식으로 목록을 만들어 본다
+  const ref = cheat[0].wikiRefs[0];
+  const picked = all.filter((s) => s.heading.trim() === ref.heading.trim());
+  ok('그래도 wikiRefs로 지정하면 찾아진다', picked.length === 1, ref.heading);
+  const extra = all.filter((s) => !body.some((b) => b.heading === s.heading));
+  ok('참고 섹션(목차·Cheat Sheet·Advanced)이 목록 끝에 남는다', extra.length >= 2, `${extra.length}개`);
+}
 
 console.log(`\n통과 ${pass}건`);
 if (fail.length) { console.log(`실패 ${fail.length}건:`); fail.forEach((f) => console.log('  ✗ ' + f)); process.exit(1); }

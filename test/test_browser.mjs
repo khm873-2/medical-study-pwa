@@ -352,6 +352,77 @@ await run('위키 드롭다운', () => {
   return out;
 });
 
+// ══════════ 5d. 노트 탭 2단 묶음 + 앱 이름 ══════════
+await run('노트 탭', () => {
+  const out = [];
+  out.push({ name: '앱 이름이 달모', ok: document.title === '달모', detail: document.title });
+  const meta = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+  out.push({ name: '홈화면 이름이 달모', ok: meta && meta.content === '달모',
+    detail: meta ? meta.content : 'null' });
+
+  document.querySelectorAll('section').forEach((s) => s.classList.add('hidden'));
+  document.getElementById('listScreen').classList.remove('hidden');
+  document.getElementById('notesBody').classList.remove('hidden');
+
+  // 앱이 만드는 것과 같은 구조를 세운다(임종평 20과목 포함)
+  const body = document.getElementById('notesBody');
+  body.innerHTML = '';
+  const mk = (label, subjects, open) => {
+    const o = document.createElement('details');
+    o.className = 'root-group'; o.open = open;
+    const s2 = document.createElement('summary');
+    s2.className = 'root-head';
+    s2.innerHTML = `<span class="head-row"><span>${label}</span><span class="subject-count">${subjects.length}과목</span></span>`;
+    o.appendChild(s2);
+    subjects.forEach((nm) => {
+      const d2 = document.createElement('details');
+      d2.className = 'subject-group';
+      const s3 = document.createElement('summary');
+      s3.className = 'subject-head';
+      s3.innerHTML = `<span class="head-row"><span>${nm}</span><span class="subject-count">10개</span></span>`;
+      d2.appendChild(s3); o.appendChild(d2);
+    });
+    body.appendChild(o);
+    return o;
+  };
+  mk('예습노트', ['두경부 피부', '응급 중환자', '근골격계'], true);
+  mk('위키', ['두경부 피부', '응급 중환자', '산부인과', '직업환경의학', '근골격계'], true);
+  const imj = mk('임종평 전범위',
+    Array.from({ length: 20 }, (_, i) => `과목${i + 1}`), false);
+
+  out.push({ name: '뿌리 그룹이 3개', ok: body.querySelectorAll('.root-group').length === 3 });
+  out.push({ name: '임종평은 접힌 채로 시작', ok: !imj.open });
+
+  // 임종평이 접혀 있으면 그 안의 20과목은 화면에 자리를 차지하지 않아야 한다
+  // ⚠️ 접힌 details 안의 자식은 getBoundingClientRect가 0이 아닌 값을 돌려준다(Chrome 실측).
+  //    "화면을 실제로 얼마나 먹는가"는 **부모 그룹의 높이**로 재야 정확하다.
+  const groupH = (el) => Math.round(el.getBoundingClientRect().height);
+  const closedH = groupH(imj);
+  const headH = groupH(imj.querySelector('summary.root-head'));
+  out.push({ name: '접힌 임종평이 헤더 높이만 차지한다(20과목 안 보임)',
+    ok: closedH <= headH + 14, detail: `그룹 ${closedH}px / 헤더 ${headH}px` });
+
+  // 펼치면 20과목만큼 늘어난다
+  imj.open = true;
+  const openH = groupH(imj);
+  out.push({ name: '펼치면 20과목만큼 늘어난다', ok: openH > closedH + 600,
+    detail: `${closedH} → ${openH}px` });
+  imj.open = false;
+  out.push({ name: '다시 접으면 원래대로', ok: groupH(imj) === closedH, detail: `${groupH(imj)}px` });
+
+  // 전체 목록 길이로도 확인 — 접힌 상태에서 노트탭 전체가 한 화면에 들어와야 한다
+  const bodyH = Math.round(body.getBoundingClientRect().height);
+  out.push({ name: '접힌 상태에서 노트탭 전체가 짧다', ok: bodyH < 900,
+    detail: `${bodyH}px (전부 펼치면 1500px+)` });
+
+  const rh = body.querySelector('.root-head');
+  out.push({ name: '뿌리 헤더가 탭하기 충분한 크기',
+    ok: rh.getBoundingClientRect().height >= 40, detail: `${Math.round(rh.getBoundingClientRect().height)}px` });
+  out.push({ name: '뿌리 헤더에 기본 마커가 없다(직접 그린 ▸ 사용)',
+    ok: getComputedStyle(rh).listStyleType === 'none' });
+  return out;
+});
+
 // ══════════ 6. 좁은 화면(아이패드 세로) ══════════
 await page.setViewport({ width: 820, height: 1180 });
 await new Promise((r) => setTimeout(r, 120));

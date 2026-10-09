@@ -859,28 +859,64 @@ async function loadNotesTab(force) {
     const groups = await noteList(force);
     body.innerHTML = '';
     if (!groups.length) { body.innerHTML = '<p class="muted">노트를 찾지 못했습니다.</p>'; return; }
+
+    // 뿌리(예습노트/Wiki/임종평)로 한 겹 묶는다. 임종평만 20개 과목이라
+    // 그냥 늘어놓으면 28개 그룹이 깔려서 내 과목을 못 찾는다(2026-10-09).
+    const ROOT_META = {
+      '98_예습노트_보관': { label: '예습노트', order: 0, open: true },
+      '02_Wiki': { label: '위키', order: 1, open: true },
+      '01_임종평_전범위': { label: '임종평 전범위', order: 2, open: false },
+    };
+    const byRoot = new Map();
     for (const g of groups) {
-      const det = document.createElement('details');
-      det.className = 'subject-group';
-      const sum = document.createElement('summary');
-      sum.className = 'subject-head';
-      sum.innerHTML =
-        `<span>${escapeText(g.subject.replace(/_/g, ' '))}</span>` +
-        `<span class="subject-count">${g.notes.length}개 · ${escapeText(g.root.replace(/^\d+_/, ''))}</span>`;
-      det.appendChild(sum);
-      body.appendChild(det);
-      for (const n of g.notes) {
-        const b = document.createElement('button');
-        b.className = 'exam-item';
-        const name = document.createElement('span');
-        name.className = 'exam-name';
-        name.textContent = n.name.replace(/^\d{4}_/, '');
-        const arrow = document.createElement('span');
-        arrow.className = 'exam-progress';
-        arrow.textContent = '›';
-        b.appendChild(name); b.appendChild(arrow);
-        b.onclick = () => openNote(n.path);
-        det.appendChild(b);
+      if (!byRoot.has(g.root)) byRoot.set(g.root, []);
+      byRoot.get(g.root).push(g);
+    }
+    const roots = [...byRoot.entries()].sort(
+      (a, b) => (ROOT_META[a[0]]?.order ?? 9) - (ROOT_META[b[0]]?.order ?? 9));
+
+    const noteBtn = (n) => {
+      const b = document.createElement('button');
+      b.className = 'exam-item';
+      const name = document.createElement('span');
+      name.className = 'exam-name';
+      name.textContent = n.name.replace(/^\d{4}_/, '');
+      const arrow = document.createElement('span');
+      arrow.className = 'exam-progress';
+      arrow.textContent = '›';
+      b.append(name, arrow);
+      b.onclick = () => openNote(n.path);
+      return b;
+    };
+
+    for (const [root, gs] of roots) {
+      const meta = ROOT_META[root] || { label: root.replace(/^\d+_/, ''), open: false };
+      const total = gs.reduce((a, g) => a + g.notes.length, 0);
+
+      const outer = document.createElement('details');
+      outer.className = 'root-group';
+      outer.open = !!meta.open;
+      const osum = document.createElement('summary');
+      osum.className = 'root-head';
+      osum.innerHTML =
+        '<span class="head-row">' +
+        `<span>${escapeText(meta.label)}</span>` +
+        `<span class="subject-count">${gs.length}과목 · ${total}개</span>` + '</span>';
+      outer.appendChild(osum);
+      body.appendChild(outer);
+
+      for (const g of gs) {
+        const det = document.createElement('details');
+        det.className = 'subject-group';
+        const sum = document.createElement('summary');
+        sum.className = 'subject-head';
+        sum.innerHTML =
+          '<span class="head-row">' +
+        `<span>${escapeText(g.subject.replace(/^\d+_/, '').replace(/_/g, ' '))}</span>` +
+          `<span class="subject-count">${g.notes.length}개</span>` + '</span>';
+        det.appendChild(sum);
+        outer.appendChild(det);
+        g.notes.forEach((n) => det.appendChild(noteBtn(n)));
       }
     }
   } catch (e) {
@@ -1082,8 +1118,9 @@ async function loadCardsTab() {
       det.className = 'subject-group';
       const sum = document.createElement('summary');
       sum.className = 'subject-head';
-      sum.innerHTML = `<span>${escapeText(g.subject.replace(/_/g, ' '))}</span>` +
-                      `<span class="subject-count">${g.notes.length}개</span>`;
+      sum.innerHTML = '<span class="head-row">' +
+        `<span>${escapeText(g.subject.replace(/_/g, ' '))}</span>` +
+                      `<span class="subject-count">${g.notes.length}개</span>` + '</span>';
       det.appendChild(sum);
       body.appendChild(det);
       for (const n of g.notes) {

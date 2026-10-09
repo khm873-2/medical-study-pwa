@@ -1,7 +1,7 @@
 {
-  "name": "의학 모의고사",
-  "short_name": "모의고사",
-  "description": "Medical_vault 모의고사를 아이패드에서 풀고 결과를 vault에 저장합니다.",
+  "name": "달모 — 달리면서 푸는 모의고사",
+  "short_name": "달모",
+  "description": "지하철에서든 침대에서든, 모의고사 풀고 모르는 건 노트·AI로 바로 확인합니다.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
@@ -9,9 +9,28 @@
   "background_color": "#f7f7f9",
   "theme_color": "#f7f7f9",
   "icons": [
-    { "src": "icons/icon-180.png", "sizes": "180x180", "type": "image/png" },
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "icons/icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }

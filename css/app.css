@@ -442,16 +442,20 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 /* 과목 접기 — 전부 펼쳐져 있으면 찾기 힘들다(2026-10-09) */
 .subject-group { margin-bottom: 8px; }
 .subject-group > summary.subject-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  /* ⚠️ summary에 display:flex를 주면 브라우저가 이 details를 "접힘" 대상에서 빼서
+     닫아놔도 내용이 계속 보인다(2026-10-09 실제 버그). 레이아웃은 안쪽 .head-row가 맡는다. */
   cursor: pointer; list-style: none; margin: 0 0 8px;
   padding: 12px 14px; background: var(--card); border: 1px solid var(--border);
   border-radius: 11px; font-size: 14px; color: var(--text);
 }
+summary.subject-head > .head-row, summary.root-head > .head-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
 .subject-group > summary.subject-head::-webkit-details-marker { display: none; }
-.subject-group > summary.subject-head::before {
+.subject-group > summary.subject-head > .head-row::before {
   content: '▸'; color: var(--sub); font-size: 12px; transition: transform .15s;
 }
-.subject-group[open] > summary.subject-head::before { content: '▾'; }
+.subject-group[open] > summary.subject-head > .head-row::before { content: '▾'; }
 .subject-group > summary.subject-head:active { background: var(--badge-bg); }
 .subject-count { font-size: 12px; color: var(--sub); font-weight: 500; }
 .subject-group .exam-item { margin-left: 8px; }
@@ -641,3 +645,17 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
   text-overflow: ellipsis; min-height: 30px;
 }
 .wiki-pick:focus { outline: none; }
+
+/* 노트 탭 2단 묶음 — 임종평만 20과목이라 평면으로 깔면 28개가 쏟아진다 (2026-10-09) */
+.root-group { margin-bottom: 10px; }
+.root-group > summary.root-head {
+  cursor: pointer; list-style: none; margin: 0 0 8px;
+  padding: 13px 14px; background: var(--badge-bg); border: 1px solid var(--border);
+  border-radius: 11px; font-size: 14.5px; font-weight: 700; color: var(--text);
+}
+.root-group > summary.root-head::-webkit-details-marker { display: none; }
+.root-group > summary.root-head > .head-row::before { content: '▸'; color: var(--sub); font-size: 12px; }
+.root-group[open] > summary.root-head > .head-row::before { content: '▾'; }
+.root-group > summary.root-head:active { background: var(--border); }
+.root-group > .subject-group { margin-left: 10px; }
+.root-group > .subject-group > summary.subject-head { font-weight: 600; padding: 10px 13px; }
