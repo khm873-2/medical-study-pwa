@@ -6,7 +6,7 @@ import { parseExamHtml, prettyExamName, examDate } from './parser.js';
 import { Quiz } from './quiz.js';
 import { PenLayer, tokenizeTree } from './pen.js';
 import * as gem from './gemini.js';
-import { wikiFor } from './wiki.js';
+import { wikiFor, fitLabel } from './wiki.js';
 import { renderMarkdown, hydrateEmbeds } from './markdown.js';
 import { buildPrompt, appList, sendTo, share, buildQaMarkdown } from './ask.js';
 import {
@@ -466,9 +466,23 @@ function renderWikiSection() {
   if (!wikiState) return;
   const { refs, secIdx, unlocked } = wikiState;
   const sec = refs.sections[secIdx];
-  document.getElementById('wikiHeading').textContent = sec.heading;
+
+  // 섹션 목록을 드롭다운으로 — 자동 매칭이 빗나가도 한 번에 찾아간다.
+  // (자동 매칭은 추정이라 100%가 될 수 없다. 틀렸을 때 바로잡는 비용을 0에 가깝게 만든다.)
+  const pick = document.getElementById('wikiSecPick');
+  pick.innerHTML = '';
+  refs.sections.forEach((s, i) => {
+    const o = document.createElement('option');
+    o.value = String(i);
+    const tag = s.extra ? ' · 참고' : (refs.auto && i === 0 ? ` · ${fitLabel(s.fit || 0)}` : '');
+    o.textContent = `${s.heading}${tag}`;
+    pick.appendChild(o);
+  });
+  pick.value = String(secIdx);
+
+  const quality = refs.auto && !sec.extra ? `  ·  ${fitLabel(sec.fit || 0)}` : '';
   document.getElementById('wikiNote').textContent =
-    `${refs.noteName}  ·  ${secIdx + 1}/${refs.sections.length}${refs.auto ? '  · 자동 매칭' : ''}`;
+    `${refs.noteName}  ·  ${secIdx + 1}/${refs.sections.length}${refs.auto ? '  · 자동 매칭' : ''}${quality}`;
 
   const body = document.getElementById('wikiBody');
   const lock = document.getElementById('wikiLock');
@@ -485,6 +499,11 @@ function renderWikiSection() {
   hydrateEmbeds(body, (name) => getBlobUrl(`attachments/${name}`)).catch(() => {});
 }
 
+document.getElementById('wikiSecPick').onchange = (e) => {
+  if (!wikiState) return;
+  wikiState.secIdx = Number(e.target.value) || 0;
+  renderWikiSection();
+};
 document.getElementById('wikiUnlock').onclick = () => {
   if (wikiState) { wikiState.unlocked = true; renderWikiSection(); }
 };

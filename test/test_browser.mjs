@@ -325,12 +325,41 @@ await run('목차 버튼', async () => {
   return out;
 });
 
+// ══════════ 5c. 위키 섹션 드롭다운 ══════════
+await run('위키 드롭다운', () => {
+  const out = [];
+  document.querySelectorAll('section').forEach((s) => s.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+  document.getElementById('wikiPanel').classList.remove('hidden');
+  const pick = document.getElementById('wikiSecPick');
+  out.push({ name: '섹션 드롭다운이 존재한다', ok: !!pick && pick.tagName === 'SELECT' });
+  if (!pick) return out;
+
+  ['1. 비주기', '2. 알레르기비염 치료 원칙', '6. 미각성 비염'].forEach((h, i) => {
+    const o = document.createElement('option'); o.value = String(i); o.textContent = h; pick.appendChild(o);
+  });
+  pick.value = '1';
+  const r = pick.getBoundingClientRect();
+  out.push({ name: '드롭다운이 실제로 보인다', ok: r.width > 80 && r.height > 20,
+    detail: `${Math.round(r.width)}x${Math.round(r.height)}` });
+  out.push({ name: '드롭다운 타깃 높이가 충분', ok: r.height >= 28, detail: `${Math.round(r.height)}px` });
+  out.push({ name: '제목이 패널 밖으로 넘치지 않는다',
+    ok: r.right <= document.getElementById('wikiPanel').getBoundingClientRect().right + 1 });
+  out.push({ name: '항목을 고르면 값이 바뀐다', ok: pick.value === '1' && pick.options.length === 3 });
+  // 펜으로 눌려야 한다 — select는 button이 아니므로 isUiTarget에 select가 있어야 한다
+  out.push({ name: '펜이 드롭다운을 UI로 인식한다(select)', ok: !!pick.closest('select') });
+  while (pick.options.length) pick.remove(0);
+  return out;
+});
+
 // ══════════ 6. 좁은 화면(아이패드 세로) ══════════
 await page.setViewport({ width: 820, height: 1180 });
 await new Promise((r) => setTimeout(r, 120));
 await run('좁은 화면', async () => {
   const out = [];
+  document.querySelectorAll('section').forEach((s) => s.classList.add('hidden'));
   const rs = document.getElementById('readScreen');
+  rs.classList.remove('hidden');                  // 앞 블록이 숨겨놨다
   rs.classList.remove('toc-off');
   await new Promise((r) => setTimeout(r, 260));   // 서랍 트랜지션(.18s)이 끝나길 기다린다
   const toc = document.getElementById('readToc');

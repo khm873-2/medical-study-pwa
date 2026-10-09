@@ -249,7 +249,8 @@
       <div class="wiki-head">
         <button class="icon-btn" id="wikiPrevSec" title="이전 섹션">‹</button>
         <div class="wiki-title">
-          <div id="wikiHeading">—</div>
+          <!-- 섹션을 바로 고를 수 있게 — 자동 매칭이 빗나가도 한 번에 찾아간다 -->
+          <select id="wikiSecPick" class="wiki-pick" title="섹션 고르기"></select>
           <div class="wiki-sub" id="wikiNote"></div>
         </div>
         <button class="icon-btn" id="wikiNextSec" title="다음 섹션">›</button>

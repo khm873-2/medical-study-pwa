@@ -631,3 +631,13 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
   }
   #readScreen.toc-off .toc-scrim { display: none; }
 }
+
+/* 위키 섹션 고르기 — 자동 매칭이 빗나가도 한 번에 찾아가게 (2026-10-09) */
+.wiki-pick {
+  width: 100%; max-width: 100%;
+  font-family: inherit; font-size: 13px; font-weight: 700; color: var(--text);
+  background: transparent; border: none; padding: 2px 0; margin: 0;
+  -webkit-appearance: none; appearance: none; cursor: pointer;
+  text-overflow: ellipsis; min-height: 30px;
+}
+.wiki-pick:focus { outline: none; }
