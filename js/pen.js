@@ -16,8 +16,11 @@
 // 아주 짧은 획은 탭으로 본다.
 
 const TAP_MAX_DIST = 10;     // 이 이하로 움직이면 탭
-const UNDERLINE_ASPECT = 3;  // 가로가 세로의 3배 이상이면 밑줄로 간주
 const LINE_TOL = 14;         // 같은 줄로 묶는 세로 허용 오차(px)
+const BOX_MIN = 18;          // 이보다 작은 영역은 필기로 본다
+// 획을 다 그은 뒤 이만큼 기다렸다가 확정한다 — 여러 번 끊어 그어도 한 번으로 묶기 위함.
+// (끊길 때마다 질문이 나가면 Gemini 무료 한도 분당 10~15회를 금방 소진한다)
+const SETTLE_MS = 420;
 
 export class PenLayer {
   /**
@@ -104,38 +107,69 @@ export class PenLayer {
     const stroke = this._cur;
     this._cur = null;
 
-    const kind = classify(stroke.pts);
-
-    if (kind === 'tap') {
-      // 펜으로 탭 — 선지 선택 등. 획으로 남기지 않는다.
+    if (classify(stroke.pts) === 'tap') {
       this.redraw();
       const el = document.elementFromPoint(this._start.x, this._start.y);
       this.onTap(el, e);
       return;
     }
 
-    if (kind === 'underline' || kind === 'lasso') {
-      const text = this._textUnder(stroke.pts, kind);
-      this.redraw();   // 선택 궤적은 남기지 않는다
-      if (text) { this.onSelect(text, { kind }); return; }
-      // 글자를 못 잡았으면 그냥 필기로 취급해서 남긴다
+    // 끊어 그은 획들을 하나의 선택으로 모은다 — 잠깐 기다렸다가 확정.
+    this._pending = this._pending || [];
+    this._pending.push(stroke);
+    this._showPendingBox();
+
+    clearTimeout(this._settle);
+    this._settle = setTimeout(() => this._commit(), SETTLE_MS);
+  }
+
+  /** 지금까지 그은 획들을 감싸는 네모를 미리 보여준다(무엇이 잡힐지 알 수 있게). */
+  _showPendingBox() {
+    const box = boundsOf(this._pending);
+    this._previewBox = box && (box.r - box.l) * (box.b - box.t) > 0 ? box : null;
+    this.redraw();
+  }
+
+  /** 모아둔 획을 하나의 선택으로 확정한다. */
+  _commit() {
+    const pend = this._pending || [];
+    this._pending = null;
+    this._previewBox = null;
+    if (!pend.length) return;
+
+    const box = boundsOf(pend);
+    const w = box.r - box.l, h = box.b - box.t;
+
+    // 너무 작으면 선택 의도가 아니다 → 필기로 남긴다
+    if (Math.max(w, h) < BOX_MIN) {
+      pend.forEach((s) => { if (s.pts.length > 1) this.strokes.push(s); });
+      this.onChange();
+      this.redraw();
+      return;
     }
 
-    if (stroke.pts.length > 1) { this.strokes.push(stroke); this.onChange(); }
+    const text = this._textInBox(box);
+    this.redraw();     // 선택 궤적은 남기지 않는다
+    if (text) { this.onSelect(text, { box }); return; }
+
+    // 글자를 못 잡았으면 필기로 취급
+    pend.forEach((s) => { if (s.pts.length > 1) this.strokes.push(s); });
+    this.onChange();
     this.redraw();
   }
 
   /**
-   * 획이 지나간 자리의 텍스트를 뽑는다.
-   * 밑줄이면 **걸린 줄 전체**를, 올가미면 영역에 걸린 줄들을 가져온다
-   * — 단어 단위가 아니라 "줄 단위 가로 확장"이라는 게 핵심이다.
+   * 네모(캡처하듯 둘러싼 영역) 안의 텍스트를 뽑는다.
+   *
+   * 밑줄 방식은 획이 자주 끊겨서(선이 조금만 떨어져도 다른 획으로 잡힘) 쓰기 불편했다.
+   * 그래서 "획들을 감싸는 사각형"으로 바꿨다 — 대충 네모를 그리든, 밑줄을 긋든,
+   * 몇 번에 나눠 긋든 결국 그 바운딩 박스에 걸린 글자를 가져온다.
+   *
+   * 줄 단위로 확장하는 건 유지한다: 박스에 **절반 이상 걸친 줄**은 그 줄에서
+   * 가로로 걸친 부분을 통째로(거의 다 걸쳤으면 줄 전체) 가져온다.
    */
-  _textUnder(pts, kind) {
+  _textInBox(box) {
     const r = this.canvas.getBoundingClientRect();
-    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
-    const box = { l: Math.min(...xs), t: Math.min(...ys), r: Math.max(...xs), b: Math.max(...ys) };
-
-    // 선택 대상 토큰 모으기(화면 좌표 기준)
     const toks = [];
     this.host.querySelectorAll('.tok').forEach((el) => {
       const b = el.getBoundingClientRect();
@@ -149,23 +183,18 @@ export class PenLayer {
     });
     if (!toks.length) return '';
 
-    // 세로로 겹치는 줄 찾기 — 밑줄은 획이 글자 **아래**를 지나므로 위로도 넉넉히 본다
-    const yTop = kind === 'underline' ? box.t - 26 : box.t;
-    const yBot = box.b + 6;
+    // 아래로 밑줄 긋듯 그은 경우도 잡히도록 위쪽으로 한 줄 높이만큼 더 본다
+    const yTop = box.t - 24;
+    const yBot = box.b + 8;
 
-    const lines = groupLines(toks);
     const picked = [];
-    for (const line of lines) {
-      const overlapY = line.cy >= yTop && line.cy <= yBot;
-      if (!overlapY) continue;
-      if (kind === 'underline') {
-        // 그 줄에서 획의 가로 범위에 걸친 부분만 — 다만 거의 다 걸쳤으면 줄 전체
-        const inRange = line.toks.filter((t) => t.r >= box.l - 4 && t.l <= box.r + 4);
-        const use = inRange.length >= Math.max(1, line.toks.length * 0.8) ? line.toks : inRange;
-        if (use.length) picked.push(use);
-      } else {
-        picked.push(line.toks);
-      }
+    for (const line of groupLines(toks)) {
+      if (line.cy < yTop || line.cy > yBot) continue;
+      const inRange = line.toks.filter((t) => t.r >= box.l - 6 && t.l <= box.r + 6);
+      if (!inRange.length) continue;
+      // 그 줄을 거의 다 덮었으면 줄 전체를 준다(의도가 "이 줄"일 가능성이 높다)
+      const use = inRange.length >= Math.max(1, line.toks.length * 0.8) ? line.toks : inRange;
+      picked.push(use);
     }
     if (!picked.length) return '';
     return picked
@@ -185,8 +214,23 @@ export class PenLayer {
   redraw() {
     const { ctx, canvas } = this;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const all = this._cur ? [...this.strokes, this._cur] : this.strokes;
+    const all = [...this.strokes, ...(this._pending || [])];
+    if (this._cur) all.push(this._cur);
     for (const s of all) this._drawStroke(s);
+    if (this._previewBox) this._drawBox(this._previewBox);
+  }
+
+  /** 지금 잡히는 범위를 네모로 미리 보여준다. */
+  _drawBox(b) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(b.l - 4, b.t - 4, b.r - b.l + 8, b.b - b.t + 8);
+    ctx.fillStyle = 'rgba(245,158,11,.10)';
+    ctx.fillRect(b.l - 4, b.t - 4, b.r - b.l + 8, b.b - b.t + 8);
+    ctx.restore();
   }
 
   _drawStroke(s) {
@@ -217,20 +261,26 @@ export class PenLayer {
   destroy() { this._ro.disconnect(); this.canvas.remove(); }
 }
 
-/** 획의 모양으로 의도를 판단한다. */
+/** 탭인지 선택/필기인지만 구분한다(모양별 분기는 네모 방식으로 통일되며 사라졌다). */
 export function classify(pts) {
   if (pts.length < 2) return 'tap';
   const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
-  const w = Math.max(...xs) - Math.min(...xs);
-  const h = Math.max(...ys) - Math.min(...ys);
-  const diag = Math.hypot(w, h);
-  if (diag < TAP_MAX_DIST) return 'tap';
-  if (h < 1) return 'underline';
-  if (w / h >= UNDERLINE_ASPECT) return 'underline';
-  // 시작점과 끝점이 가까우면(닫힌 모양) 올가미
-  const d = Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y);
-  if (d < diag * 0.45) return 'lasso';
-  return 'underline';   // 애매하면 밑줄 쪽이 덜 당황스럽다
+  const diag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  return diag < TAP_MAX_DIST ? 'tap' : 'stroke';
+}
+
+/** 획 묶음을 감싸는 사각형. */
+export function boundsOf(strokes) {
+  let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+  for (const s of strokes) {
+    for (const p of s.pts) {
+      if (p.x < l) l = p.x;
+      if (p.x > r) r = p.x;
+      if (p.y < t) t = p.y;
+      if (p.y > b) b = p.y;
+    }
+  }
+  return Number.isFinite(l) ? { l, t, r, b } : null;
 }
 
 /** 같은 y에 있는 토큰들을 한 줄로 묶는다. */

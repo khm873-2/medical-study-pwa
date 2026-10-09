@@ -85,6 +85,15 @@ export async function ask({ term, question, noteText, subject, lecture }, retrie
   if (!key) throw new Error('NO_KEY');
   const model = await getModel();
 
+  // 같은 걸 또 물으면 보내지 않는다(한도 절약)
+  const cacheKey = `${term}|${question ? question.num : ''}`;
+  if (!retried && answerCache.has(cacheKey)) return answerCache.get(cacheKey);
+
+  if (!retried) {
+    const rc = rateCheck();
+    if (!rc.ok) throw new Error(`RATE_WAIT:${rc.waitSec}`);
+  }
+
   const parts = [];
   parts.push(`[질문] 다음에 대해 설명해줘:\n"${term}"`);
   if (subject || lecture) parts.push(`[과목] ${subject || ''} ${lecture || ''}`.trim());
@@ -102,6 +111,7 @@ export async function ask({ term, question, noteText, subject, lecture }, retrie
     generationConfig: { temperature: 0.3, maxOutputTokens: 900 },
   };
 
+  recentCalls.push(Date.now());
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
@@ -114,7 +124,14 @@ export async function ask({ term, question, noteText, subject, lecture }, retrie
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     if (res.status === 400 && /API key not valid/i.test(t)) throw new Error('키가 유효하지 않습니다. 설정에서 다시 넣어주세요.');
-    if (res.status === 429) throw new Error('잠시 요청이 많습니다(할당량). 조금 뒤 다시 시도하거나 앱으로 물어보세요.');
+    if (res.status === 429) {
+      // 구글이 알려주는 재시도 시간을 그대로 쓴다
+      const m = t.match(/"retryDelay"\s*:\s*"(\d+)s"/);
+      const sec = m ? Number(m[1]) : 30;
+      // 한도에 걸렸으니 로컬 카운터도 꽉 찬 것으로 본다
+      while (recentCalls.length < RPM_LIMIT) recentCalls.push(Date.now());
+      throw new Error(`RATE_WAIT:${sec}`);
+    }
     if (res.status === 404 && !retried) {
       // "no longer available" 등 — 실제로 되는 모델을 찾아 한 번만 다시 시도한다.
       const v = await verifyKey(key);
@@ -131,7 +148,40 @@ export async function ask({ term, question, noteText, subject, lecture }, retrie
     const reason = json?.candidates?.[0]?.finishReason;
     throw new Error(reason ? `답변을 받지 못했습니다(${reason}).` : '빈 응답을 받았습니다.');
   }
-  return text.trim();
+  const out = text.trim();
+  answerCache.set(cacheKey, out);
+  if (answerCache.size > 80) answerCache.delete(answerCache.keys().next().value);
+  return out;
+}
+
+// ───────────── 호출 제한 ─────────────
+// 무료 한도가 분당 10~15회라 금방 소진된다. 그래서:
+//   · 같은 질문은 캐시해서 다시 안 보낸다(되묻기·실수로 두 번 그었을 때)
+//   · 분당 호출 수를 자체적으로 제한해 429가 나기 전에 막는다
+//   · 429가 나면 재시도까지 남은 시간을 알려준다
+const RPM_LIMIT = 8;             // 여유를 두고 보수적으로
+const recentCalls = [];          // 최근 호출 시각
+const answerCache = new Map();   // 질문 → 답변
+
+function pruneCalls() {
+  const cut = Date.now() - 60000;
+  while (recentCalls.length && recentCalls[0] < cut) recentCalls.shift();
+}
+/** 지금 호출하면 한도를 넘는가? 넘으면 몇 초 뒤에 가능한지 돌려준다. */
+export function rateCheck() {
+  pruneCalls();
+  if (recentCalls.length < RPM_LIMIT) return { ok: true };
+  const waitMs = 60000 - (Date.now() - recentCalls[0]);
+  return { ok: false, waitSec: Math.max(1, Math.ceil(waitMs / 1000)) };
+}
+export function callsLeft() {
+  pruneCalls();
+  return Math.max(0, RPM_LIMIT - recentCalls.length);
+}
+/** 테스트·수동 초기화용 — 호출 카운터와 답변 캐시를 비운다. */
+export function resetLimiter() {
+  recentCalls.length = 0;
+  answerCache.clear();
 }
 
 /** 모델 하나를 실제로 호출해본다. {ok} 또는 {ok:false, status, text} */

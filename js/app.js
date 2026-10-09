@@ -505,10 +505,38 @@ async function askNow(term) {
     status.textContent = '저장하지 않으면 사라집니다';
   } catch (e) {
     if (e.message === 'NO_KEY') { closeAi(); fillAskSheet(term); return; }
+    const wait = /^RATE_WAIT:(\d+)$/.exec(e.message);
+    if (wait) { showRateWait(Number(wait[1]), term); return; }
     body.innerHTML = `<div class="warn-box">${escapeText(e.message)}</div>`;
     status.textContent = '앱에서 이어보기를 눌러 직접 물어볼 수 있습니다';
   }
 }
+
+/** 한도에 걸렸을 때 — 남은 시간을 세어주고 끝나면 알아서 다시 묻는다. */
+function showRateWait(sec, term) {
+  const body = document.getElementById('aiBody');
+  const status = document.getElementById('aiStatus');
+  let left = sec;
+  const render = () => {
+    body.innerHTML =
+      `<div class="warn-box">무료 한도(분당 ${'8'}회)에 걸렸습니다. ` +
+      `<b>${left}초</b> 뒤 자동으로 다시 묻습니다.<br>` +
+      `급하면 아래 "앱에서 이어보기"로 바로 물어볼 수 있습니다.</div>`;
+    status.textContent = `대기 중 · 남은 호출 ${gem.callsLeft()}회`;
+  };
+  render();
+  clearInterval(rateTimer);
+  rateTimer = setInterval(() => {
+    left--;
+    if (left <= 0) {
+      clearInterval(rateTimer);
+      askNow(term);
+      return;
+    }
+    render();
+  }, 1000);
+}
+let rateTimer = null;
 
 function openAi(term) {
   document.getElementById('aiTerm').textContent = term;
@@ -517,6 +545,7 @@ function openAi(term) {
   requestAnimationFrame(() => pen && pen.resize());
 }
 function closeAi() {
+  clearInterval(rateTimer);
   document.getElementById('aiPanel').classList.add('hidden');
   syncSideCol();
 }
@@ -744,7 +773,10 @@ async function openAskFromReader(term) {
     ta.value = answer;
     msg.textContent = '답변을 받았습니다. "답변 저장"을 누르면 vault에 기록됩니다.';
   } catch (e) {
-    msg.textContent = e.message === 'NO_KEY' ? '' : `오류: ${e.message}`;
+    const w = /^RATE_WAIT:(\d+)$/.exec(e.message);
+    msg.textContent = e.message === 'NO_KEY' ? ''
+      : w ? `무료 한도에 걸렸습니다 — ${w[1]}초 뒤 다시 시도하거나 아래 앱으로 물어보세요.`
+      : `오류: ${e.message}`;
   }
 }
 

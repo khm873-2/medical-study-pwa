@@ -64,16 +64,27 @@ const sent = lastCall.body.contents[0].parts.map((p) => p.text).join('');
 ok('긴 노트는 잘라서 보냄', sent.length < 3000, `${sent.length}자`);
 
 // ---- 에러 처리 ----
+G.resetLimiter();
 nextResponse = resp(400, 'API key not valid. Please pass a valid API key.');
 let err = null;
 try { await G.ask({ term: 't' }); } catch (e) { err = e.message; }
 ok('잘못된 키 → 안내 메시지', /키가 유효하지 않/.test(err || ''), err);
 
-nextResponse = resp(429, 'quota');
+// 429는 RATE_WAIT:초 형태로 올라와 UI가 카운트다운할 수 있게 한다
+nextResponse = resp(429, JSON.stringify({ error: { details: [{ retryDelay: '17s' }] } }));
 err = null;
-try { await G.ask({ term: 't' }); } catch (e) { err = e.message; }
-ok('429 → 할당량 안내', /할당량|요청이 많/.test(err || ''), err);
+try { await G.ask({ term: 't429' }); } catch (e) { err = e.message; }
+ok('429 → RATE_WAIT + 구글이 준 대기시간', err === 'RATE_WAIT:17', err);
+ok('429 뒤엔 로컬 카운터도 꽉 참', G.callsLeft() === 0, `${G.callsLeft()}`);
 
+// retryDelay가 없으면 기본값
+G.resetLimiter();
+nextResponse = resp(429, 'quota exceeded');
+err = null;
+try { await G.ask({ term: 't429b' }); } catch (e) { err = e.message; }
+ok('429 기본 대기시간', /^RATE_WAIT:\d+$/.test(err || ''), err);
+
+G.resetLimiter();
 nextResponse = resp(200, { candidates: [{ finishReason: 'SAFETY', content: { parts: [] } }] });
 err = null;
 try { await G.ask({ term: 't' }); } catch (e) { err = e.message; }
@@ -87,6 +98,7 @@ try { await G.ask({ term: 't' }); } catch (e) { err = e.message; }
 ok('키 없으면 NO_KEY (폴백 신호)', err === 'NO_KEY', err);
 
 // ---- 모델 자동 선택 (404 대응) ----
+G.resetLimiter();
 // verifyKey는 ListModels → generateContent 순으로 두 번 호출한다.
 const MODELS = {
   models: [
@@ -147,6 +159,7 @@ const v6 = await G.verifyKey('k');
 ok('429면 즉시 중단', v6.ok === false && /할당량/.test(v6.error), v6.error);
 
 // ask()가 404를 만나면 다시 찾아 한 번 재시도
+G.resetLimiter();
 await G.setKey('AIzaTEST');
 await G.setModel('gemini-ancient');
 queue = [
@@ -160,6 +173,7 @@ ok('404 → 모델 교체 후 재시도 성공', a2 === '재시도 성공', a2);
 ok('교체된 모델이 저장됨', (await G.getModel()) === 'gemini-2.5-flash', await G.getModel());
 
 // 재시도 경로에서도 전부 실패하면 에러(무한루프 없음)
+G.resetLimiter();
 await G.setModel('gemini-ancient');
 queue = [resp(404, GONE), resp(200, MODELS), resp(404, GONE), resp(404, GONE)];
 let e404 = null;
@@ -169,6 +183,45 @@ ok('전부 실패하면 에러', /찾지 못했|404|쓸 수 없/.test(e404 || ''
 queue = [resp(400, 'API key not valid')];
 const v = await G.verifyKey('bad');
 ok('잘못된 키 메시지', v.ok === false && /올바르지 않/.test(v.error), v.error);
+
+
+// ───────────── 호출 제한 · 캐시 (무료 한도 분당 10~15회 대응) ─────────────
+await G.setKey('AIzaTEST');
+await G.setModel('gemini-2.5-flash');
+const okResp = (t) => resp(200, { candidates: [{ content: { parts: [{ text: t }] } }] });
+G.resetLimiter();
+
+// 같은 질문은 두 번 보내지 않는다
+queue = [okResp('첫 답변')];
+const c1 = await G.ask({ term: '캐시테스트', question: { num: 1 } });
+let calledAgain = false;
+queue = [];
+nextResponse = { ok: true, status: 200, json: async () => { calledAgain = true; return { candidates: [] }; }, text: async () => '' };
+const c2 = await G.ask({ term: '캐시테스트', question: { num: 1 } });
+ok('같은 질문은 캐시에서(네트워크 안 탐)', c2 === '첫 답변' && !calledAgain, `${c2}/${calledAgain}`);
+
+// 다른 문항이면 새로 묻는다
+queue = [okResp('다른 답변')];
+const c3 = await G.ask({ term: '캐시테스트', question: { num: 2 } });
+ok('문항이 다르면 새로 질문', c3 === '다른 답변');
+
+// 분당 한도에 도달하면 보내기 전에 막는다
+let n = 0;
+while (G.callsLeft() > 0 && n < 20) {
+  queue = [okResp(`답${n}`)];
+  await G.ask({ term: `연속질문${n}` });
+  n++;
+}
+ok('한도만큼 호출됨', G.callsLeft() === 0, `남은 ${G.callsLeft()}`);
+let blocked = null;
+try { await G.ask({ term: '한도초과질문' }); } catch (e) { blocked = e.message; }
+ok('한도 넘으면 네트워크 전에 차단', /^RATE_WAIT:\d+$/.test(blocked || ''), blocked);
+const waitSec = Number((blocked || '').split(':')[1]);
+ok('대기 시간이 합리적(1~60초)', waitSec >= 1 && waitSec <= 60, `${waitSec}초`);
+
+// rateCheck가 상태를 그대로 알려준다
+const rc = G.rateCheck();
+ok('rateCheck가 막힌 상태를 알림', rc.ok === false && rc.waitSec > 0, JSON.stringify(rc));
 
 console.log(`\n통과 ${pass}건`);
 if (fail.length) { console.log(`실패 ${fail.length}건:`); fail.forEach((f) => console.log('  ✗ ' + f)); process.exit(1); }
