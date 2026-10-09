@@ -39,11 +39,14 @@ function mkEl(cls = '', text = '', box = R(0, 0, 10, 10)) {
 global.ResizeObserver = class { observe() {} disconnect() {} };
 global.window = { devicePixelRatio: 2 };
 let elementAt = null;
+let canvasBox = R(0, 0, 400, 300);   // 실제 앱에선 resize()가 host 크기로 맞춘다
 global.document = {
-  createElement: () => mkEl(),
+  createElement: () => mkEl('', '', canvasBox),
   createDocumentFragment: () => { const f = mkEl(); f.isFrag = true; return f; },
   createTextNode: (t) => ({ nodeType: 3, textContent: t }),
   elementFromPoint: () => elementAt,
+  // 펜은 문서 전체에서 이벤트를 받는다(카드 바깥에서 긋기 시작해도 끊기지 않게)
+  addEventListener() {}, removeEventListener() {},
 };
 
 const { PenLayer, tokenize, classify } = await import(pathToFileURL(`${PWA}/js/pen.js`).href);
@@ -136,6 +139,22 @@ draw(148, 48, 146, 102, 4);
 draw(146, 102, 8, 100, 4);
 await settle();
 ok('안 닫힌 네모도 동작', selected === '65세 남자가 쓰러졌다 맥박이 없다', `"${selected}"`);
+
+// ★ 카드 **바깥 여백**에서 시작한 획도 이어져야 한다
+//   (2026-10-09 실제 증상: 지문 왼쪽 여백에서 대각선으로 그으면 획이 끊겼다.
+//    host에만 리스너를 걸어서 바깥에서 시작한 pointerdown을 못 받았던 게 원인)
+host._query = (sel) => (sel === '.tok' ? [...L1, ...L2] : []);
+selected = null;
+draw(-30, 40, 120, 74, 10);     // 카드 왼쪽 바깥에서 대각선으로 들어옴
+await settle();
+ok('카드 바깥에서 시작해도 선택됨', selected && selected.includes('65세'), `"${selected}"`);
+
+// 아주 멀리 떨어진 곳(다른 화면)에서 시작한 건 무시
+selected = null;
+const far = pen.strokes.length;
+draw(-400, -400, -350, -380, 5);
+await settle();
+ok('멀리 떨어진 획은 무시', selected === null && pen.strokes.length === far, `${selected}`);
 
 // ---- 펜 탭 → 선지 선택 ----
 tapped = null;

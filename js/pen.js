@@ -52,17 +52,30 @@ export class PenLayer {
     this._ro.observe(host);
     this.resize();
 
-    // 캔버스는 **펜 이벤트만** 받는다. 손가락은 아래 UI로 그대로 통과시킨다
-    // (CSS: .penlayer { pointer-events: none } + 아래 host 리스너로 펜만 가로챔).
-    host.addEventListener('pointerdown', (e) => this._down(e), { passive: false });
-    host.addEventListener('pointermove', (e) => this._move(e), { passive: false });
-    host.addEventListener('pointerup', (e) => this._up(e));
-    host.addEventListener('pointercancel', (e) => this._up(e));
+    // **문서 전체**에서 펜 이벤트를 받는다.
+    // host에만 걸면 카드 경계 **밖에서 긋기 시작할 때** 이벤트가 안 들어와 획이 끊긴다
+    // (2026-10-09 실제 증상 — 지문 왼쪽 여백에서 대각선으로 그으면 유지가 안 됐다).
+    // 손가락은 여전히 통과시키므로 스크롤·탭은 그대로다.
+    this._onDown = (e) => this._down(e);
+    this._onMove = (e) => this._move(e);
+    this._onUp = (e) => this._up(e);
+    document.addEventListener('pointerdown', this._onDown, { passive: false });
+    document.addEventListener('pointermove', this._onMove, { passive: false });
+    document.addEventListener('pointerup', this._onUp);
+    document.addEventListener('pointercancel', this._onUp);
   }
 
   /** 펜인가? (마우스는 데스크톱 개발용으로 허용) */
   _isPen(e) {
     return e.pointerType === 'pen' || (e.pointerType === 'mouse' && e.buttons === 1 && this.mouseDraws);
+  }
+
+  /** 이 레이어 영역에서 pad px 이내인가? (여백에서 시작하는 획을 허용하되 무관한 화면은 거른다) */
+  _nearHost(e, pad = 120) {
+    const r = this.canvas.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    return e.clientX >= r.left - pad && e.clientX <= r.right + pad &&
+           e.clientY >= r.top - pad && e.clientY <= r.bottom + pad;
   }
 
   resize() {
@@ -83,8 +96,11 @@ export class PenLayer {
 
   _down(e) {
     if (!this._isPen(e)) return;          // 손가락은 통과 → 평소대로 스크롤·탭
+    // 이 레이어가 담당하는 영역 근처에서 시작한 것만 받는다(여러 화면이 동시에 떠 있을 때 혼선 방지).
+    // 바깥 여백에서 시작하는 경우가 흔하므로 넉넉히 본다.
+    if (!this._nearHost(e, 120)) return;
     e.preventDefault();
-    try { this.host.setPointerCapture(e.pointerId); } catch {}
+    // 문서 레벨로 받으므로 캡처는 필요 없다. 캡처하면 오히려 host 밖 이동이 막힌다.
     const pt = this._pos(e);
     this._start = { x: e.clientX, y: e.clientY };
     if (this.erasing) { this._eraseAt(pt); this._isErasing = true; return; }
@@ -258,7 +274,15 @@ export class PenLayer {
   toPNG() { return this.strokes.length ? this.canvas.toDataURL('image/png') : null; }
   serialize() { return { strokes: this.strokes }; }
   load(data) { this.strokes = (data && data.strokes) || []; this.redraw(); }
-  destroy() { this._ro.disconnect(); this.canvas.remove(); }
+  destroy() {
+    this._ro.disconnect();
+    clearTimeout(this._settle);
+    document.removeEventListener('pointerdown', this._onDown);
+    document.removeEventListener('pointermove', this._onMove);
+    document.removeEventListener('pointerup', this._onUp);
+    document.removeEventListener('pointercancel', this._onUp);
+    this.canvas.remove();
+  }
 }
 
 /** 탭인지 선택/필기인지만 구분한다(모양별 분기는 네모 방식으로 통일되며 사라졌다). */

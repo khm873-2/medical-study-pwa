@@ -29,8 +29,12 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 #app {
-  max-width: 860px; margin: 0 auto;
-  padding: calc(env(safe-area-inset-top) + 12px) 16px calc(env(safe-area-inset-bottom) + 104px);
+  max-width: 1500px; margin: 0 auto;
+  padding: calc(env(safe-area-inset-top) + 10px) 10px calc(env(safe-area-inset-bottom) + 96px);
+}
+/* 아이패드 가로: 화면을 넓게 쓴다(세로는 읽기 좋은 폭 유지) */
+@media (min-width: 700px) {
+  #app { padding-left: 14px; padding-right: 14px; }
 }
 .hidden { display: none !important; }
 
@@ -40,7 +44,7 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 .icon-btn { border: none; background: none; font-size: 20px; cursor: pointer; color: var(--sub); padding: 8px; border-radius: 8px; min-width: 40px; min-height: 40px; }
 .icon-btn:active { background: var(--badge-bg); }
 .icon-btn.active { color: var(--accent); }
-.card { background: var(--card); border-radius: 14px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.06); border: 1px solid var(--border); }
+.card { background: var(--card); border-radius: 14px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.06); border: 1px solid var(--border); }
 .badge-pill { background: var(--badge-bg); border-radius: 20px; padding: 5px 12px; font-size: 13px; font-weight: 600; white-space: nowrap; }
 .btn {
   border: 1px solid var(--border); background: var(--card); color: var(--text);
@@ -158,8 +162,7 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 
 /* ---- 가로모드(누워서 볼 때 포함) ---- */
 @media (orientation: landscape) and (min-width: 900px) {
-  #app { max-width: 1100px; }
-  #quizScreen .card { padding: 24px 28px; }
+  #quizScreen .card { padding: 20px 22px; }
   #qtext { font-size: 19px; }
 }
 
@@ -185,8 +188,6 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 
 /* ---- 필기 캔버스 ---- */
 #qcard { position: relative; }
-.penlayer { position: absolute; inset: 0; z-index: 10; touch-action: auto; }
-.penlayer.lasso-mode { cursor: crosshair; }
 /* 올가미 hit-test 대상 — 보이기엔 그냥 글자 */
 .tok { display: inline; }
 
@@ -232,7 +233,7 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 :root[data-theme="dark"] .wiki-body mark { background: #78350f; color: #fde68a; }
 
 /* 가로모드에서는 문제와 노트를 나란히 */
-@media (orientation: landscape) and (min-width: 1000px) {
+@media (orientation: landscape) and (min-width: 860px) {
   #quizScreen.with-wiki .split { display: flex; gap: 16px; align-items: flex-start; }
   #quizScreen.with-wiki .split > #qcard { flex: 1 1 56%; min-width: 0; }
   #quizScreen.with-wiki .split > #wikiPanel { flex: 1 1 44%; margin-top: 0; position: sticky; top: 58px; }
@@ -357,7 +358,7 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 .ai-foot .btn { flex: 1; min-height: 40px; padding: 9px 12px; font-size: 13px; }
 
 /* 가로 넓은 화면: 문제 | (노트 + AI) 2단 */
-@media (orientation: landscape) and (min-width: 1000px) {
+@media (orientation: landscape) and (min-width: 860px) {
   #quizScreen.with-side .split { display: flex; gap: 16px; align-items: flex-start; }
   #quizScreen.with-side .split > #qcard { flex: 1 1 54%; min-width: 0; }
   #quizScreen.with-side .side-col { flex: 1 1 46%; min-width: 0; position: sticky; top: 58px; }
