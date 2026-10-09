@@ -73,7 +73,13 @@ export class PenLayer {
     this._onTouch = (e) => {
       if (!e.touches || !e.touches.length) return;
       const stylus = [...e.touches].some((t) => t.touchType === 'stylus');
-      if (stylus && this._nearTouch(e)) e.preventDefault();
+      if (!stylus) return;
+      // ★ UI 위(팝업 버튼·네비·리사이저)에서는 막지 않는다.
+      //   여기서 preventDefault 하면 그 뒤 click 이벤트가 죽어서 "펜으로는 버튼이
+      //   안 눌리는" 증상이 된다 — _down에서 막는 것만으로는 부족했다(2026-10-09).
+      const t = e.touches[0];
+      if (isUiTarget(e.target) || this._overUi({ clientX: t.clientX, clientY: t.clientY })) return;
+      if (this._nearTouch(e)) e.preventDefault();
     };
     for (const t of ['touchstart', 'touchmove']) {
       document.addEventListener(t, this._onTouch, { passive: false });
@@ -265,7 +271,10 @@ export class PenLayer {
     this.redraw();     // 선택 궤적은 남기지 않는다
     if (text) { this.onSelect(text, { box }); return; }
 
-    // 글자를 못 잡았으면 필기로 취급
+    // 글자를 못 잡았을 때 — 패널 **안**이면 선택 의도였다고 보고 궤적을 지운다.
+    // (AI 답변처럼 토큰화되지 않은 영역에 그으면 파란 선만 남아 지저분했다, 2026-10-09)
+    // 여백·빈 곳이면 필기로 남긴다.
+    if (this._paneAt(box)) { this.redraw(); return; }
     pend.forEach((s) => { if (s.pts.length > 1) this.strokes.push(s); });
     this.onChange();
     this.redraw();
@@ -412,7 +421,8 @@ function isUiTarget(el) {
   if (!el || !el.closest) return false;
   return !!el.closest(
     '.pen-passthrough, button, summary, input, textarea, select, a, label, ' +
-    '.sel-btn, .navbar, .quiz-head, .col-resizer, .pane-resizer, .sheet'
+    '.sel-btn, .navbar, .quiz-head, .col-resizer, .pane-resizer, .sheet, ' +
+    '.read-toc, .toc-link, .toc-scrim'
   );
 }
 

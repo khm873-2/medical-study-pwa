@@ -554,23 +554,29 @@ function showSelPop(text, box) {
 function hideSelPop() { document.getElementById('selPop').classList.add('hidden'); }
 
 document.getElementById('selCancel').onclick = hideSelPop;
+// 팝업 버튼들은 askCtx(긁은 내용)가 있어야 의미가 있다 — 없으면 조용히 닫는다.
+const selTerm = () => (askCtx && askCtx.term) || '';
 document.getElementById('selAsk').onclick = () => {
   hideSelPop();
+  const term = selTerm();
+  if (!term) return;
   // 읽기 모드엔 사이드 패널이 없으므로 시트 쪽에 답변을 띄운다
-  if (!document.getElementById('readScreen').classList.contains('hidden')) askInReader(askCtx.term);
-  else askNow(askCtx.term);
+  if (!document.getElementById('readScreen').classList.contains('hidden')) askInReader(term);
+  else askNow(term);
 };
-document.getElementById('selSend').onclick = () => { hideSelPop(); fillAskSheet(askCtx.term); };
+document.getElementById('selSend').onclick = () => { hideSelPop(); if (selTerm()) fillAskSheet(selTerm()); };
 document.getElementById('selCopy').onclick = async () => {
   hideSelPop();
-  try { await navigator.clipboard.writeText(askCtx.term); toast('📋 복사했습니다.'); }
+  if (!selTerm()) return;
+  try { await navigator.clipboard.writeText(selTerm()); toast('📋 복사했습니다.'); }
   catch { toast('복사에 실패했습니다.'); }
 };
 document.getElementById('selNote').onclick = () => {
   hideSelPop();
   if (!quiz) { toast('메모는 문제 화면에서만 됩니다.'); return; }
+  if (!selTerm()) return;
   const i = quiz.qIndex;
-  quiz.memos[i] = (quiz.memos[i] ? quiz.memos[i] + '\n' : '') + askCtx.term;
+  quiz.memos[i] = (quiz.memos[i] ? quiz.memos[i] + '\n' : '') + selTerm();
   quiz.persist();
   document.getElementById('memoInput').value = quiz.memos[i];
   document.getElementById('memoBox').style.display = 'block';
@@ -603,6 +609,7 @@ async function askNow(term) {
     });
     askCtx.answer = answer;
     body.innerHTML = renderMarkdown(answer);
+    tokenizeTree(body);        // AI 답변에서도 긁어서 다시 물어볼 수 있게
     status.textContent = '저장하지 않으면 사라집니다';
   } catch (e) {
     if (e.message === 'NO_KEY') { closeAi(); fillAskSheet(term); return; }
@@ -651,13 +658,13 @@ function closeAi() {
   syncSideCol();
 }
 document.getElementById('aiClose').onclick = closeAi;
-document.getElementById('aiRetry').onclick = () => askCtx && askNow(askCtx.term);
+document.getElementById('aiRetry').onclick = () => { if (askCtx && askCtx.term) askNow(askCtx.term); };
 document.getElementById('aiSave').onclick = () => {
   if (!askCtx || !askCtx.answer) { toast('저장할 답변이 없습니다.'); return; }
   askItems.push({ ...askCtx });
   toast(`기록했습니다 (${askItems.length}건) — 결과 화면에서 vault에 저장됩니다.`);
 };
-document.getElementById('aiOpenApp').onclick = () => { if (askCtx) fillAskSheet(askCtx.term); };
+document.getElementById('aiOpenApp').onclick = () => { if (askCtx && askCtx.term) fillAskSheet(askCtx.term); };
 
 /**
  * 사이드 칼럼 상태 동기화.
@@ -708,10 +715,11 @@ function initResizers() {
       const w = Math.max(260, Math.min(drag.startW + (drag.x - e.clientX), window.innerWidth * 0.62));
       root.style.setProperty('--side-w', `${Math.round(w)}px`);
     } else {
+      // px로 준다 — %는 사이드 칼럼 높이가 불확정이라 브라우저가 무시한다(2026-10-09 버그)
       const col = document.querySelector('#quizScreen .side-col');
-      const total = col.getBoundingClientRect().height;
-      const pct = Math.max(18, Math.min(((drag.startH + (e.clientY - drag.y)) / total) * 100, 82));
-      root.style.setProperty('--ai-h', `${pct.toFixed(1)}%`);
+      const total = col ? col.getBoundingClientRect().height : window.innerHeight;
+      const h = Math.max(110, Math.min(drag.startH + (e.clientY - drag.y), Math.max(140, total - 110)));
+      root.style.setProperty('--ai-h', `${Math.round(h)}px`);
     }
     if (pen) pen.resize();
   };
@@ -869,6 +877,9 @@ async function openNote(path) {
     const note = await loadNote(path);
     reader = { note, secIdx: 0 };
     show('readScreen');
+    // 넓은 화면은 목차를 펴놓고, 좁은 화면은 본문을 가리지 않게 접어둔다(기억값 우선)
+    const saved = localStorage.getItem('toc_open');
+    tocOpen(saved === null ? window.innerWidth >= 900 : saved === '1');
     renderReader();
     ensureReaderPen();
   } catch (e) {
@@ -877,10 +888,54 @@ async function openNote(path) {
   }
 }
 
+// ---------- 읽기모드 목차 ----------
+// 섹션이 7~10개라 하나씩 넘기면 느리다 → 목차에서 바로 건너뛴다(2026-10-09 요청).
+// 좁은 화면에서는 서랍이라 고르면 닫고, 넓은 화면에서는 칼럼이라 열어둔다.
+function tocOpen(on) {
+  document.getElementById('readScreen').classList.toggle('toc-off', !on);
+  document.getElementById('readTocScrim').classList.toggle('hidden', !(on && window.innerWidth < 900));
+  document.getElementById('readTocBtn').classList.toggle('active', on);
+  localStorage.setItem('toc_open', on ? '1' : '0');
+  if (readerPen) requestAnimationFrame(() => readerPen.resize());
+}
+function tocIsOpen() { return !document.getElementById('readScreen').classList.contains('toc-off'); }
+
+function renderToc() {
+  const list = document.getElementById('readTocList');
+  list.innerHTML = '';
+  if (!reader) return;
+  reader.note.sections.forEach((sec, i) => {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `toc-link${i === reader.secIdx ? ' current' : ''}`;
+    const n = document.createElement('span');
+    n.className = 'toc-i';
+    n.textContent = String(i + 1);
+    const t = document.createElement('span');
+    t.textContent = sec.heading;
+    b.append(n, t);
+    b.onclick = () => {
+      reader.secIdx = i;
+      renderReader();
+      if (window.innerWidth < 900) tocOpen(false);   // 서랍은 고르면 닫는다
+    };
+    li.appendChild(b);
+    list.appendChild(li);
+  });
+  const cur = list.querySelector('.toc-link.current');   // 긴 목차에서 현재 항목 끌어오기
+  if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
+}
+
+document.getElementById('readTocBtn').onclick = () => tocOpen(!tocIsOpen());
+document.getElementById('readTocHide').onclick = () => tocOpen(false);
+document.getElementById('readTocScrim').onclick = () => tocOpen(false);
+
 function renderReader() {
   if (!reader) return;
   const { note, secIdx } = reader;
   const sec = note.sections[secIdx];
+  renderToc();
   document.getElementById('readTitle').textContent = note.title;
   document.getElementById('readHeading').textContent = sec.heading;
   document.getElementById('readPos').textContent = `${secIdx + 1}/${note.sections.length}`;

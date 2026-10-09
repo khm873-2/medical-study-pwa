@@ -129,14 +129,28 @@
   <section id="readScreen" class="hidden">
     <header>
       <button class="icon-btn" id="readBack" title="목록">‹</button>
+      <button class="icon-btn" id="readTocBtn" title="목차 접기/펼치기">📑</button>
       <h1 id="readTitle"></h1>
       <button class="icon-btn" id="readAwake" title="화면 켜두기">☀</button>
       <button class="icon-btn" id="readTts" title="읽어주기">🔊</button>
       <button class="icon-btn" id="readPen" title="펜">🖊</button>
     </header>
-    <div class="card" id="readCard">
-      <div id="readHeading" class="read-heading"></div>
-      <div id="readBody" class="wiki-body read-body"></div>
+    <!-- 목차 — 한 장씩 넘기지 않고 바로 건너뛰게(2026-10-09 요청) -->
+    <div class="read-split" id="readSplit">
+      <nav class="read-toc pen-passthrough" id="readToc" aria-label="목차">
+        <div class="toc-head">
+          <span>목차</span>
+          <button class="icon-btn" id="readTocHide" title="목차 접기">«</button>
+        </div>
+        <ol id="readTocList"></ol>
+      </nav>
+      <div class="toc-scrim hidden" id="readTocScrim"></div>
+      <div class="read-main">
+        <div class="card" id="readCard">
+          <div id="readHeading" class="read-heading"></div>
+          <div id="readBody" class="wiki-body read-body"></div>
+        </div>
+      </div>
     </div>
     <div class="navbar">
       <button class="icon-btn nav-arrow" id="readPrev">‹</button>
