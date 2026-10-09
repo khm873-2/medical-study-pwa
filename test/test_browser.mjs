@@ -882,6 +882,62 @@ await run('키 전환', async () => {
   return out;
 });
 
+// ══════════ 5k. 퀴즈·모의고사 탭 분리 (2026-10-10) ══════════
+await run('탭 분리', () => {
+  const out = [];
+  document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('listScreen').classList.remove('hidden');
+
+  const tabs = [...document.querySelectorAll('.tab')];
+  out.push({ name: '탭이 4개', ok: tabs.length === 4, detail: tabs.map((t) => t.textContent).join('·') });
+  out.push({ name: '순서가 퀴즈 → 모의고사 → 노트 읽기',
+    ok: tabs[0].textContent === '퀴즈' && tabs[1].textContent === '모의고사' && tabs[2].textContent === '노트 읽기',
+    detail: tabs.map((t) => t.textContent).join(' ') });
+  out.push({ name: '퀴즈 탭이 기본', ok: tabs[0].classList.contains('active') });
+  out.push({ name: '탭마다 담을 자리가 있다',
+    ok: ['quizBody', 'listBody', 'notesBody', 'cardsBody'].every((id) => !!document.getElementById(id)) });
+  out.push({ name: '탭이 눌릴 만큼 크다', ok: tabs.every((t) => t.getBoundingClientRect().height >= 40),
+    detail: `${Math.round(tabs[0].getBoundingClientRect().height)}px` });
+  out.push({ name: '탭 글자가 안 눌린다(줄바꿈 없음)',
+    ok: tabs.every((t) => t.getBoundingClientRect().height < 60 && getComputedStyle(t).whiteSpace === 'nowrap') });
+
+  // 퀴즈 탭에는 퀴즈만, 모의고사 탭에는 모의고사만
+  const index = [
+    { subject: '근골격계', kind: '모의고사', exams: [{ file: '261012_a_모의고사.html', path: 'p1' }] },
+    { subject: '두경부_피부', kind: '모의고사', exams: [{ file: '260930_b_모의고사.html', path: 'p2' }] },
+    { subject: '근골격계', kind: '퀴즈', exams: [
+      { file: '260917_박희완_소아외상_퀴즈.html', path: 'q1' },
+      { file: '260915_이수진_근전도_퀴즈.html', path: 'q2' }] },
+  ];
+  // 앱의 renderList와 같은 필터를 적용해 본다
+  const byKind = (k) => index.filter((g) => (g.kind || '모의고사') === k);
+  out.push({ name: '퀴즈만 거르면 1그룹', ok: byKind('퀴즈').length === 1 });
+  out.push({ name: '모의고사만 거르면 2그룹', ok: byKind('모의고사').length === 2 });
+  out.push({ name: '두 탭의 그룹이 겹치지 않는다',
+    ok: !byKind('퀴즈').some((g) => byKind('모의고사').includes(g)) });
+
+  // 탭 전환이 화면을 바꾸는가
+  const show = (which) => {
+    document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x.dataset.tab === which));
+    const map = { quizzes: 'quizBody', exams: 'listBody', notes: 'notesBody', cards: 'cardsBody' };
+    for (const [k, id] of Object.entries(map)) document.getElementById(id).classList.toggle('hidden', k !== which);
+  };
+  document.getElementById('quizBody').innerHTML = '<div class="exam-item">퀴즈 항목</div>';
+  document.getElementById('listBody').innerHTML = '<div class="exam-item">모의고사 항목</div>';
+  show('quizzes');
+  out.push({ name: '퀴즈 탭: 퀴즈만 보인다',
+    ok: document.getElementById('quizBody').getBoundingClientRect().height > 10
+      && document.getElementById('listBody').getBoundingClientRect().height === 0 });
+  show('exams');
+  out.push({ name: '모의고사 탭: 모의고사만 보인다',
+    ok: document.getElementById('listBody').getBoundingClientRect().height > 10
+      && document.getElementById('quizBody').getBoundingClientRect().height === 0 });
+
+  // 탭이 종류를 말해주므로 그룹 헤더의 꼬리표는 없어야 한다
+  out.push({ name: '그룹 헤더에 중복 꼬리표가 없다', ok: !document.querySelector('.kind-tag') });
+  return out;
+});
+
 // ══════════ 6. 좁은 화면(아이패드 세로) ══════════
 await page.setViewport({ width: 820, height: 1180 });
 await new Promise((r) => setTimeout(r, 120));

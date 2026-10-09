@@ -142,11 +142,13 @@
       <button class="icon-btn" id="settingsBtn" title="설정">⚙</button>
     </header>
     <div class="tabs">
-      <button class="tab active" data-tab="exams">모의고사</button>
+      <button class="tab active" data-tab="quizzes">퀴즈</button>
+      <button class="tab" data-tab="exams">모의고사</button>
       <button class="tab" data-tab="notes">노트 읽기</button>
       <button class="tab" data-tab="cards">플래시카드</button>
     </div>
-    <div id="listBody"></div>
+    <div id="quizBody"></div>
+    <div id="listBody" class="hidden"></div>
     <div id="notesBody" class="hidden"></div>
     <div id="cardsBody" class="hidden"></div>
   </section>

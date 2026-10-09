@@ -315,7 +315,10 @@ document.getElementById('refreshBtn').onclick = () => loadList(true);
 async function loadList(force) {
   if (!(await hasToken())) return openSetup();
   show('listScreen');
-  const body = document.getElementById('listBody');
+  restoreTab();
+  // 로딩·오류 문구는 **지금 보고 있는 탭**에 띄운다
+  const body = document.getElementById(
+    document.querySelector('.tab.active')?.dataset.tab === 'exams' ? 'listBody' : 'quizBody');
   body.innerHTML = '<p class="muted">불러오는 중…</p>';
 
   try {
@@ -350,7 +353,9 @@ async function loadList(force) {
         : a.kind === '모의고사' ? -1 : 1));
       await kvSet(cacheKey, index);
     }
-    renderList(index, await allSessions());
+    const sessions = await allSessions();
+    renderList(index, sessions, '퀴즈');
+    renderList(index, sessions, '모의고사');
   } catch (e) {
     body.innerHTML = '';
     const box = document.createElement('div');
@@ -369,29 +374,34 @@ async function loadList(force) {
   }
 }
 
-function renderList(index, sessions) {
-  const body = document.getElementById('listBody');
+/**
+ * 시험 목록을 그린다. 퀴즈와 모의고사는 **탭이 다르므로 따로** 그린다(2026-10-10 요청).
+ * @param {string} kind '모의고사' | '퀴즈'
+ */
+function renderList(index, sessions, kind = '모의고사') {
+  const bodyId = kind === '퀴즈' ? 'quizBody' : 'listBody';
+  const body = document.getElementById(bodyId);
   body.innerHTML = '';
+  index = index.filter((g) => (g.kind || '모의고사') === kind);
   if (!index.length) {
-    body.innerHTML = '<p class="muted">모의고사를 찾지 못했습니다.</p>';
+    body.innerHTML = `<p class="muted">${kind}를 찾지 못했습니다.</p>`;
     return;
   }
   // 과목을 접을 수 있게 한다 — 전부 펼쳐져 있으면 찾는 데 오래 걸린다(2026-10-09 피드백).
-  // 마지막으로 연 과목만 펼친 채로 기억한다.
-  const lastOpen = localStorage.getItem('open_subject');
+  // 마지막으로 연 과목만 펼친 채로 기억한다(탭마다 따로).
+  const lastOpen = localStorage.getItem(`open_subject_${kind}`);
   index.forEach((group, gi) => {
     const det = document.createElement('details');
     det.className = 'subject-group';
     const gkey = `${group.subject}|${group.kind || ''}`;
     det.open = lastOpen ? gkey === lastOpen : gi === 0;
-    det.ontoggle = () => { if (det.open) localStorage.setItem('open_subject', gkey); };
+    det.ontoggle = () => { if (det.open) localStorage.setItem(`open_subject_${kind}`, gkey); };
 
     const sum = document.createElement('summary');
     sum.className = 'subject-head';
     const inProgress = group.exams.filter((e) => sessions[e.path]).length;
     sum.innerHTML = '<span class="head-row">' +
-      `<span>${escapeText(group.subject.replace(/_/g, ' '))}` +
-      `<span class="kind-tag">${escapeText(group.kind || '모의고사')}</span></span>` +
+      `<span>${escapeText(group.subject.replace(/_/g, ' '))}</span>` +
       `<span class="subject-count">${group.exams.length}개` +
       (inProgress ? ` · 풀던 중 ${inProgress}` : '') + '</span></span>';
     det.appendChild(sum);
@@ -1267,16 +1277,26 @@ let readerPen = null;
 let cardDeck = null;    // {cards, idx, srs, title}
 
 // ---- 탭 ----
+const TAB_BODY = { quizzes: 'quizBody', exams: 'listBody', notes: 'notesBody', cards: 'cardsBody' };
+
+function showTab(which, { remember = true } = {}) {
+  if (!TAB_BODY[which]) which = 'quizzes';
+  document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x.dataset.tab === which));
+  for (const [k, id] of Object.entries(TAB_BODY)) {
+    document.getElementById(id).classList.toggle('hidden', k !== which);
+  }
+  if (remember) localStorage.setItem('last_tab', which);
+  if (which === 'notes') loadNotesTab();
+  if (which === 'cards') loadCardsTab();
+}
+
+/** 마지막으로 보던 탭으로 돌아간다 — 매번 퀴즈 탭부터 찾아 들어가지 않게. */
+function restoreTab() {
+  showTab(localStorage.getItem('last_tab') || 'quizzes', { remember: false });
+}
+
 document.querySelectorAll('.tab').forEach((t) => {
-  t.onclick = () => {
-    document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === t));
-    const which = t.dataset.tab;
-    document.getElementById('listBody').classList.toggle('hidden', which !== 'exams');
-    document.getElementById('notesBody').classList.toggle('hidden', which !== 'notes');
-    document.getElementById('cardsBody').classList.toggle('hidden', which !== 'cards');
-    if (which === 'notes') loadNotesTab();
-    if (which === 'cards') loadCardsTab();
-  };
+  t.onclick = () => showTab(t.dataset.tab);
 });
 
 // ---- 노트 목록 ----

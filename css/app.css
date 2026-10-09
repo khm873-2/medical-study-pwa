@@ -268,9 +268,12 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 /* ---- 탭 ---- */
 .tabs { display: flex; gap: 6px; margin-bottom: 14px; background: var(--badge-bg); padding: 4px; border-radius: 11px; }
 .tab {
-  flex: 1; padding: 11px 8px; border: none; background: none; border-radius: 8px;
+  /* 탭이 4개가 되어(퀴즈·모의고사·노트·카드) 좁은 화면에서 글자가 눌리지 않게 */
+  flex: 1; min-width: 0; padding: 11px 6px; border: none; background: none; border-radius: 8px;
   font-size: 14px; font-weight: 600; color: var(--sub); cursor: pointer; font-family: inherit;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 44px;
 }
+@media (max-width: 480px) { .tab { font-size: 13px; padding: 10px 4px; } }
 .tab.active { background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 
 /* ---- 읽기 모드 ---- */
@@ -660,12 +663,7 @@ summary.subject-head > .head-row, summary.root-head > .head-row {
 .root-group > .subject-group { margin-left: 10px; }
 .root-group > .subject-group > summary.subject-head { font-weight: 600; padding: 10px 13px; }
 
-/* 모의고사 ↔ 퀴즈 구분, 교수 이름 (2026-10-10) */
-.kind-tag {
-  margin-left: 7px; padding: 2px 7px; border-radius: 6px;
-  background: var(--badge-bg); color: var(--sub);
-  font-size: 11px; font-weight: 700; vertical-align: middle;
-}
+/* 교수 이름 (2026-10-10). 모의고사/퀴즈 구분은 탭이 하므로 꼬리표는 없앴다. */
 .teacher-tag {
   margin-left: 7px; color: var(--sub); font-size: 11.5px; font-weight: 500;
 }
