@@ -439,8 +439,9 @@ await run('유령 참조', () => {
       for (const m of src.matchAll(/getElementById\(\s*'([^']+)'\s*\)/g)) {
         if (ids.has(m[1])) continue;
         // 없으면 만들어 쓰는 패턴(let x = getElementById(...); if (!x) { ... create })은 정상
-        const after = src.slice(m.index, m.index + 260);
-        if (/if\s*\(\s*!\w+\s*\)\s*\{[\s\S]{0,160}createElement/.test(after)) continue;
+        const after = src.slice(m.index, m.index + 300);
+        // "없으면 만들어 쓰는" 패턴은 정상 — 그 id로 createElement 하는 코드가 근처에 있다
+        if (/createElement/.test(after) && new RegExp(`id\\s*=\\s*'${m[1]}'`).test(src)) continue;
         bad.push(`${f}: #${m[1]}`);
       }
     }
@@ -571,39 +572,131 @@ await run('신규 기능', async () => {
   out.push({ name: '캡처가 PNG blob을 만든다', ok: blob && blob.type === 'image/png' && blob.size > 100,
     detail: blob ? `${blob.type} ${blob.size}B` : 'null' });
 
-  // ── 문제 뜯어보기 렌더링 ──
+  // ── 문제 뜯어보기: 단서 → 인상 → 선지 쳐내기 ──
   const { parseBreakdown } = await import('/js/gemini.js');
+  const Q = { q: QTEXT, opts: ['이뇨제 고용량', '베타 차단제', '기계적 순환 보조', '동율동 전환', '관찰'] };
   const resp = [
+    '[단서]',
     'metaphysis에서 발생한 골종양 || 골간단 발생 → 골육종 전형 위치',
     '항생제와 비스테로이드 소염제로 치료를 하였으나 좋아지지 않았다 || 골수염 배제',
     '지문에 없는 문장 || 이건 버려져야 한다',
-    '⇒ || 골육종을 묻는 문제',
+    '[인상]',
+    '골간단 골종양 + 항생제 무반응 → 골육종이 1순위',
+    '[선지]',
+    '① || X || 저혈압에 이뇨제는 전부하를 더 떨어뜨린다',
+    '② || X || 수축력 더 떨어뜨리는 약은 급성기 금기',
+    '③ || O || 약물 불응 쇼크 → 기계적 순환 보조',
+    '④ || X || 부정맥이 원인이 아니다',
+    '⑤ || X || 즉각 보조 없이 관찰은 사망 위험',
   ].join('\n');
-  const items = parseBreakdown(resp, QTEXT);
-  out.push({ name: '지문에 없는 조각은 버린다', ok: items.length === 3, detail: `${items.length}개` });
-  out.push({ name: '결론 줄을 따로 표시한다', ok: items[items.length - 1].conclusion === true });
+  const bd = parseBreakdown(resp, Q);
+  out.push({ name: '지문에 없는 단서는 버린다', ok: bd.clues.length === 2, detail: `${bd.clues.length}개` });
+  out.push({ name: '인상 한 줄을 뽑는다', ok: /골육종이 1순위/.test(bd.impression), detail: bd.impression });
+  out.push({ name: '선지 5개를 전부 읽는다', ok: bd.options.length === 5, detail: `${bd.options.length}개` });
+  out.push({ name: '정답 선지만 keep', ok: bd.options.filter((o) => o.keep).length === 1
+    && bd.options.find((o) => o.keep).idx === 2 });
+  out.push({ name: '쳐내는 기준이 문장으로 들어온다',
+    ok: bd.options.every((o) => o.why && o.why.length > 5) });
+  // 선지 번호가 범위를 벗어나면 버린다(모델이 ⑥을 만들어내는 경우)
+  const over = parseBreakdown('[선지]\n⑥ || X || 없는 선지', Q);
+  out.push({ name: '없는 선지 번호는 버린다', ok: over.options.length === 0 });
 
+  // 실제 렌더
   const el = document.getElementById('breakdown');
   out.push({ name: '뜯어보기 영역이 지문 바로 아래', ok: !!el &&
     el.previousElementSibling && el.previousElementSibling.id === 'qtext' });
   el.classList.remove('hidden');
   el.innerHTML = '';
-  for (const it of items) {
-    const row = document.createElement('div');
-    row.className = it.conclusion ? 'bd-row bd-concl' : 'bd-row';
-    if (!it.conclusion) {
-      const f = document.createElement('span'); f.className = 'bd-frag'; f.textContent = it.frag; row.appendChild(f);
-    }
-    const n = document.createElement('span'); n.className = 'bd-note'; n.textContent = it.note; row.appendChild(n);
-    el.appendChild(row);
-  }
-  out.push({ name: '뜯어보기가 화면에 높이를 가진다', ok: el.getBoundingClientRect().height > 40,
+  const mkRow = (cls, ...kids) => { const d = document.createElement('div'); d.className = cls; d.append(...kids); el.appendChild(d); return d; };
+  const sp = (c, t) => { const x = document.createElement('span'); x.className = c; x.textContent = t; return x; };
+  bd.clues.forEach((c) => mkRow('bd-row', sp('bd-frag', c.frag), sp('bd-arrow', '→'), sp('bd-note', c.note)));
+  mkRow('bd-impression', sp('bd-tag', '읽고 나면'), sp('', bd.impression));
+  mkRow('bd-sub', document.createTextNode('선지 쳐내기'));
+  bd.options.forEach((o) => mkRow(`bd-opt${o.keep ? ' keep' : ''}`,
+    sp('bd-opt-num', '①②③④⑤'[o.idx]), sp('bd-opt-mark', o.keep ? 'O' : '✕'), sp('bd-opt-why', o.why)));
+
+  out.push({ name: '뜯어보기가 화면에 높이를 가진다', ok: el.getBoundingClientRect().height > 150,
     detail: `${Math.round(el.getBoundingClientRect().height)}px` });
-  const frag = el.querySelector('.bd-frag');
   out.push({ name: '원문 조각에 밑줄 강조',
-    ok: getComputedStyle(frag).borderBottomWidth !== '0px', detail: getComputedStyle(frag).borderBottomWidth });
-  out.push({ name: '결론 줄이 강조된다',
-    ok: Number(getComputedStyle(el.querySelector('.bd-concl .bd-note')).fontWeight) >= 700 });
+    ok: getComputedStyle(el.querySelector('.bd-frag')).borderBottomWidth !== '0px' });
+  out.push({ name: '인상 줄이 가장 굵다',
+    ok: Number(getComputedStyle(el.querySelector('.bd-impression')).fontWeight) >= 700 });
+  const keep = el.querySelector('.bd-opt.keep'), drop = el.querySelector('.bd-opt:not(.keep)');
+  out.push({ name: '정답 선지가 또렷하고 나머지는 흐리다',
+    ok: Number(getComputedStyle(keep).opacity) > Number(getComputedStyle(drop).opacity),
+    detail: `${getComputedStyle(keep).opacity} vs ${getComputedStyle(drop).opacity}` });
+  out.push({ name: '쳐낸 선지 표시가 오답색', ok: getComputedStyle(drop.querySelector('.bd-opt-mark')).color
+    !== getComputedStyle(keep.querySelector('.bd-opt-mark')).color });
+  out.push({ name: '모든 선지 줄이 화면에 보인다',
+    ok: [...el.querySelectorAll('.bd-opt')].every((r) => r.getBoundingClientRect().height > 10),
+    detail: `${el.querySelectorAll('.bd-opt').length}줄` });
+  return out;
+});
+
+// ══════════ 5h. 캡처는 새 창을 띄우지 않는다 (2026-10-10 회귀 방지) ══════════
+await run('캡처 토스트', () => {
+  const out = [];
+  return fetch('/js/app.js').then((r) => r.text()).then((src) => {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    out.push({ name: '캡처 경로에 window.open이 없다(주석 제외)', ok: !/window\.open\s*\(/.test(code),
+      detail: (code.match(/window\.open[^\n]*/) || [''])[0].slice(0, 50) });
+    out.push({ name: '캡처 결과를 토스트로 알린다', ok: /function capToast/.test(src) });
+    out.push({ name: '캡처 아이콘이 복사 느낌(⧉)', ok: document.getElementById('toolCapture').textContent.trim() === '⧉',
+      detail: document.getElementById('toolCapture').textContent });
+    // 토스트가 실제로 떴다 사라지는가
+    const t = document.createElement('div');
+    t.id = 'capToast'; t.textContent = '📋 복사했습니다';
+    document.body.appendChild(t);
+    const cs = getComputedStyle(t);
+    out.push({ name: '토스트가 화면 위에 뜬다', ok: cs.position === 'fixed' && Number(cs.zIndex) > 100,
+      detail: `${cs.position} z=${cs.zIndex}` });
+    out.push({ name: '토스트가 반투명 배경', ok: /rgba/.test(cs.backgroundColor), detail: cs.backgroundColor });
+    out.push({ name: '토스트가 입력을 막지 않는다', ok: cs.pointerEvents === 'none' });
+    t.remove();
+    // 도구 설명이 분명한가(무슨 버튼인지 몰랐다는 피드백)
+    ['toolErase', 'toolUndo', 'toolClear', 'toolCapture', 'toolBreak'].forEach((id) => {
+      const b = document.getElementById(id);
+      out.push({ name: `${id} 설명이 한 줄 이상`, ok: (b.title || '').length > 8, detail: b.title });
+    });
+    return out;
+  });
+});
+
+// ══════════ 5i. 응답이 잘려도 죽지 않는다 (2026-10-10 버그) ══════════
+// gemini-2.5-flash가 "생각"에 예산을 다 써서 답이 한 줄 쓰다 잘렸다.
+// thinking을 껐고, 그래도 잘리면 거기까지 보여준다.
+await run('잘림 처리', async () => {
+  const out = [];
+  const G = await import('/js/gemini.js');
+  const realFetch = window.fetch;
+  try {
+    // 요청 본문에 thinkingBudget:0 이 실리는지 가로채서 확인
+    let sentBody = null;
+    window.fetch = async (url, init) => {
+      sentBody = JSON.parse(init.body);
+      return {
+        ok: true,
+        json: async () => ({ candidates: [{
+          content: { parts: [{ text: '[단서]\nmetaphysis에서 발생한 골종양 || 골간단 발생 → 골육종' }] },
+          finishReason: 'MAX_TOKENS',
+        }] }),
+      };
+    };
+    await G.setKey('TEST_KEY_NOT_REAL');
+    G.resetLimiter();
+    const q = { q: 'metaphysis에서 발생한 골종양 소견이 확인되었다.', opts: ['가', '나'] };
+    const r = await G.breakdown(q);
+    out.push({ name: '요청에 thinkingBudget:0이 실린다',
+      ok: sentBody && sentBody.generationConfig && sentBody.generationConfig.thinkingConfig
+        && sentBody.generationConfig.thinkingConfig.thinkingBudget === 0,
+      detail: JSON.stringify(sentBody && sentBody.generationConfig) });
+    out.push({ name: '잘려도 던지지 않고 결과를 준다', ok: !!r && Array.isArray(r.clues) });
+    out.push({ name: '잘린 것까지는 살린다', ok: r.clues.length === 1, detail: `${r.clues.length}개` });
+    out.push({ name: '잘렸음을 표시한다', ok: r.truncated === true });
+    await G.clearKey();
+  } finally {
+    window.fetch = realFetch;
+  }
   return out;
 });
 

@@ -671,16 +671,26 @@ summary.subject-head > .head-row, summary.root-head > .head-row {
 }
 
 /* ═══════════ 문제 뜯어보기 (2026-10-10) ═══════════
-   지문의 단서마다 "시험에서 이게 뭘 뜻하는지"를 붙여 읽는 법을 훈련한다. */
+   단서 → 인상 → 선지 쳐내기. 정답을 알려주는 게 아니라 읽는 순서를 훈련한다. */
 .breakdown {
-  margin: 14px 0 18px; padding: 13px 15px;
+  margin: 14px 0 18px; padding: 13px 15px 15px;
   background: var(--badge-bg); border-radius: 11px;
   border-left: 3px solid var(--accent);
   animation: bdIn .16s ease-out;
 }
 @keyframes bdIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
-.bd-head { font-size: 12px; font-weight: 700; color: var(--sub); margin-bottom: 9px; }
+.bd-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; font-weight: 700; color: var(--sub); margin-bottom: 9px;
+}
+.bd-close {
+  border: none; background: none; color: var(--sub); cursor: pointer;
+  font-size: 14px; padding: 4px 8px; margin: -4px -6px -4px 0; border-radius: 6px;
+  min-height: 30px; font-family: inherit;
+}
+.bd-close:active { background: var(--border); }
 .bd-loading { font-size: 14px; color: var(--sub); padding: 4px 0; }
+
 .bd-row {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px;
   padding: 7px 0; font-size: 14px; line-height: 1.5;
@@ -692,13 +702,59 @@ summary.subject-head > .head-row, summary.root-head > .head-row {
   border-bottom: 2px solid var(--accent); padding-bottom: 1px;
 }
 .bd-arrow { color: var(--sub); font-size: 12px; }
-.bd-note { color: var(--sub); flex: 1; min-width: 160px; }
-.bd-concl {
-  margin-top: 4px; padding-top: 10px; border-top: 2px solid var(--border);
+.bd-note { color: var(--sub); flex: 1; min-width: 150px; }
+
+/* 다 읽은 순간의 판단 — 가장 눈에 띄어야 한다 */
+.bd-impression {
+  display: flex; gap: 9px; align-items: baseline; flex-wrap: wrap;
+  margin: 11px 0 4px; padding: 11px 13px;
+  background: var(--card); border-radius: 9px;
+  font-size: 14.5px; font-weight: 700; color: var(--text); line-height: 1.5;
 }
-.bd-concl .bd-note { color: var(--accent); font-weight: 700; }
+.bd-tag {
+  flex: 0 0 auto; font-size: 10.5px; font-weight: 800; letter-spacing: .03em;
+  color: #fff; background: var(--accent); padding: 3px 8px; border-radius: 5px;
+}
+
+.bd-sub {
+  font-size: 11.5px; font-weight: 700; color: var(--sub);
+  margin: 14px 0 6px; letter-spacing: .02em;
+}
+.bd-opt {
+  display: flex; gap: 9px; align-items: baseline;
+  padding: 7px 9px; margin-bottom: 4px; border-radius: 8px;
+  font-size: 13.5px; line-height: 1.45; background: var(--card);
+  opacity: .72;
+}
+.bd-opt.keep { opacity: 1; background: color-mix(in srgb, var(--correct) 12%, var(--card)); }
+.bd-opt-num { flex: 0 0 auto; font-weight: 700; color: var(--sub); }
+.bd-opt-mark { flex: 0 0 16px; font-weight: 800; color: var(--wrong); }
+.bd-opt.keep .bd-opt-mark { color: var(--correct); }
+.bd-opt-why { flex: 1; color: var(--text); }
+.bd-opt:not(.keep) .bd-opt-why { color: var(--sub); }
+.bd-trunc { margin-top: 10px; font-size: 12px; color: var(--warn); }
+
 /* 지문 쪽에 같은 조각을 표시해 눈으로 잇는다 */
 #qtext .tok.bd-mark {
   background: linear-gradient(transparent 62%, rgba(37,99,235,.22) 62%);
   border-radius: 2px;
 }
+
+/* ═══════════ 캡처 완료 토스트 (2026-10-10) ═══════════
+   새 창을 띄우면 아이패드에서 돌아올 길이 없어 앱을 껐다 켜야 했다.
+   살짝 떴다 사라지는 반투명 배지로 바꾼다. */
+#capToast {
+  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 92px);
+  transform: translateX(-50%);
+  background: rgba(20, 24, 34, .86); color: #fff;
+  padding: 11px 20px; border-radius: 22px;
+  font-size: 14px; font-weight: 600; white-space: nowrap;
+  z-index: 200; pointer-events: none;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 6px 24px rgba(0,0,0,.22);
+  animation: capIn .18s ease-out;
+}
+#capToast.out { animation: capOut .32s ease-in forwards; }
+@keyframes capIn  { from { opacity: 0; transform: translate(-50%, 8px); }
+                    to   { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes capOut { to   { opacity: 0; transform: translate(-50%, -6px); } }

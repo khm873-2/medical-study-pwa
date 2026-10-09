@@ -223,6 +223,19 @@ ok('대기 시간이 합리적(1~60초)', waitSec >= 1 && waitSec <= 60, `${wait
 const rc = G.rateCheck();
 ok('rateCheck가 막힌 상태를 알림', rc.ok === false && rc.waitSec > 0, JSON.stringify(rc));
 
+
+// ── 응답 잘림 (2026-10-10) ──
+// gemini-2.5-flash는 "생각" 토큰이 maxOutputTokens를 같이 먹는다. 끄지 않으면
+// 예산을 거의 다 생각에 쓰고 답이 한 줄 쓰다 잘린다 — 실제로 겪은 버그다.
+{
+  const src = readFileSync(`${PWA}/js/gemini.js`, 'utf8');
+  ok('요청에 thinkingBudget: 0 을 넣는다', /thinkingConfig:\s*\{\s*thinkingBudget:\s*0\s*\}/.test(src));
+  ok('잘린 응답(MAX_TOKENS)을 감지한다', /finishReason === 'MAX_TOKENS'/.test(src));
+  ok('잘려도 거기까지는 보여준다', /e\.partial/.test(src));
+  ok('뜯어보기 예산이 넉넉하다', /maxTokens:\s*1[2-9]\d\d/.test(src),
+    (src.match(/maxTokens:\s*\d+/g) || []).join(' '));
+}
+
 console.log(`\n통과 ${pass}건`);
 if (fail.length) { console.log(`실패 ${fail.length}건:`); fail.forEach((f) => console.log('  ✗ ' + f)); process.exit(1); }
 console.log('✅ 전부 통과');

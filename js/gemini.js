@@ -126,7 +126,14 @@ async function callGemini({ key, model, system, text: userText, maxTokens = 900,
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: [{ role: 'user', parts: [{ text: userText }] }],
-    generationConfig: { temperature, maxOutputTokens: maxTokens },
+    generationConfig: {
+      temperature,
+      maxOutputTokens: maxTokens,
+      // ★ 2.5 계열은 "생각" 토큰이 maxOutputTokens를 같이 먹는다. 끄지 않으면 예산을
+      //   거의 다 생각에 쓰고 **답이 한 줄 쓰다 잘린다**(2026-10-10 실제 버그).
+      //   우리 작업은 형식이 정해진 짧은 변환이라 생각이 필요 없다.
+      thinkingConfig: { thinkingBudget: 0 },
+    },
   };
   recentCalls.push(Date.now());
   const res = await fetch(
@@ -154,10 +161,17 @@ async function callGemini({ key, model, system, text: userText, maxTokens = 900,
     throw new Error(`Gemini 오류 ${res.status}${t ? ' — ' + t.slice(0, 120) : ''}`);
   }
   const json = await res.json();
-  const text = json?.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') || '';
+  const cand = json?.candidates?.[0];
+  const text = cand?.content?.parts?.map((p) => p.text).join('') || '';
   if (!text) {
-    const reason = json?.candidates?.[0]?.finishReason;
+    const reason = cand?.finishReason;
     throw new Error(reason ? `답변을 받지 못했습니다(${reason}).` : '빈 응답을 받았습니다.');
+  }
+  // 잘렸으면 조용히 넘기지 않는다 — 한 줄만 나오고 끝나는 걸 버그로 오인하게 된다
+  if (cand?.finishReason === 'MAX_TOKENS') {
+    const e = new Error('TRUNCATED');
+    e.partial = text.trim();
+    throw e;
   }
   return text.trim();
 }
@@ -265,85 +279,125 @@ function shortMsg(text) {
 }
 
 // ───────────── 문제 뜯어보기 ─────────────
-// "12세 남아가… metaphysis에서 발생한 골종양…" 같은 지문을 한 조각씩 끊어서
-// **각 단서가 시험에서 뭘 뜻하는지**를 붙인다. 답을 맞히는 게 아니라
-// "이 문장을 보면 뭘 떠올려야 하는가"를 훈련하는 용도다(2026-10-10 요청).
+// 시험장에서 이 문제를 **어떻게 읽고 어떻게 선지를 쳐내는지**를 훈련한다.
+// 정답만 알려주는 해설과 다르다 — 단서 → 인상 → 선지 제거 기준의 순서를 보여준다.
 
-const BREAK_SYSTEM = `당신은 의대생에게 임상 vignette 읽는 법을 훈련시키는 튜터다.
+const BREAK_SYSTEM = `당신은 의대생에게 임상 vignette 푸는 법을 훈련시키는 튜터다.
+시험장에서 이 문제를 읽으며 **머릿속에서 일어나야 할 일**을 순서대로 재현해라.
 
-주어진 문제 지문을 **의미 있는 단서 단위로 끊어서**, 각 단서가 시험에서 무엇을
-가리키는지 짧게 붙여라. 시험장에서 그 문장을 보는 순간 떠올려야 할 것을 적는다.
+아래 세 블록을 **이 순서로, 이 형식 그대로만** 출력한다. 머리말·인사·총평 금지.
 
-반드시 아래 형식만 출력한다(다른 말·인사·머리말 금지). 한 줄에 하나씩:
+[단서]
+원문조각 || 이걸 보면 떠올려야 할 것
+(4~7줄. 원문조각은 지문에 **그대로 있는 연속 문자열**이어야 한다. 요약·변형 금지.
+ 정상 수치도 왜 적혀 있는지 밝혀라 — 출제자가 괜히 넣은 값은 없다.)
 
-원문조각 || 이게 뜻하는 것
+[인상]
+한 줄. 지문을 다 읽은 순간 가져야 할 판단. "무엇을 묻고 있고, 머릿속 1순위는 무엇인가".
+
+[선지]
+선지번호 || O 또는 X || 남기거나 쳐내는 **기준** 한 줄
+(모든 선지에 대해 한 줄씩. 정답은 O, 나머지는 X.
+ "왜 틀렸나"가 아니라 **"무엇을 보고 쳐냈나"**를 적어라.
+ 예: "저혈압 지속 → 수축력 더 떨어뜨리는 약은 이 시점에 금기")
 
 규칙:
-- 원문조각은 지문에 **그대로 있는 연속된 문자열**이어야 한다(요약·변형 금지).
-- 의미 없는 조각(혈압이 정상인데 정상이라고만 쓰는 등)은 "정상 — 배제용"처럼
-  왜 적혀 있는지를 밝혀라. 출제자가 괜히 넣은 수치는 없다.
-- 해설은 한 줄(60자 이내). "A → B" 꼴로 압축한다.
-- 5~10줄. 마지막 줄은 반드시 다음 형식의 결론 한 줄:
-  ⇒ || 종합하면 무엇을 묻는 문제인가
-- 정답 번호는 말하지 마라. 어디를 봐야 하는지만 훈련시킨다.
-
-예:
-metaphysis에서 발생한 골종양 || 골간단 발생 → 골육종(osteosarcoma) 전형 위치
-항생제로 좋아지지 않았다 || 골수염 배제 — 감염이면 항생제에 반응했어야 한다`;
+- 각 줄 60자 이내. 의학용어는 한글(영문) 병기.
+- 설명을 길게 늘이지 말고 판단 기준만 압축한다.`;
 
 /**
- * 지문을 단서별로 뜯는다.
- * @returns {Promise<Array<{frag:string, note:string}>>}
+ * 지문을 단서·인상·선지 기준으로 뜯는다.
+ * @returns {Promise<{clues:Array, impression:string, options:Array}>}
  */
 export async function breakdown(question, retried = false) {
   const key = await getKey();
   if (!key) throw new Error('NO_KEY');
   const model = await getModel();
 
-  const cacheKey = `BD|${question.q.slice(0, 80)}`;
-  if (!retried && answerCache.has(cacheKey)) return parseBreakdown(answerCache.get(cacheKey), question.q);
+  const cacheKey = `BD2|${question.q.slice(0, 80)}`;
+  if (!retried && answerCache.has(cacheKey)) return parseBreakdown(answerCache.get(cacheKey), question);
 
   if (!retried) {
     const rc = rateCheck();
     if (!rc.ok) throw new Error(`RATE_WAIT:${rc.waitSec}`);
   }
 
+  const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
+  const opts = (question.opts || []).map((o, i) => `${CIRCLED[i] || i + 1} ${o}`).join('\n');
+
   try {
     const text = await callGemini({
-      key, model, system: BREAK_SYSTEM, maxTokens: 700, temperature: 0.2,
-      text: `[지문]\n${question.q}`,
+      key, model, system: BREAK_SYSTEM, maxTokens: 1600, temperature: 0.2,
+      text: `[지문]\n${question.q}\n\n[선지]\n${opts}`,
     });
     answerCache.set(cacheKey, text);
     if (answerCache.size > 80) answerCache.delete(answerCache.keys().next().value);
-    return parseBreakdown(text, question.q);
+    return parseBreakdown(text, question);
   } catch (e) {
     if (e.message === 'MODEL_404' && !retried) {
       const v = await verifyKey(key);
       if (v.ok && v.model !== model) return breakdown(question, true);
       throw new Error(v.ok ? `모델 "${model}"을 쓸 수 없습니다(404).` : v.error);
     }
+    // 잘렸어도 거기까지는 보여준다 — 아무것도 없는 것보다 낫다
+    if (e.message === 'TRUNCATED' && e.partial) {
+      const r = parseBreakdown(e.partial, question);
+      r.truncated = true;
+      return r;
+    }
     throw e;
   }
 }
 
 /**
- * "조각 || 설명" 줄들을 파싱한다.
- * 조각이 지문에 실제로 있는지 확인해서 **지어낸 조각은 버린다** —
+ * 세 블록을 파싱한다.
+ * 조각이 지문에 실제로 있는지 확인해 **지어낸 조각은 버린다** —
  * 없는 문장에 밑줄을 그으면 오히려 헷갈린다.
  */
-export function parseBreakdown(text, qtext) {
-  const hay = String(qtext || '');
-  const out = [];
+export function parseBreakdown(text, question) {
+  const hay = String(question?.q || '');
+  const nOpts = (question?.opts || []).length;
+  const clues = [];
+  let impression = '';
+  const options = [];
+  let section = '';
+
   for (const raw of String(text).split('\n')) {
-    const line = raw.replace(/^[\s\-*•]+/, '').trim();
-    if (!line.includes('||')) continue;
-    const i = line.indexOf('||');
-    const frag = line.slice(0, i).trim().replace(/^["'`]|["'`]$/g, '');
-    const note = line.slice(i + 2).trim();
+    const line = raw.trim();
+    if (!line) continue;
+    const sec = line.match(/^\[?\s*(단서|인상|선지)\s*\]?$/);
+    if (sec) { section = sec[1]; continue; }
+
+    if (section === '인상') { if (!impression) impression = line.replace(/^[\-*•\s]+/, ''); continue; }
+
+    const body = line.replace(/^[\-*•\s]+/, '');
+    if (!body.includes('||')) continue;
+    const parts = body.split('||').map((x) => x.trim());
+
+    if (section === '선지' || parts.length === 3) {
+      const idx = optIndex(parts[0]);
+      if (idx < 0 || idx >= nOpts) continue;
+      const verdictRaw = (parts[1] || '').toUpperCase();
+      const keep = /O|◯|○|정답|KEEP/.test(verdictRaw) && !/X|✕|×/.test(verdictRaw);
+      options.push({ idx, keep, why: parts[2] || parts[1] || '' });
+      continue;
+    }
+
+    const frag = parts[0].replace(/^["'`]|["'`]$/g, '');
+    const note = parts.slice(1).join(' || ').trim();
     if (!note) continue;
-    if (frag === '⇒' || frag === '=>' || frag === '') { out.push({ frag: '', note, conclusion: true }); continue; }
-    if (!hay.includes(frag)) continue;        // 지문에 없는 조각은 버린다
-    out.push({ frag, note, conclusion: false });
+    if (!hay.includes(frag)) continue;      // 지문에 없는 조각은 버린다
+    clues.push({ frag, note });
   }
-  return out;
+  options.sort((a, b) => a.idx - b.idx);
+  return { clues, impression, options, truncated: false };
+}
+
+/** "①" "1" "1번" → 0-indexed */
+function optIndex(s) {
+  const t = String(s).trim();
+  const circ = '①②③④⑤⑥'.indexOf(t[0]);
+  if (circ >= 0) return circ;
+  const m = t.match(/\d+/);
+  return m ? Number(m[0]) - 1 : -1;
 }

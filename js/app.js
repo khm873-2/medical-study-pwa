@@ -849,32 +849,52 @@ function updatePaneLayout() {
 
 // ---------- 영역 캡처 ----------
 // 글자 긁기로는 표·그림·수식이 깨진다 → 보이는 그대로 이미지로 떠서 클립보드에 넣는다.
+//
+// ⚠️ 새 창(window.open)을 띄우면 아이패드 PWA에서 **돌아올 길이 없어 앱을 껐다 켜야 한다**
+//    (2026-10-10 실제로 겪음). 실패해도 창을 띄우지 않고 문구만 보여준다.
+
+/** 살짝 떴다 사라지는 반투명 배지. */
+function capToast(msg, ms = 1400) {
+  let el = document.getElementById('capToast');
+  if (el) el.remove();
+  el = document.createElement('div');
+  el.id = 'capToast';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  clearTimeout(capToast._t);
+  capToast._t = setTimeout(() => {
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 340);
+  }, ms);
+  return el;
+}
+
 async function handleCapture(box) {
   const r = pen.canvas.getBoundingClientRect();
   const rect = {
     left: r.left + box.l, top: r.top + box.t,
     width: box.r - box.l, height: box.b - box.t,
   };
-  toast('캡처하는 중…');
+  const busy = capToast('캡처하는 중…', 20000);
   try {
     const cv = await captureRect(rect);
     const blob = await canvasToBlob(cv);
     if (!blob) throw new Error('이미지를 만들지 못했습니다.');
+    lastCapture = blob;                       // 복사에 실패해도 손에 남겨둔다
     try {
       await copyBlobToClipboard(Promise.resolve(blob));
-      toast('📋 이미지를 복사했습니다.');
+      busy.remove();
+      capToast('📋 복사했습니다');
     } catch {
-      // iOS에서 클립보드 권한이 없으면 — 새 탭으로 띄워 길게 눌러 저장하게 한다
-      const url = URL.createObjectURL(blob);
-      const w = window.open();
-      if (w) { w.document.write(`<img src="${url}" style="max-width:100%">`); toast('새 탭에 띄웠습니다 — 길게 눌러 저장하세요.'); }
-      else toast('복사에 실패했습니다.');
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      busy.remove();
+      capToast('캡처했지만 복사 권한이 없습니다 — 길게 눌러 복사하세요', 2600);
     }
   } catch (e) {
-    toast(`캡처 실패: ${e.message}`);
+    busy.remove();
+    capToast(`캡처 실패 — ${e.message}`, 2400);
   }
 }
+let lastCapture = null;
 
 document.getElementById('toolCapture').onclick = () => {
   if (!pen) return;
@@ -882,7 +902,7 @@ document.getElementById('toolCapture').onclick = () => {
   pen.setCapturing(on);
   document.getElementById('toolCapture').classList.toggle('active', on);
   document.getElementById('toolErase').classList.remove('active');
-  toast(on ? '캡처 모드 — 펜으로 네모를 그리세요' : '캡처 모드 끔');
+  capToast(on ? '펜으로 네모를 그리면 복사됩니다' : '캡처 모드 끔');
 };
 
 // ---------- 문제 뜯어보기 ----------
@@ -909,8 +929,7 @@ async function runBreakdown() {
   el.innerHTML = '<div class="bd-loading">지문을 뜯어보는 중…</div>';
   document.getElementById('toolBreak').classList.add('active');
   try {
-    const items = await gem.breakdown(q);
-    renderBreakdown(el, items, q);
+    renderBreakdown(el, await gem.breakdown(q), q);
   } catch (e) {
     const wait = /^RATE_WAIT:(\d+)$/.exec(e.message);
     el.innerHTML = '';
@@ -924,57 +943,108 @@ async function runBreakdown() {
   }
 }
 
-function renderBreakdown(el, items, q) {
+function renderBreakdown(el, data, q) {
   el.innerHTML = '';
-  if (!items.length) {
+  const { clues, impression, options, truncated } = data;
+  if (!clues.length && !impression && !options.length) {
     el.innerHTML = '<p class="muted">뜯어볼 단서를 찾지 못했습니다.</p>';
     return;
   }
+
   const head = document.createElement('div');
   head.className = 'bd-head';
-  head.textContent = '🔍 지문 뜯어보기';
+  head.innerHTML = '<span>🔍 지문 뜯어보기</span>';
+  const close = document.createElement('button');
+  close.className = 'bd-close';
+  close.textContent = '✕';
+  close.onclick = () => {
+    el.classList.add('hidden');
+    document.getElementById('toolBreak').classList.remove('active');
+    document.querySelectorAll('#qtext .tok.bd-mark').forEach((m) => m.classList.remove('bd-mark'));
+  };
+  head.appendChild(close);
   el.appendChild(head);
 
-  for (const it of items) {
+  // ① 단서 — 지문의 어느 말이 무엇을 가리키는가
+  for (const c of clues) {
     const row = document.createElement('div');
-    row.className = it.conclusion ? 'bd-row bd-concl' : 'bd-row';
-    if (!it.conclusion) {
-      const f = document.createElement('span');
-      f.className = 'bd-frag';
-      f.textContent = it.frag;
-      row.appendChild(f);
-      const arrow = document.createElement('span');
-      arrow.className = 'bd-arrow';
-      arrow.textContent = '→';
-      row.appendChild(arrow);
-    }
+    row.className = 'bd-row';
+    const f = document.createElement('span');
+    f.className = 'bd-frag';
+    f.textContent = c.frag;
+    const ar = document.createElement('span');
+    ar.className = 'bd-arrow';
+    ar.textContent = '→';
     const n = document.createElement('span');
     n.className = 'bd-note';
-    n.textContent = it.note;
-    row.appendChild(n);
+    n.textContent = c.note;
+    row.append(f, ar, n);
     el.appendChild(row);
   }
-  // 지문에서 해당 조각에 밑줄을 그어 눈으로 잇는다
-  highlightFragments(items);
+
+  // ② 인상 — 다 읽은 순간의 판단
+  if (impression) {
+    const imp = document.createElement('div');
+    imp.className = 'bd-impression';
+    const tag = document.createElement('span');
+    tag.className = 'bd-tag';
+    tag.textContent = '읽고 나면';
+    const t = document.createElement('span');
+    t.textContent = impression;
+    imp.append(tag, t);
+    el.appendChild(imp);
+  }
+
+  // ③ 선지 — 무엇을 보고 쳐냈는가 (이게 핵심 훈련)
+  if (options.length) {
+    const sub = document.createElement('div');
+    sub.className = 'bd-sub';
+    sub.textContent = '선지 쳐내기';
+    el.appendChild(sub);
+    const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
+    for (const o of options) {
+      const row = document.createElement('div');
+      row.className = `bd-opt${o.keep ? ' keep' : ''}`;
+      const num = document.createElement('span');
+      num.className = 'bd-opt-num';
+      num.textContent = CIRCLED[o.idx] || o.idx + 1;
+      const mark = document.createElement('span');
+      mark.className = 'bd-opt-mark';
+      mark.textContent = o.keep ? 'O' : '✕';
+      const why = document.createElement('span');
+      why.className = 'bd-opt-why';
+      why.textContent = o.why;
+      row.append(num, mark, why);
+      el.appendChild(row);
+    }
+  }
+
+  if (truncated) {
+    const w = document.createElement('div');
+    w.className = 'bd-trunc';
+    w.textContent = '답변이 중간에 끊겼습니다 — 다시 누르면 재시도합니다.';
+    el.appendChild(w);
+  }
+
+  highlightFragments(clues);
   tokenizeTree(el);     // 분석 결과도 펜으로 긁어서 다시 물어볼 수 있게
 }
 
 /** 지문 안의 해당 조각에 밑줄 표시. 토큰 구조를 깨지 않게 조각 단위로만 감싼다. */
-function highlightFragments(items) {
+function highlightFragments(clues) {
   const host = document.getElementById('qtext');
   if (!host) return;
   host.querySelectorAll('.bd-mark').forEach((m) => m.classList.remove('bd-mark'));
-  const frags = items.filter((x) => !x.conclusion).map((x) => x.frag);
   const toks = [...host.querySelectorAll('.tok')];
   if (!toks.length) return;
-  for (const frag of frags) {
-    // 토큰들을 이어붙여 조각과 겹치는 구간을 찾는다
-    let acc = '';
-    const starts = [];
-    toks.forEach((t) => { starts.push(acc.length); acc += t.textContent; });
-    const at = acc.indexOf(frag.replace(/\s+/g, ''));
+  let acc = '';
+  const starts = [];
+  toks.forEach((t) => { starts.push(acc.length); acc += t.textContent; });
+  for (const c of clues) {
+    const needle = c.frag.replace(/\s+/g, '');
+    const at = acc.indexOf(needle);
     if (at < 0) continue;
-    const end = at + frag.replace(/\s+/g, '').length;
+    const end = at + needle.length;
     toks.forEach((t, i) => {
       const a = starts[i], b = a + t.textContent.length;
       if (b > at && a < end) t.classList.add('bd-mark');
