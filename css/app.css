@@ -521,3 +521,62 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 .subject-group > summary.subject-head:active { background: var(--badge-bg); }
 .subject-count { font-size: 12px; color: var(--sub); font-weight: 500; }
 .subject-group .exam-item { margin-left: 8px; }
+
+/* ═══════════ 패널 크기 조절 · 읽기 개선 (2026-10-09) ═══════════ */
+
+/* 본문 ↔ 사이드 폭 조절 */
+.col-resizer { display: none; }
+@media (min-width: 900px) {
+  .col-resizer {
+    display: block; flex: 0 0 10px; align-self: stretch; cursor: col-resize;
+    position: relative; touch-action: none;
+  }
+  .col-resizer::before {
+    content: ''; position: absolute; left: 4px; top: 10%; bottom: 10%; width: 2px;
+    background: var(--border); border-radius: 2px;
+  }
+  .col-resizer:active::before, .col-resizer:hover::before { background: var(--accent); }
+  /* JS가 --side-w를 설정한다 */
+  #quizScreen .side-col { flex: 0 0 var(--side-w, clamp(300px, 34vw, 460px)); }
+}
+
+/* 사이드 패널(AI ↔ 노트) 높이 조절 */
+.pane-resizer { display: none; }
+@media (min-width: 900px) {
+  #quizScreen .side-col .pane-resizer:not(.hidden) {
+    display: block; height: 10px; flex: 0 0 10px; cursor: row-resize;
+    position: relative; touch-action: none;
+  }
+  .pane-resizer::before {
+    content: ''; position: absolute; top: 4px; left: 25%; right: 25%; height: 2px;
+    background: var(--border); border-radius: 2px;
+  }
+  .pane-resizer:active::before { background: var(--accent); }
+  /* 둘 다 열렸을 때만 비율을 나눈다 */
+  #quizScreen .side-col.both > #aiPanel { flex: 0 0 var(--ai-h, 45%); }
+  #quizScreen .side-col.both > #wikiPanel { flex: 1 1 auto; }
+  /* 하나만 열렸으면 전체를 쓴다 */
+  #quizScreen .side-col:not(.both) > #aiPanel,
+  #quizScreen .side-col:not(.both) > #wikiPanel { flex: 1 1 auto; }
+}
+
+/* 좁은 폭에서도 글이 뭉개지지 않게 */
+.wiki-body, #aiBody {
+  word-break: keep-all;      /* 한국어 단어 중간에서 끊지 않는다 */
+  overflow-wrap: anywhere;   /* 단, 아주 긴 영문·수식은 넘치지 않게 */
+}
+.wiki-body p, #aiBody p { margin: 6px 0; }
+.wiki-body .cal-body > p:first-child { margin-top: 0; }
+.wiki-body .cal-body > p:last-child { margin-bottom: 0; }
+
+/* 선택 팝업을 펜으로도 누를 수 있게 — 캔버스가 위에 있어도 통과하도록 */
+#selPop { touch-action: auto; }
+#selPop .sel-btn { touch-action: manipulation; }
+
+/* 문제 카드 하단 "다음 문제" — 안 푼 문항에서도 흐름이 이어지게 */
+.inline-next {
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);
+}
+.inline-next .muted { flex: 1; font-size: 13px; }
+.inline-next .btn { min-width: 150px; }

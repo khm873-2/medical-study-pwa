@@ -390,6 +390,22 @@ document.getElementById('toolErase').onclick = () => {
   document.getElementById('toolErase').classList.toggle('active', on);
 };
 document.getElementById('toolWiki').onclick = () => toggleWiki();
+// AI 해설도 위키처럼 탭으로 — 질문할 때마다 자동으로 열리기만 하던 걸 직접 열고 닫게 한다
+document.getElementById('toolAi').onclick = () => {
+  const p = document.getElementById('aiPanel');
+  if (p.classList.contains('hidden')) {
+    p.classList.remove('hidden');
+    syncSideCol();
+    if (!askCtx || !askCtx.answer) {
+      document.getElementById('aiTerm').textContent = 'AI 해설';
+      document.getElementById('aiBody').innerHTML =
+        '<p class="muted">문제나 해설에서 궁금한 부분을 펜으로 긋고 <b>🤖 여기서 질문</b>을 누르세요.</p>';
+      document.getElementById('aiStatus').textContent = '';
+    }
+  } else {
+    closeAi();
+  }
+};
 
 /** 문항이 바뀔 때마다 — 필기 복원 + 위키 갱신 */
 function onQuestionRender(q, idx, { answered }) {
@@ -653,11 +669,81 @@ function syncSideCol() {
     !document.getElementById('aiPanel').classList.contains('hidden') ||
     !document.getElementById('wikiPanel').classList.contains('hidden');
   document.getElementById('quizScreen').classList.toggle('with-side', anyOpen);
+  updatePaneLayout();
   requestAnimationFrame(() => pen && pen.resize());
 }
 
 /** 넓은 화면인가? (사이드바를 상시 쓰는 기준) */
 const wideScreen = () => window.matchMedia('(min-width: 900px)').matches;
+
+/** 두 패널이 동시에 열렸는지에 따라 높이 분할 여부가 달라진다. */
+function updatePaneLayout() {
+  const aiOpen = !document.getElementById('aiPanel').classList.contains('hidden');
+  const wikiOpen = !document.getElementById('wikiPanel').classList.contains('hidden');
+  const col = document.querySelector('#quizScreen .side-col');
+  if (col) col.classList.toggle('both', aiOpen && wikiOpen);
+  document.getElementById('paneResizer').classList.toggle('hidden', !(aiOpen && wikiOpen));
+  document.getElementById('toolAi').classList.toggle('active', aiOpen);
+  document.getElementById('toolWiki').classList.toggle('active', wikiOpen);
+}
+
+// ---------- 패널 크기 조절 ----------
+// 사용자가 "창이 2~3개 생기는데 크기 조절이 됐으면" 요청. 끌어서 조절하고 기억한다.
+function initResizers() {
+  const colR = document.getElementById('colResizer');
+  const paneR = document.getElementById('paneResizer');
+  const root = document.documentElement;
+
+  // 저장된 값 복원
+  const savedW = localStorage.getItem('side_w');
+  if (savedW) root.style.setProperty('--side-w', savedW);
+  const savedH = localStorage.getItem('ai_h');
+  if (savedH) root.style.setProperty('--ai-h', savedH);
+
+  let drag = null;
+  const onMove = (e) => {
+    if (!drag) return;
+    e.preventDefault();
+    if (drag.kind === 'col') {
+      const w = Math.max(260, Math.min(drag.startW + (drag.x - e.clientX), window.innerWidth * 0.62));
+      root.style.setProperty('--side-w', `${Math.round(w)}px`);
+    } else {
+      const col = document.querySelector('#quizScreen .side-col');
+      const total = col.getBoundingClientRect().height;
+      const pct = Math.max(18, Math.min(((drag.startH + (e.clientY - drag.y)) / total) * 100, 82));
+      root.style.setProperty('--ai-h', `${pct.toFixed(1)}%`);
+    }
+    if (pen) pen.resize();
+  };
+  const onUp = () => {
+    if (!drag) return;
+    drag = null;
+    localStorage.setItem('side_w', root.style.getPropertyValue('--side-w') || '');
+    localStorage.setItem('ai_h', root.style.getPropertyValue('--ai-h') || '');
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    if (pen) pen.resize();
+  };
+  const start = (kind) => (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const side = document.querySelector('#quizScreen .side-col');
+    const ai = document.getElementById('aiPanel');
+    drag = {
+      kind, x: e.clientX, y: e.clientY,
+      startW: side ? side.getBoundingClientRect().width : 360,
+      startH: ai ? ai.getBoundingClientRect().height : 200,
+    };
+    document.addEventListener('pointermove', onMove, { passive: false });
+    document.addEventListener('pointerup', onUp);
+  };
+  colR.addEventListener('pointerdown', start('col'));
+  paneR.addEventListener('pointerdown', start('pane'));
+
+  // 더블탭하면 기본값으로
+  colR.ondblclick = () => { root.style.removeProperty('--side-w'); localStorage.removeItem('side_w'); if (pen) pen.resize(); };
+  paneR.ondblclick = () => { root.style.removeProperty('--ai-h'); localStorage.removeItem('ai_h'); };
+}
 
 function escapeText(s) {
   return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -1309,6 +1395,7 @@ function alertBox(text) {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
+  initResizers();
   refreshSyncBar();
   flushOutbox();
   if (await hasToken()) loadList(false);

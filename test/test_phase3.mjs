@@ -39,6 +39,17 @@ ok('위키링크', wl.includes('data-note="노트이름"'));
 const wl2 = renderMarkdown('[[노트|표시이름]]');
 ok('위키링크 별칭', wl2.includes('>표시이름<') && wl2.includes('data-note="노트"'));
 
+// ★ 줄바꿈 — 산문은 이어붙이고 항목은 줄을 지킨다(2026-10-09, 좁은 패널에서 공백이 크게 남던 문제)
+const prose = renderMarkdown('무호흡은 90% 이상 기류저하가 10초 이상이다.\n저호흡은 30% 이상이다.');
+ok('산문 2줄은 한 문단으로 합쳐짐', !prose.includes('<br>'), prose);
+ok('합쳐질 때 공백이 들어감', /이상이다\. 저호흡은/.test(prose), prose);
+const items = renderMarkdown('ㄱ. 무호흡은 90%다.\nㄴ. 저호흡은 30%다.');
+ok('ㄱ/ㄴ 항목은 줄바꿈 유지', items.includes('<br>'), items);
+const nums = renderMarkdown('① 첫째 선지\n② 둘째 선지');
+ok('①② 선지도 줄바꿈 유지', nums.includes('<br>'), nums);
+const dash = renderMarkdown('설명이 이어지는 문장이다.\n- 항목 하나');
+ok('- 목록 앞에서도 줄바꿈 유지', dash.includes('<br>') || dash.includes('<ul>'), dash);
+
 // XSS 방어 — 노트는 내 것이지만 렌더가 깨지면 안 된다
 const xss = renderMarkdown('<script>alert(1)</script>');
 ok('HTML 이스케이프', !xss.includes('<script>'), xss);

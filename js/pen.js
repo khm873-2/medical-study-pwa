@@ -116,6 +116,9 @@ export class PenLayer {
 
   _down(e) {
     if (!this._isPen(e)) return;          // 손가락은 통과 → 평소대로 스크롤·탭
+    // UI 위(팝업·버튼)에서는 펜도 평범한 포인터로 동작해야 한다 —
+    // 그러지 않으면 "펜으로는 팝업 버튼이 안 눌린다"(2026-10-09 피드백).
+    if (e.target && e.target.closest && e.target.closest('.pen-passthrough, button, summary, input, textarea, a, .sel-btn')) return;
     // 이 레이어가 담당하는 영역 근처에서 시작한 것만 받는다(여러 화면이 동시에 떠 있을 때 혼선 방지).
     // 바깥 여백에서 시작하는 경우가 흔하므로 넉넉히 본다.
     if (!this._nearHost(e, 160)) return;

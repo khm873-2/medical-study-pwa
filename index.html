@@ -179,6 +179,7 @@
       <button class="tool" id="toolUndo" title="되돌리기">↶</button>
       <button class="tool" id="toolClear" title="필기 지우기">🗑</button>
       <button class="tool" id="toolWiki" title="관련 노트">📖</button>
+      <button class="tool" id="toolAi" title="AI 해설">🤖</button>
     </header>
 
     <div class="split">
@@ -208,6 +209,7 @@
     </div>
     </div><!-- /.main-col -->
 
+    <div class="col-resizer" id="colResizer" title="끌어서 폭 조절"></div>
     <div class="side-col">
     <!-- AI 답변 사이드 패널 — 화면을 떠나지 않는다 -->
     <div id="aiPanel" class="hidden">
@@ -225,6 +227,8 @@
         <button class="btn" id="aiOpenApp">앱에서 이어보기</button>
       </div>
     </div>
+
+    <div class="pane-resizer hidden" id="paneResizer" title="끌어서 크기 조절"></div>
 
     <!-- 관련 노트(위키) 패널 -->
     <div id="wikiPanel" class="hidden">
@@ -279,7 +283,7 @@
 
 <!-- 선택 직후 뜨는 작은 팝업 — 바로 질문하지 않고 무엇을 할지 고르게 한다.
      (실수로 그었을 때 호출이 낭비되지 않고, 복사만 하고 싶을 때도 길이 열린다) -->
-<div id="selPop" class="hidden">
+<div id="selPop" class="hidden pen-passthrough">
   <div class="sel-text" id="selPopText"></div>
   <div class="sel-actions">
     <button class="sel-btn primary" id="selAsk">🤖 여기서 질문</button>

@@ -153,10 +153,41 @@ export class Quiz {
     if (q.type === 'mc') this._renderMC(q, idx);
     else this._renderOX(q, idx);
 
-    if (this.answers[idx] !== null) this._showExplain(q);
+    const answered = this.answers[idx] !== null;
+    if (answered) this._showExplain(q);
     this._updateScore();
+
+    // 아직 안 푼 문항에서는 해설이 없어 "다음"이 멀리 떨어져 보인다 —
+    // 카드 안쪽 끝에 이어서 넘길 수 있는 버튼을 둔다(2026-10-09 피드백).
+    this._renderInlineNext(answered);
+
     window.scrollTo({ top: 0, behavior: 'instant' });
-    this.onRender(q, idx, { answered: this.answers[idx] !== null });
+    this.onRender(q, idx, { answered });
+  }
+
+  /** 문제 카드 하단의 "다음 문제" — 흐름이 끊기지 않게. */
+  _renderInlineNext(answered) {
+    let bar = document.getElementById('inlineNext');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'inlineNext';
+      bar.className = 'inline-next';
+      this.el.memoBox.parentNode.appendChild(bar);
+    }
+    bar.innerHTML = '';
+    const last = this.cur === this.order.length - 1;
+
+    if (!answered) {
+      const hint = document.createElement('span');
+      hint.className = 'muted';
+      hint.textContent = '선지를 고르면 해설이 나옵니다';
+      bar.appendChild(hint);
+    }
+    const btn = document.createElement('button');
+    btn.className = 'btn' + (answered ? ' primary' : '');
+    btn.textContent = last ? '결과 보기 ›' : (answered ? '다음 문제 ›' : '건너뛰고 다음 ›');
+    btn.onclick = () => (last ? this.finish() : this.go(1));
+    bar.appendChild(btn);
   }
 
   _renderMC(q, idx) {

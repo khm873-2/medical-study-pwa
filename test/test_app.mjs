@@ -17,8 +17,10 @@ function makeEl(id = '') {
       toggle: (c, f) => { if (f === undefined) { el._classes.has(c) ? el._classes.delete(c) : el._classes.add(c); } else { f ? el._classes.add(c) : el._classes.delete(c); } },
       contains: (c) => el._classes.has(c),
     },
-    appendChild(c) { el._children.push(c); return c; },
-    prepend(c) { el._children.unshift(c); return c; },
+    appendChild(c) { el._children.push(c); c.parentNode = el; return c; },
+    prepend(c) { el._children.unshift(c); c.parentNode = el; return c; },
+    closest: () => null,
+    parentNode: null,
     remove() {},
     focus() {},
     querySelectorAll: (sel) => el._children.filter((c) => c._classes.has(sel.replace('.', ''))),
@@ -35,6 +37,8 @@ const ids = ['quizScreen','quizTitle','qnum','qsource','qtext','qimgContainer','
   'ox-row','explainBox','expExplain','memoBox','memoInput','scoreBadge','posLabel','prevBtn',
   'nextBtn','bookmarkBtn','memoBtn','resultBtn','backToListBtn'];
 ids.forEach((i) => { registry[i] = makeEl(i); });
+// _renderInlineNext가 memoBox의 부모(카드)에 버튼 바를 붙인다
+registry.memoBox.parentNode = makeEl('qcard');
 // ox-row는 ox-btn 자식 2개를 가져야 한다
 const oxA = makeEl(); oxA.dataset.ox = '0'; oxA._classes.add('ox-btn');
 const oxB = makeEl(); oxB.dataset.ox = '1'; oxB._classes.add('ox-btn');
