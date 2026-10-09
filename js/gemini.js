@@ -116,17 +116,12 @@ export async function ask({ term, question, noteText, subject, lecture }, retrie
     if (res.status === 400 && /API key not valid/i.test(t)) throw new Error('키가 유효하지 않습니다. 설정에서 다시 넣어주세요.');
     if (res.status === 429) throw new Error('잠시 요청이 많습니다(할당량). 조금 뒤 다시 시도하거나 앱으로 물어보세요.');
     if (res.status === 404 && !retried) {
-      // 모델 이름이 이 계정에서 안 열린 경우 — 쓸 수 있는 걸 찾아서 한 번만 다시 시도한다.
-      try {
-        const better = await pickModel(key);
-        if (better && better !== model) {
-          await setModel(better);
-          return ask({ term, question, noteText, subject, lecture }, true);
-        }
-      } catch (e) {
-        throw new Error(`사용 가능한 모델을 찾지 못했습니다 — ${e.message}`);
+      // "no longer available" 등 — 실제로 되는 모델을 찾아 한 번만 다시 시도한다.
+      const v = await verifyKey(key);
+      if (v.ok && v.model !== model) {
+        return ask({ term, question, noteText, subject, lecture }, true);
       }
-      throw new Error(`모델 "${model}"을 쓸 수 없습니다(404). 설정에서 연결 테스트를 다시 해보세요.`);
+      throw new Error(v.ok ? `모델 "${model}"을 쓸 수 없습니다(404).` : v.error);
     }
     throw new Error(`Gemini 오류 ${res.status}${t ? ' — ' + t.slice(0, 120) : ''}`);
   }
@@ -139,19 +134,8 @@ export async function ask({ term, question, noteText, subject, lecture }, retrie
   return text.trim();
 }
 
-/**
- * 설정 화면의 "연결 테스트".
- * 키를 확인하면서 **이 계정에서 실제로 쓸 수 있는 모델을 찾아 저장**한다 —
- * 모델 이름을 고정해두면 계정·시점에 따라 404가 나기 때문(실제로 겪음).
- */
-export async function verifyKey(key) {
-  let model;
-  try {
-    model = await pickModel(key);
-  } catch (e) {
-    if (/401|403|API key not valid|400/.test(e.message)) return { ok: false, error: '키가 올바르지 않습니다.' };
-    return { ok: false, error: e.message };
-  }
+/** 모델 하나를 실제로 호출해본다. {ok} 또는 {ok:false, status, text} */
+async function probe(key, model) {
   try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
@@ -161,14 +145,63 @@ export async function verifyKey(key) {
         body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'ping' }] }] }),
       }
     );
-    if (res.ok) {
-      await setModel(model);
-      return { ok: true, model };
-    }
-    const t = await res.text().catch(() => '');
-    if (res.status === 400 && /API key not valid/i.test(t)) return { ok: false, error: '키가 올바르지 않습니다.' };
-    return { ok: false, error: `응답 ${res.status}${t ? ' — ' + t.slice(0, 100) : ''}` };
+    if (res.ok) return { ok: true };
+    return { ok: false, status: res.status, text: await res.text().catch(() => '') };
   } catch (e) {
-    return { ok: false, error: `연결 실패: ${e.message}` };
+    return { ok: false, status: 0, text: e.message };
+  }
+}
+
+/**
+ * 설정 화면의 "연결 테스트".
+ *
+ * ListModels가 "쓸 수 있다"고 한 모델이 실제 호출에선 "no longer available" 404를 내는
+ * 경우가 있다(실제로 겪음 — 목록과 가용성이 어긋난다). 그래서 목록을 믿지 않고
+ * **후보를 하나씩 실제로 호출해서 되는 걸 고른다.**
+ */
+export async function verifyKey(key) {
+  let candidates = [];
+  try {
+    const names = (await listModels(key)).map((n) => n.replace(/^models\//, ''));
+    // 선호 순서대로 앞에 오게 정렬
+    const score = (n) => {
+      const i = PREFERRED.findIndex((re) => re.test(`models/${n}`));
+      return i < 0 ? 99 : i;
+    };
+    candidates = names
+      .filter((n) => /gemini/.test(n) && !/embedding|aqa|imagen|veo|tts|native-audio|image/.test(n))
+      .sort((a, b) => score(a) - score(b));
+  } catch (e) {
+    if (/401|403|API key not valid|400/.test(e.message)) return { ok: false, error: '키가 올바르지 않습니다.' };
+    return { ok: false, error: e.message };
+  }
+  if (!candidates.length) return { ok: false, error: '이 키로 쓸 수 있는 생성 모델이 없습니다.' };
+
+  const tried = [];
+  for (const model of candidates.slice(0, 8)) {   // 과한 호출 방지
+    const r = await probe(key, model);
+    if (r.ok) {
+      await setModel(model);
+      return { ok: true, model, tried };
+    }
+    tried.push({ model, status: r.status, msg: shortMsg(r.text) });
+    if (r.status === 400 && /API key not valid/i.test(r.text)) {
+      return { ok: false, error: '키가 올바르지 않습니다.' };
+    }
+    // 404/403은 다음 후보로 넘어간다. 429는 더 시도해봐야 소용없다.
+    if (r.status === 429) {
+      return { ok: false, error: '할당량 초과(429) — 잠시 후 다시 시도하세요.', tried };
+    }
+  }
+  const detail = tried.map((t) => `${t.model}: ${t.status} ${t.msg}`).join(' / ');
+  return { ok: false, error: `쓸 수 있는 모델을 찾지 못했습니다. ${detail}`, tried };
+}
+
+function shortMsg(text) {
+  try {
+    const j = JSON.parse(text);
+    return (j?.error?.message || '').slice(0, 80);
+  } catch {
+    return String(text).slice(0, 80);
   }
 }

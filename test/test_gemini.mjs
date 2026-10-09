@@ -101,48 +101,74 @@ global.fetch = async (url, opts) => {
   return queue.length ? queue.shift() : nextResponse;
 };
 
+// verifyKey는 ListModels 후 후보를 **실제로 호출해본다**(목록이 거짓말할 수 있어서).
 queue = [resp(200, MODELS), resp(200, { candidates: [] })];
 const v1 = await G.verifyKey('k');
 ok('verifyKey 성공', v1.ok === true, JSON.stringify(v1));
 ok('선호 모델 선택(2.5-flash)', v1.model === 'gemini-2.5-flash', v1.model);
 ok('선택된 모델이 저장됨', (await G.getModel()) === 'gemini-2.5-flash');
 
-// 선호 모델이 없으면 쓸 수 있는 것 중에서
+// ★ 실제로 겪은 상황: 목록엔 있는데 호출하면 "no longer available" 404
+const GONE = JSON.stringify({ error: { code: 404, message: 'This model models/gemini-2.5-flash is no longer available.' } });
 queue = [
-  resp(200, { models: [{ name: 'models/gemini-3.0-ultra', supportedGenerationMethods: ['generateContent'] }] }),
-  resp(200, { candidates: [] }),
+  resp(200, MODELS),      // 목록: 2.5-flash, 2.0-flash
+  resp(404, GONE),        // 2.5-flash 호출 → 404
+  resp(200, { candidates: [] }), // 2.0-flash 호출 → 성공
 ];
 const v2 = await G.verifyKey('k');
-ok('선호 목록에 없으면 가용 모델로', v2.ok && v2.model === 'gemini-3.0-ultra', v2.model);
+ok('목록이 거짓이어도 다음 후보로 넘어감', v2.ok && v2.model === 'gemini-2.0-flash', JSON.stringify(v2));
+
+// 전부 404면 어떤 모델이 왜 실패했는지 알려준다
+queue = [resp(200, MODELS), resp(404, GONE), resp(404, GONE)];
+const v3 = await G.verifyKey('k');
+ok('전부 실패하면 실패', v3.ok === false);
+ok('실패 모델·사유를 알려줌', /gemini-2\.5-flash.*404/.test(v3.error) && /no longer available/.test(v3.error), v3.error);
 
 // 임베딩 전용만 있으면 실패
 queue = [resp(200, { models: [{ name: 'models/embedding-001', supportedGenerationMethods: ['embedContent'] }] })];
-const v3 = await G.verifyKey('k');
-ok('생성 가능한 모델 없으면 실패', v3.ok === false && /쓸 수 있는 모델이 없/.test(v3.error), v3.error);
+const v4 = await G.verifyKey('k');
+ok('생성 모델 없으면 실패', v4.ok === false && /생성 모델이 없/.test(v4.error), v4.error);
 
-// ask()가 404를 만나면 모델을 바꿔 한 번 재시도
+// 이미지·오디오 전용 모델은 후보에서 제외
+queue = [
+  resp(200, { models: [
+    { name: 'models/imagen-3.0', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-2.0-flash-native-audio', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-2.0-flash', supportedGenerationMethods: ['generateContent'] },
+  ] }),
+  resp(200, { candidates: [] }),
+];
+const v5 = await G.verifyKey('k');
+ok('이미지·오디오 모델 제외', v5.ok && v5.model === 'gemini-2.0-flash', v5.model);
+
+// 429는 더 시도하지 않고 즉시 안내
+queue = [resp(200, MODELS), resp(429, 'quota')];
+const v6 = await G.verifyKey('k');
+ok('429면 즉시 중단', v6.ok === false && /할당량/.test(v6.error), v6.error);
+
+// ask()가 404를 만나면 다시 찾아 한 번 재시도
 await G.setKey('AIzaTEST');
 await G.setModel('gemini-ancient');
 queue = [
-  resp(404, 'not found'),                                   // 첫 시도
-  resp(200, MODELS),                                        // ListModels
-  resp(200, { candidates: [{ content: { parts: [{ text: '재시도 성공' }] } }] }), // 재시도
+  resp(404, GONE),                       // 첫 시도
+  resp(200, MODELS),                     // verifyKey: ListModels
+  resp(200, { candidates: [] }),         // verifyKey: probe 성공 → 2.5-flash
+  resp(200, { candidates: [{ content: { parts: [{ text: '재시도 성공' }] } }] }),
 ];
 const a2 = await G.ask({ term: 't' });
 ok('404 → 모델 교체 후 재시도 성공', a2 === '재시도 성공', a2);
 ok('교체된 모델이 저장됨', (await G.getModel()) === 'gemini-2.5-flash', await G.getModel());
 
-// 재시도해도 404면 포기(무한루프 방지)
+// 재시도 경로에서도 전부 실패하면 에러(무한루프 없음)
 await G.setModel('gemini-ancient');
-queue = [resp(404, 'nf'), resp(200, MODELS), resp(404, 'nf')];
+queue = [resp(404, GONE), resp(200, MODELS), resp(404, GONE), resp(404, GONE)];
 let e404 = null;
 try { await G.ask({ term: 't' }); } catch (e) { e404 = e.message; }
-ok('재시도 후에도 404면 에러', /404|쓸 수 없/.test(e404 || ''), e404);
+ok('전부 실패하면 에러', /찾지 못했|404|쓸 수 없/.test(e404 || ''), e404);
 
-nextResponse = resp(400, 'API key not valid');
 queue = [resp(400, 'API key not valid')];
 const v = await G.verifyKey('bad');
-ok('verifyKey 실패 메시지', v.ok === false && /올바르지 않/.test(v.error), v.error);
+ok('잘못된 키 메시지', v.ok === false && /올바르지 않/.test(v.error), v.error);
 
 console.log(`\n통과 ${pass}건`);
 if (fail.length) { console.log(`실패 ${fail.length}건:`); fail.forEach((f) => console.log('  ✗ ' + f)); process.exit(1); }
