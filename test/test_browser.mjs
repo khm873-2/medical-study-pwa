@@ -700,6 +700,97 @@ await run('잘림 처리', async () => {
   return out;
 });
 
+// ══════════ 5j. Gemini 키 여러 개 · 자동 전환 (2026-10-10) ══════════
+// "요청이 많습니다"가 떠서 돋보기를 못 쓰는 일이 없게, 키가 한도에 걸리면
+// 다음 키로 넘어간다. 키마다 한도가 따로다.
+await run('키 전환', async () => {
+  const out = [];
+  const G = await import('/js/gemini.js');
+  const realFetch = window.fetch;
+  try {
+    await G.setKeys(['AIza_KEY_ONE', 'AIza_KEY_TWO', 'AIza_KEY_THREE']);
+    G.resetLimiter();
+    out.push({ name: '키 3개가 저장된다', ok: (await G.getKeys()).length === 3 });
+    out.push({ name: '키가 가려져 표시된다', ok: G.maskKey('AIza_KEY_ONE_SECRET_TAIL').includes('…')
+      && !G.maskKey('AIza_KEY_ONE_SECRET_TAIL').includes('SECRET'),
+      detail: G.maskKey('AIza_KEY_ONE_SECRET_TAIL') });
+
+    // ① 1번 키가 429를 주면 2번 키로 넘어가야 한다
+    const used = [];
+    window.fetch = async (url, init) => {
+      const k = init.headers['x-goog-api-key'];
+      used.push(k);
+      if (k === 'AIza_KEY_ONE') {
+        return { ok: false, status: 429, text: async () => '{"error":{"details":[{"retryDelay":"42s"}]}}' };
+      }
+      return { ok: true, json: async () => ({ candidates: [{
+        content: { parts: [{ text: '[인상]\n정상 응답' }] }, finishReason: 'STOP' }] }) };
+    };
+    const r = await G.breakdown({ q: '테스트 지문', opts: ['가', '나'] });
+    out.push({ name: '1번 키가 429면 다음 키로 넘어간다',
+      ok: used.length === 2 && used[0] === 'AIza_KEY_ONE' && used[1] === 'AIza_KEY_TWO',
+      detail: used.join(' → ') });
+    out.push({ name: '전환 후 정상 응답을 받는다', ok: r.impression === '정상 응답', detail: r.impression });
+
+    // ② 막힌 키는 쉬는 중으로 표시되고 다음 호출에서 건너뛴다
+    const st = await G.keyStatus();
+    const one = st.find((x) => x.key === 'AIza_KEY_ONE');
+    out.push({ name: '429 맞은 키는 쉬는 중으로 표시', ok: one && !one.ok && one.waitSec > 30,
+      detail: one ? `${one.waitSec}초` : 'null' });
+    out.push({ name: '쉬는 키는 사용 가능 목록에서 빠진다',
+      ok: !(await G.usableKeys()).includes('AIza_KEY_ONE') });
+
+    used.length = 0;
+    await G.breakdown({ q: '다른 지문', opts: ['가', '나'] });
+    out.push({ name: '다음 호출은 막힌 키를 아예 건너뛴다', ok: !used.includes('AIza_KEY_ONE'),
+      detail: used.join(' → ') });
+
+    // ③ 키 하나뿐일 때 한도를 다 쓰면 RATE_WAIT
+    await G.setKeys(['AIza_ONLY']);
+    G.resetLimiter();
+    window.fetch = async () => ({ ok: false, status: 429, text: async () => '{"retryDelay":"17s"}' });
+    let msg = '';
+    try { await G.breakdown({ q: 'x', opts: ['가', '나'] }); } catch (e) { msg = e.message; }
+    out.push({ name: '키가 다 막히면 RATE_WAIT을 준다', ok: /^RATE_WAIT:\d+$/.test(msg), detail: msg });
+
+    // ④ 잘못된 키는 건너뛰고 쓸 수 있는 키를 쓴다
+    await G.setKeys(['AIza_BAD', 'AIza_GOOD']);
+    G.resetLimiter();
+    const used2 = [];
+    window.fetch = async (url, init) => {
+      const k = init.headers['x-goog-api-key'];
+      used2.push(k);
+      if (k === 'AIza_BAD') return { ok: false, status: 400, text: async () => '{"error":{"message":"API key not valid"}}' };
+      return { ok: true, json: async () => ({ candidates: [{
+        content: { parts: [{ text: '[인상]\n살았다' }] }, finishReason: 'STOP' }] }) };
+    };
+    const r2 = await G.breakdown({ q: 'y', opts: ['가', '나'] });
+    out.push({ name: '잘못된 키는 건너뛰고 쓸 수 있는 키를 쓴다',
+      ok: r2.impression === '살았다' && used2.length === 2, detail: used2.join(' → ') });
+
+    // ⑤ 키가 하나도 없으면 NO_KEY
+    await G.setKeys([]);
+    let nk = '';
+    try { await G.breakdown({ q: 'z', opts: ['가', '나'] }); } catch (e) { nk = e.message; }
+    out.push({ name: '키가 없으면 NO_KEY', ok: nk === 'NO_KEY', detail: nk });
+
+    // ⑥ 구버전 단일 키를 자동으로 옮긴다
+    const { kvSet, kvGet } = await import('/js/db.js');
+    await kvSet('gemini_keys', undefined);
+    await kvSet('gemini_key', 'AIza_OLD_SINGLE');
+    const migrated = await G.getKeys();
+    out.push({ name: '구버전 단일 키를 배열로 옮긴다',
+      ok: migrated.length === 1 && migrated[0] === 'AIza_OLD_SINGLE', detail: JSON.stringify(migrated) });
+    out.push({ name: '옮긴 뒤 구버전 키는 지운다', ok: !(await kvGet('gemini_key')) });
+
+    await G.setKeys([]);
+    G.resetLimiter();
+  } finally {
+    window.fetch = realFetch;
+  }
+  return out;
+});
+
 // ══════════ 6. 좁은 화면(아이패드 세로) ══════════
 await page.setViewport({ width: 820, height: 1180 });
 await new Promise((r) => setTimeout(r, 120));

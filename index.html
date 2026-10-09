@@ -107,11 +107,17 @@
         <p class="muted">개인 학습 사용량이면 무료 한도 안에서 충분합니다.</p>
       </details>
       <div class="field">
-        <label for="geminiKeyInput">Gemini API 키</label>
+        <label for="geminiKeyInput">Gemini API 키 추가</label>
         <input id="geminiKeyInput" type="password" autocapitalize="off" autocorrect="off"
                spellcheck="false" placeholder="AIza...">
       </div>
-      <button class="btn primary full" id="saveGeminiBtn">연결 테스트 후 저장</button>
+      <button class="btn primary full" id="saveGeminiBtn">연결 테스트 후 추가</button>
+      <p class="muted" style="margin-top:10px">
+        키는 <b>여러 개 넣을 수 있습니다.</b> 한도는 키마다 따로라서, 하나가 걸리면
+        자동으로 다음 키로 넘어갑니다 — 2~3개 넣어두면 "요청이 많습니다"를 거의 안 보게 됩니다.
+        (다른 구글 계정으로 발급하면 한도도 완전히 분리됩니다.)
+      </p>
+      <div id="geminiKeyList" style="margin-top:12px"></div>
       <button class="btn full" id="listModelsBtn" style="margin-top:8px">쓸 수 있는 모델 보기</button>
       <div id="geminiMsg" style="margin-top:10px;font-size:14px"></div>
       <div id="modelList" style="margin-top:8px"></div>

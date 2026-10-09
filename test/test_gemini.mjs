@@ -68,17 +68,19 @@ G.resetLimiter();
 nextResponse = resp(400, 'API key not valid. Please pass a valid API key.');
 let err = null;
 try { await G.ask({ term: 't' }); } catch (e) { err = e.message; }
-ok('잘못된 키 → 안내 메시지', /키가 유효하지 않/.test(err || ''), err);
+ok('잘못된 키 → 안내 메시지', /유효하지 않/.test(err || ''), err);
+await G.setKeys(['AIzaTestKey']);          // 위에서 키를 식혀놨으니 새 키로 바꾼다
 
 // 429는 RATE_WAIT:초 형태로 올라와 UI가 카운트다운할 수 있게 한다
 nextResponse = resp(429, JSON.stringify({ error: { details: [{ retryDelay: '17s' }] } }));
 err = null;
 try { await G.ask({ term: 't429' }); } catch (e) { err = e.message; }
 ok('429 → RATE_WAIT + 구글이 준 대기시간', err === 'RATE_WAIT:17', err);
-ok('429 뒤엔 로컬 카운터도 꽉 참', G.callsLeft() === 0, `${G.callsLeft()}`);
+ok('429 뒤엔 그 키의 잔여 호출이 0', (await G.callsLeft()) === 0, `${await G.callsLeft()}`);
 
 // retryDelay가 없으면 기본값
 G.resetLimiter();
+await G.setKeys(['AIzaTestKey']);
 nextResponse = resp(429, 'quota exceeded');
 err = null;
 try { await G.ask({ term: 't429b' }); } catch (e) { err = e.message; }
@@ -207,12 +209,12 @@ ok('문항이 다르면 새로 질문', c3 === '다른 답변');
 
 // 분당 한도에 도달하면 보내기 전에 막는다
 let n = 0;
-while (G.callsLeft() > 0 && n < 20) {
+while ((await G.callsLeft()) > 0 && n < 20) {
   queue = [okResp(`답${n}`)];
   await G.ask({ term: `연속질문${n}` });
   n++;
 }
-ok('한도만큼 호출됨', G.callsLeft() === 0, `남은 ${G.callsLeft()}`);
+ok('한도만큼 호출됨', (await G.callsLeft()) === 0, `남은 ${await G.callsLeft()}`);
 let blocked = null;
 try { await G.ask({ term: '한도초과질문' }); } catch (e) { blocked = e.message; }
 ok('한도 넘으면 네트워크 전에 차단', /^RATE_WAIT:\d+$/.test(blocked || ''), blocked);
@@ -220,7 +222,7 @@ const waitSec = Number((blocked || '').split(':')[1]);
 ok('대기 시간이 합리적(1~60초)', waitSec >= 1 && waitSec <= 60, `${waitSec}초`);
 
 // rateCheck가 상태를 그대로 알려준다
-const rc = G.rateCheck();
+const rc = await G.rateCheck();
 ok('rateCheck가 막힌 상태를 알림', rc.ok === false && rc.waitSec > 0, JSON.stringify(rc));
 
 
@@ -234,6 +236,29 @@ ok('rateCheck가 막힌 상태를 알림', rc.ok === false && rc.waitSec > 0, JS
   ok('잘려도 거기까지는 보여준다', /e\.partial/.test(src));
   ok('뜯어보기 예산이 넉넉하다', /maxTokens:\s*1[2-9]\d\d/.test(src),
     (src.match(/maxTokens:\s*\d+/g) || []).join(' '));
+}
+
+
+// ── 키 여러 개 · 자동 전환 (2026-10-10) ──
+// "요청이 많습니다"가 떠서 돋보기를 못 쓰던 문제. 키마다 한도가 따로라
+// 하나가 걸리면 다음 키로 넘어간다. 자세한 전환 동작은 test_browser에서 본다.
+{
+  const src = readFileSync(`${PWA}/js/gemini.js`, 'utf8');
+  ok('키를 배열로 저장한다', /const KEYS = 'gemini_keys'/.test(src));
+  ok('구버전 단일 키를 이관한다', /kvSet\(KEYS, \[old\]\)/.test(src));
+  ok('키마다 호출 로그를 따로 센다', /callLog\s*=\s*new Map/.test(src));
+  ok('429 맞은 키를 쉬게 한다', /coolUntil\.set\(key/.test(src));
+  ok('쓸 수 있는 키만 골라 돈다', /export async function usableKeys/.test(src));
+  ok('덜 쓴 키부터 쓴다(부하 분산)', /sort\(\(a, b\) => a\.used - b\.used\)/.test(src));
+  ok('키 전용 오류로 다음 키를 시도한다', /KEY_RATE|KEY_BAD/.test(src));
+  ok('설정에 키 상태를 보여줄 수단이 있다', /export async function keyStatus/.test(src));
+
+  const app = readFileSync(`${PWA}/js/app.js`, 'utf8');
+  const html = readFileSync(`${PWA}/index.html`, 'utf8');
+  ok('설정에 키 목록 자리가 있다', html.includes('id="geminiKeyList"'));
+  ok('키를 추가·삭제할 수 있다', /gem\.addKey/.test(app) && /gem\.removeKey/.test(app));
+  ok('키를 가려서 보여준다', /maskKey/.test(app) || /k\.masked/.test(app));
+  ok('여러 키를 넣으라는 안내가 있다', /키마다 따로/.test(html));
 }
 
 console.log(`\n통과 ${pass}건`);

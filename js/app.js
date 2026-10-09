@@ -56,6 +56,7 @@ async function openSetup() {
   document.getElementById('setupCloseBtn').classList.toggle('hidden', !(await hasToken()));
   updateStorageInfo();
   refreshBackupInfo();
+  renderKeyList();
   document.getElementById('backupMsg').textContent = '';
   if (await hasToken()) renderCacheList();
   show('setupScreen');
@@ -201,20 +202,57 @@ document.getElementById('restoreBtn').onclick = () => doRestore(null);
 
 document.getElementById('saveGeminiBtn').onclick = async () => {
   const msg = document.getElementById('geminiMsg');
-  const key = document.getElementById('geminiKeyInput').value.trim();
-  if (!key) {
-    await gem.clearKey();
-    msg.style.color = 'var(--sub)';
-    msg.textContent = '키를 비웠습니다 — 질문은 앱으로 넘기는 방식으로 동작합니다.';
-    return;
+  const input = document.getElementById('geminiKeyInput');
+  const key = input.value.trim();
+  if (!key) { msg.style.color = 'var(--wrong)'; msg.textContent = '키를 입력해 주세요.'; return; }
+  if ((await gem.getKeys()).includes(key)) {
+    msg.style.color = 'var(--sub)'; msg.textContent = '이미 넣어둔 키입니다.';
+    input.value = ''; return;
   }
   msg.style.color = ''; msg.textContent = '확인 중…';
   const r = await gem.verifyKey(key);
   if (!r.ok) { msg.style.color = 'var(--wrong)'; msg.textContent = r.error; return; }
-  await gem.setKey(key);
+  const list = await gem.addKey(key);
+  input.value = '';
   msg.style.color = 'var(--correct)';
-  msg.textContent = `연결됐습니다 (모델: ${r.model}). 이제 밑줄을 그으면 옆에 바로 답변이 뜹니다.`;
+  msg.textContent = list.length > 1
+    ? `키 ${list.length}개 — 하나가 한도에 걸리면 자동으로 다음 키를 씁니다.`
+    : `연결됐습니다 (모델: ${r.model}). 밑줄을 그으면 옆에 바로 답변이 뜹니다.`;
+  renderKeyList();
 };
+
+/** 넣어둔 키 목록 — 어느 키가 쉬는 중인지까지 보여준다. */
+async function renderKeyList() {
+  const box = document.getElementById('geminiKeyList');
+  if (!box) return;
+  const st = await gem.keyStatus();
+  box.innerHTML = '';
+  if (!st.length) {
+    box.innerHTML = '<p class="muted">넣어둔 키가 없습니다 — 질문은 다른 앱으로 넘기는 방식으로 동작합니다.</p>';
+    return;
+  }
+  for (const k of st) {
+    const row = document.createElement('div');
+    row.className = 'key-row';
+    const name = document.createElement('span');
+    name.className = 'key-name';
+    name.textContent = k.masked;
+    const state = document.createElement('span');
+    state.className = `key-state${k.ok ? '' : ' cool'}`;
+    state.textContent = k.ok ? `${k.limit - k.used}회 남음` : `${k.waitSec}초 쉬는 중`;
+    const del = document.createElement('button');
+    del.className = 'key-del';
+    del.textContent = '삭제';
+    del.onclick = async () => {
+      await gem.removeKey(k.key);
+      renderKeyList();
+      const m = document.getElementById('geminiMsg');
+      m.style.color = 'var(--sub)'; m.textContent = '키를 지웠습니다.';
+    };
+    row.append(name, state, del);
+    box.appendChild(row);
+  }
+}
 
 /** 404가 났을 때 뭐가 쓸 수 있는지 직접 보고 고를 수 있게. */
 document.getElementById('listModelsBtn').onclick = async () => {
@@ -778,12 +816,13 @@ function showRateWait(sec, term) {
   const body = document.getElementById('aiBody');
   const status = document.getElementById('aiStatus');
   let left = sec;
-  const render = () => {
+  const render = async () => {
+    const keys = (await gem.getKeys()).length;
     body.innerHTML =
-      `<div class="warn-box">무료 한도(분당 ${'8'}회)에 걸렸습니다. ` +
+      `<div class="warn-box">넣어둔 키 ${keys}개가 모두 한도에 걸렸습니다. ` +
       `<b>${left}초</b> 뒤 자동으로 다시 묻습니다.<br>` +
-      `급하면 아래 "앱에서 이어보기"로 바로 물어볼 수 있습니다.</div>`;
-    status.textContent = `대기 중 · 남은 호출 ${gem.callsLeft()}회`;
+      `설정에서 <b>키를 더 넣으면</b> 이런 일이 줄어듭니다 — 키마다 한도가 따로입니다.</div>`;
+    status.textContent = `대기 중 · 남은 호출 ${await gem.callsLeft()}회`;
   };
   render();
   clearInterval(rateTimer);

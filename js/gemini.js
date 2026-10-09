@@ -7,7 +7,8 @@
 
 import { kvGet, kvSet, kvDel } from './db.js';
 
-const KEY = 'gemini_key';
+const KEY = 'gemini_key';          // 구버전(단일 키) — 아래에서 자동 이관한다
+const KEYS = 'gemini_keys';        // 현재 형식: 키 배열
 const MODEL_KEY = 'gemini_model';
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 
@@ -53,10 +54,47 @@ export async function pickModel(key) {
   return fallback.replace(/^models\//, '');
 }
 
-export async function getKey() { return (await kvGet(KEY)) || null; }
-export async function setKey(k) { return kvSet(KEY, String(k || '').trim()); }
-export async function clearKey() { return kvDel(KEY); }
-export async function hasKey() { return !!(await getKey()); }
+// ───────────── 키 관리 (여러 개 · 자동 전환) ─────────────
+// 무료 한도가 분당 10~15회라 돋보기(뜯어보기) 한 번에도 금방 걸린다.
+// 키를 여러 개 넣어두고 **한도에 걸리면 다음 키로 넘어간다**(2026-10-10 요청).
+// 키마다 호출 카운터를 따로 세므로 키 N개면 한도도 N배다.
+
+/** 키 목록. 구버전 단일 키가 있으면 한 번만 배열로 옮긴다. */
+export async function getKeys() {
+  const arr = await kvGet(KEYS);
+  if (Array.isArray(arr)) return arr.filter(Boolean);
+  const old = await kvGet(KEY);
+  if (old) { await kvSet(KEYS, [old]); await kvDel(KEY); return [old]; }
+  return [];
+}
+export async function setKeys(list) {
+  const clean = [...new Set((list || []).map((k) => String(k || '').trim()).filter(Boolean))];
+  await kvSet(KEYS, clean);
+  return clean;
+}
+/** 키 하나 추가(중복이면 무시). */
+export async function addKey(k) {
+  const key = String(k || '').trim();
+  if (!key) throw new Error('키가 비어 있습니다.');
+  const cur = await getKeys();
+  if (cur.includes(key)) return cur;
+  return setKeys([...cur, key]);
+}
+export async function removeKey(k) {
+  return setKeys((await getKeys()).filter((x) => x !== k));
+}
+
+/** 첫 번째 키(모델 탐색 등 "아무 키나" 필요할 때). */
+export async function getKey() { return (await getKeys())[0] || null; }
+export async function setKey(k) { return setKeys(k ? [k] : []); }
+export async function clearKey() { await kvDel(KEY); return kvSet(KEYS, []); }
+export async function hasKey() { return (await getKeys()).length > 0; }
+
+/** 키를 가리는 표시용 — 설정 화면에 그대로 띄우지 않는다. */
+export function maskKey(k) {
+  const s = String(k || '');
+  return s.length <= 10 ? s : `${s.slice(0, 6)}…${s.slice(-4)}`;
+}
 export async function getModel() { return (await kvGet(MODEL_KEY)) || DEFAULT_MODEL; }
 export async function setModel(m) { return kvSet(MODEL_KEY, m || DEFAULT_MODEL); }
 
@@ -81,18 +119,12 @@ const SYSTEM = `당신은 의대생의 시험 공부를 돕는 튜터다. 한국
  * @returns {Promise<string>} 답변 텍스트
  */
 export async function ask({ term, question, noteText, subject, lecture }, retried = false) {
-  const key = await getKey();
-  if (!key) throw new Error('NO_KEY');
+  if (!(await hasKey())) throw new Error('NO_KEY');
   const model = await getModel();
 
   // 같은 걸 또 물으면 보내지 않는다(한도 절약)
   const cacheKey = `${term}|${question ? question.num : ''}`;
   if (!retried && answerCache.has(cacheKey)) return answerCache.get(cacheKey);
-
-  if (!retried) {
-    const rc = rateCheck();
-    if (!rc.ok) throw new Error(`RATE_WAIT:${rc.waitSec}`);
-  }
 
   const parts = [];
   parts.push(`[질문] 다음에 대해 설명해줘:\n"${term}"`);
@@ -105,7 +137,7 @@ export async function ask({ term, question, noteText, subject, lecture }, retrie
   }
   if (noteText) parts.push(`[내 노트 발췌 — 이 맥락을 우선 반영]\n${noteText.slice(0, 1500)}`);
 
-  return callGemini({ key, model, system: SYSTEM, text: parts.join('\n\n'), maxTokens: 900 })
+  return callGemini({ model, system: SYSTEM, text: parts.join('\n\n'), maxTokens: 900 })
     .then((text) => {
       answerCache.set(cacheKey, text);
       if (answerCache.size > 80) answerCache.delete(answerCache.keys().next().value);
@@ -113,7 +145,7 @@ export async function ask({ term, question, noteText, subject, lecture }, retrie
     })
     .catch(async (e) => {
       if (/^MODEL_404$/.test(e.message) && !retried) {
-        const v = await verifyKey(key);
+        const v = await verifyKey(await getKey());
         if (v.ok && v.model !== model) return ask({ term, question, noteText, subject, lecture }, true);
         throw new Error(v.ok ? `모델 "${model}"을 쓸 수 없습니다(404).` : v.error);
       }
@@ -121,8 +153,39 @@ export async function ask({ term, question, noteText, subject, lecture }, retrie
     });
 }
 
-/** 실제 HTTP 호출 — 한도·오류 처리를 한 곳에 모은다. */
-async function callGemini({ key, model, system, text: userText, maxTokens = 900, temperature = 0.3 }) {
+/**
+ * 실제 호출 — **키를 돌아가며** 시도한다.
+ *
+ * 키 하나가 한도에 걸려도 다른 키가 남아 있으면 그걸로 보낸다. 사용자는 "요청이 많습니다"를
+ * 보지 않는다(2026-10-10 요청). 모든 키가 막혔을 때만 기다리라고 알린다.
+ */
+async function callGemini({ model, system, text: userText, maxTokens = 900, temperature = 0.3 }) {
+  const keys = await usableKeys();
+  if (!keys.length) {
+    const rc = await rateCheck();
+    if (rc.noKey) throw new Error('NO_KEY');
+    throw new Error(`RATE_WAIT:${rc.waitSec}`);
+  }
+
+  let lastErr = null;
+  for (const key of keys) {
+    try {
+      return await callOnce({ key, model, system, text: userText, maxTokens, temperature });
+    } catch (e) {
+      lastErr = e;
+      // 이 키만의 문제면 다음 키로 — 내용·모델 문제면 키를 바꿔도 같으므로 바로 던진다
+      if (e.message === 'KEY_RATE' || e.message === 'KEY_BAD') continue;
+      throw e;
+    }
+  }
+  // 전부 실패 — 남은 대기 시간을 알려준다
+  if (lastErr && lastErr.message === 'KEY_BAD') throw new Error('넣어둔 키가 모두 유효하지 않습니다. 설정에서 확인해 주세요.');
+  const rc = await rateCheck();
+  throw new Error(`RATE_WAIT:${rc.waitSec || 30}`);
+}
+
+/** 키 하나로 한 번 호출. 이 키만의 문제는 KEY_RATE/KEY_BAD로 알린다. */
+async function callOnce({ key, model, system, text: userText, maxTokens, temperature }) {
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: [{ role: 'user', parts: [{ text: userText }] }],
@@ -135,7 +198,7 @@ async function callGemini({ key, model, system, text: userText, maxTokens = 900,
       thinkingConfig: { thinkingBudget: 0 },
     },
   };
-  recentCalls.push(Date.now());
+  logOf(key).push(Date.now());
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
@@ -147,14 +210,18 @@ async function callGemini({ key, model, system, text: userText, maxTokens = 900,
 
   if (!res.ok) {
     const t = await res.text().catch(() => '');
-    if (res.status === 400 && /API key not valid/i.test(t)) throw new Error('키가 유효하지 않습니다. 설정에서 다시 넣어주세요.');
-    if (res.status === 429) {
+    if (res.status === 400 && /API key not valid/i.test(t)) {
+      coolUntil.set(key, Date.now() + 3600000);   // 잘못된 키는 한 시간 쉬게 둔다
+      throw new Error('KEY_BAD');
+    }
+    if (res.status === 429 || res.status === 403) {
       // 구글이 알려주는 재시도 시간을 그대로 쓴다
       const m = t.match(/"retryDelay"\s*:\s*"(\d+)s"/);
       const sec = m ? Number(m[1]) : 30;
-      // 한도에 걸렸으니 로컬 카운터도 꽉 찬 것으로 본다
-      while (recentCalls.length < RPM_LIMIT) recentCalls.push(Date.now());
-      throw new Error(`RATE_WAIT:${sec}`);
+      coolUntil.set(key, Date.now() + sec * 1000);
+      const arr = logOf(key);
+      while (arr.length < RPM_LIMIT) arr.push(Date.now());   // 이 키는 꽉 찬 것으로 본다
+      throw new Error('KEY_RATE');
     }
     // "no longer available" 등 — 부르는 쪽이 모델을 다시 찾아 재시도한다.
     if (res.status === 404) throw new Error('MODEL_404');
@@ -176,35 +243,76 @@ async function callGemini({ key, model, system, text: userText, maxTokens = 900,
   return text.trim();
 }
 
-// ───────────── 호출 제한 ─────────────
-// 무료 한도가 분당 10~15회라 금방 소진된다. 그래서:
+
+// ───────────── 호출 제한 (키마다 따로) ─────────────
+// 무료 한도가 분당 10~15회라 돋보기 한 번에도 금방 걸린다. 그래서:
 //   · 같은 질문은 캐시해서 다시 안 보낸다(되묻기·실수로 두 번 그었을 때)
-//   · 분당 호출 수를 자체적으로 제한해 429가 나기 전에 막는다
-//   · 429가 나면 재시도까지 남은 시간을 알려준다
-const RPM_LIMIT = 8;             // 여유를 두고 보수적으로
-const recentCalls = [];          // 최근 호출 시각
+//   · **키마다** 분당 호출 수를 세고, 꽉 찬 키는 건너뛴다
+//   · 429가 오면 그 키를 잠시 쉬게 하고 다음 키로 넘어간다
+//   · 모든 키가 막혔을 때만 "기다려라"라고 알린다
+const RPM_LIMIT = 8;             // 키 하나당. 여유를 두고 보수적으로
+const callLog = new Map();       // 키 → 최근 호출 시각[]
+const coolUntil = new Map();     // 키 → 이 시각까지 쉰다(429를 맞은 키)
 const answerCache = new Map();   // 질문 → 답변
 
-function pruneCalls() {
+function logOf(key) {
+  if (!callLog.has(key)) callLog.set(key, []);
+  const arr = callLog.get(key);
   const cut = Date.now() - 60000;
-  while (recentCalls.length && recentCalls[0] < cut) recentCalls.shift();
+  while (arr.length && arr[0] < cut) arr.shift();
+  return arr;
 }
-/** 지금 호출하면 한도를 넘는가? 넘으면 몇 초 뒤에 가능한지 돌려준다. */
-export function rateCheck() {
-  pruneCalls();
-  if (recentCalls.length < RPM_LIMIT) return { ok: true };
-  const waitMs = 60000 - (Date.now() - recentCalls[0]);
-  return { ok: false, waitSec: Math.max(1, Math.ceil(waitMs / 1000)) };
+
+/** 이 키를 지금 쓸 수 있나? 못 쓰면 몇 초 뒤에 되는지. */
+function keyReady(key) {
+  const cool = coolUntil.get(key) || 0;
+  if (cool > Date.now()) return { ok: false, waitSec: Math.ceil((cool - Date.now()) / 1000) };
+  const arr = logOf(key);
+  if (arr.length < RPM_LIMIT) return { ok: true };
+  return { ok: false, waitSec: Math.max(1, Math.ceil((60000 - (Date.now() - arr[0])) / 1000)) };
 }
-export function callsLeft() {
-  pruneCalls();
-  return Math.max(0, RPM_LIMIT - recentCalls.length);
+
+/** 지금 쓸 수 있는 키들(한도가 덜 찬 순서). 전부 막혔으면 빈 배열. */
+export async function usableKeys() {
+  const keys = await getKeys();
+  return keys
+    .map((k) => ({ key: k, ready: keyReady(k), used: logOf(k).length }))
+    .filter((x) => x.ready.ok)
+    .sort((a, b) => a.used - b.used)
+    .map((x) => x.key);
 }
+
+/** 전체적으로 지금 호출이 가능한가? 아니면 가장 빨리 풀리는 키까지 몇 초인가. */
+export async function rateCheck() {
+  const keys = await getKeys();
+  if (!keys.length) return { ok: false, waitSec: 0, noKey: true };
+  if ((await usableKeys()).length) return { ok: true };
+  const waits = keys.map((k) => keyReady(k).waitSec || 1);
+  return { ok: false, waitSec: Math.min(...waits) };
+}
+
+/** 남은 호출 수(모든 키 합). 설정 화면 표시용. */
+export async function callsLeft() {
+  const keys = await getKeys();
+  return keys.reduce((n, k) => n + ((coolUntil.get(k) || 0) > Date.now() ? 0 : Math.max(0, RPM_LIMIT - logOf(k).length)), 0);
+}
+
+/** 키별 상태 — 설정 화면에서 어느 키가 쉬는 중인지 보여준다. */
+export async function keyStatus() {
+  const keys = await getKeys();
+  return keys.map((k) => {
+    const r = keyReady(k);
+    return { key: k, masked: maskKey(k), ok: r.ok, waitSec: r.waitSec || 0, used: logOf(k).length, limit: RPM_LIMIT };
+  });
+}
+
 /** 테스트·수동 초기화용 — 호출 카운터와 답변 캐시를 비운다. */
 export function resetLimiter() {
-  recentCalls.length = 0;
+  callLog.clear();
+  coolUntil.clear();
   answerCache.clear();
 }
+
 
 /** 모델 하나를 실제로 호출해본다. {ok} 또는 {ok:false, status, text} */
 async function probe(key, model) {
@@ -310,24 +418,18 @@ const BREAK_SYSTEM = `당신은 의대생에게 임상 vignette 푸는 법을 �
  * @returns {Promise<{clues:Array, impression:string, options:Array}>}
  */
 export async function breakdown(question, retried = false) {
-  const key = await getKey();
-  if (!key) throw new Error('NO_KEY');
+  if (!(await hasKey())) throw new Error('NO_KEY');
   const model = await getModel();
 
   const cacheKey = `BD2|${question.q.slice(0, 80)}`;
   if (!retried && answerCache.has(cacheKey)) return parseBreakdown(answerCache.get(cacheKey), question);
-
-  if (!retried) {
-    const rc = rateCheck();
-    if (!rc.ok) throw new Error(`RATE_WAIT:${rc.waitSec}`);
-  }
 
   const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
   const opts = (question.opts || []).map((o, i) => `${CIRCLED[i] || i + 1} ${o}`).join('\n');
 
   try {
     const text = await callGemini({
-      key, model, system: BREAK_SYSTEM, maxTokens: 1600, temperature: 0.2,
+      model, system: BREAK_SYSTEM, maxTokens: 1600, temperature: 0.2,
       text: `[지문]\n${question.q}\n\n[선지]\n${opts}`,
     });
     answerCache.set(cacheKey, text);
@@ -335,7 +437,7 @@ export async function breakdown(question, retried = false) {
     return parseBreakdown(text, question);
   } catch (e) {
     if (e.message === 'MODEL_404' && !retried) {
-      const v = await verifyKey(key);
+      const v = await verifyKey(await getKey());
       if (v.ok && v.model !== model) return breakdown(question, true);
       throw new Error(v.ok ? `모델 "${model}"을 쓸 수 없습니다(404).` : v.error);
     }
