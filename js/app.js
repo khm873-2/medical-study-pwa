@@ -134,7 +134,42 @@ document.getElementById('saveGeminiBtn').onclick = async () => {
   if (!r.ok) { msg.style.color = 'var(--wrong)'; msg.textContent = r.error; return; }
   await gem.setKey(key);
   msg.style.color = 'var(--correct)';
-  msg.textContent = '연결됐습니다. 이제 밑줄을 그으면 옆에 바로 답변이 뜹니다.';
+  msg.textContent = `연결됐습니다 (모델: ${r.model}). 이제 밑줄을 그으면 옆에 바로 답변이 뜹니다.`;
+};
+
+/** 404가 났을 때 뭐가 쓸 수 있는지 직접 보고 고를 수 있게. */
+document.getElementById('listModelsBtn').onclick = async () => {
+  const msg = document.getElementById('geminiMsg');
+  const box = document.getElementById('modelList');
+  const key = document.getElementById('geminiKeyInput').value.trim() || (await gem.getKey());
+  if (!key) { msg.style.color = 'var(--wrong)'; msg.textContent = '먼저 키를 입력하세요.'; return; }
+  msg.style.color = ''; msg.textContent = '조회 중…';
+  box.innerHTML = '';
+  try {
+    const names = await gem.listModels(key);
+    const cur = await gem.getModel();
+    msg.textContent = `${names.length}개 사용 가능 (현재: ${cur})`;
+    names.forEach((full) => {
+      const name = full.replace(/^models\//, '');
+      const row = document.createElement('div');
+      row.className = 'cache-row';
+      const n = document.createElement('div');
+      n.className = 'cr-name';
+      n.textContent = name + (name === cur ? '  ← 사용 중' : '');
+      const b = document.createElement('button');
+      b.textContent = '이걸로';
+      b.onclick = async () => {
+        await gem.setModel(name);
+        msg.style.color = 'var(--correct)';
+        msg.textContent = `모델을 ${name}(으)로 바꿨습니다.`;
+      };
+      row.append(n, b);
+      box.appendChild(row);
+    });
+  } catch (e) {
+    msg.style.color = 'var(--wrong)';
+    msg.textContent = e.message;
+  }
 };
 
 document.getElementById('clearCacheBtn').onclick = async () => {

@@ -86,10 +86,61 @@ err = null;
 try { await G.ask({ term: 't' }); } catch (e) { err = e.message; }
 ok('키 없으면 NO_KEY (폴백 신호)', err === 'NO_KEY', err);
 
-// ---- verifyKey ----
-nextResponse = resp(200, { candidates: [] });
-ok('verifyKey 성공', (await G.verifyKey('k')).ok === true);
+// ---- 모델 자동 선택 (404 대응) ----
+// verifyKey는 ListModels → generateContent 순으로 두 번 호출한다.
+const MODELS = {
+  models: [
+    { name: 'models/embedding-001', supportedGenerationMethods: ['embedContent'] },
+    { name: 'models/gemini-2.0-flash', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
+  ],
+};
+let queue = [];
+global.fetch = async (url, opts) => {
+  lastCall = { url, opts, body: opts.body ? JSON.parse(opts.body) : null };
+  return queue.length ? queue.shift() : nextResponse;
+};
+
+queue = [resp(200, MODELS), resp(200, { candidates: [] })];
+const v1 = await G.verifyKey('k');
+ok('verifyKey 성공', v1.ok === true, JSON.stringify(v1));
+ok('선호 모델 선택(2.5-flash)', v1.model === 'gemini-2.5-flash', v1.model);
+ok('선택된 모델이 저장됨', (await G.getModel()) === 'gemini-2.5-flash');
+
+// 선호 모델이 없으면 쓸 수 있는 것 중에서
+queue = [
+  resp(200, { models: [{ name: 'models/gemini-3.0-ultra', supportedGenerationMethods: ['generateContent'] }] }),
+  resp(200, { candidates: [] }),
+];
+const v2 = await G.verifyKey('k');
+ok('선호 목록에 없으면 가용 모델로', v2.ok && v2.model === 'gemini-3.0-ultra', v2.model);
+
+// 임베딩 전용만 있으면 실패
+queue = [resp(200, { models: [{ name: 'models/embedding-001', supportedGenerationMethods: ['embedContent'] }] })];
+const v3 = await G.verifyKey('k');
+ok('생성 가능한 모델 없으면 실패', v3.ok === false && /쓸 수 있는 모델이 없/.test(v3.error), v3.error);
+
+// ask()가 404를 만나면 모델을 바꿔 한 번 재시도
+await G.setKey('AIzaTEST');
+await G.setModel('gemini-ancient');
+queue = [
+  resp(404, 'not found'),                                   // 첫 시도
+  resp(200, MODELS),                                        // ListModels
+  resp(200, { candidates: [{ content: { parts: [{ text: '재시도 성공' }] } }] }), // 재시도
+];
+const a2 = await G.ask({ term: 't' });
+ok('404 → 모델 교체 후 재시도 성공', a2 === '재시도 성공', a2);
+ok('교체된 모델이 저장됨', (await G.getModel()) === 'gemini-2.5-flash', await G.getModel());
+
+// 재시도해도 404면 포기(무한루프 방지)
+await G.setModel('gemini-ancient');
+queue = [resp(404, 'nf'), resp(200, MODELS), resp(404, 'nf')];
+let e404 = null;
+try { await G.ask({ term: 't' }); } catch (e) { e404 = e.message; }
+ok('재시도 후에도 404면 에러', /404|쓸 수 없/.test(e404 || ''), e404);
+
 nextResponse = resp(400, 'API key not valid');
+queue = [resp(400, 'API key not valid')];
 const v = await G.verifyKey('bad');
 ok('verifyKey 실패 메시지', v.ok === false && /올바르지 않/.test(v.error), v.error);
 

@@ -11,6 +11,48 @@ const KEY = 'gemini_key';
 const MODEL_KEY = 'gemini_model';
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 
+// 404의 흔한 원인: 모델 이름이 계정/프로젝트에서 안 열려 있는 경우. 구글이 모델을 자주
+// 갈아치우고(1.5 계열은 신규 프로젝트에서 막힘) 계정마다 접근 권한이 달라서, 이름을
+// 하드코딩하지 않고 **ListModels로 실제 쓸 수 있는 걸 찾아 쓴다**.
+const PREFERRED = [
+  /^models\/gemini-2\.5-flash$/,
+  /^models\/gemini-flash-latest$/,
+  /^models\/gemini-2\.5-flash-lite$/,
+  /^models\/gemini-2\.0-flash$/,
+  /^models\/gemini-2\.5-pro$/,
+  /^models\/gemini-pro-latest$/,
+];
+
+/** 이 키로 generateContent가 가능한 모델 목록. */
+export async function listModels(key) {
+  const k = key || (await getKey());
+  if (!k) throw new Error('NO_KEY');
+  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+    headers: { 'x-goog-api-key': k },
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`모델 목록을 못 받았습니다 (${res.status})${t ? ' — ' + t.slice(0, 120) : ''}`);
+  }
+  const json = await res.json();
+  return (json.models || [])
+    .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+    .map((m) => m.name); // "models/gemini-2.5-flash"
+}
+
+/** 쓸 수 있는 모델 중 가장 선호하는 걸 고른다(없으면 첫 번째). */
+export async function pickModel(key) {
+  const names = await listModels(key);
+  if (!names.length) throw new Error('이 키로 쓸 수 있는 모델이 없습니다.');
+  for (const re of PREFERRED) {
+    const hit = names.find((n) => re.test(n));
+    if (hit) return hit.replace(/^models\//, '');
+  }
+  // 임베딩 전용 등을 피하려고 flash/pro가 들어간 것 우선
+  const fallback = names.find((n) => /gemini.*(flash|pro)/.test(n)) || names[0];
+  return fallback.replace(/^models\//, '');
+}
+
 export async function getKey() { return (await kvGet(KEY)) || null; }
 export async function setKey(k) { return kvSet(KEY, String(k || '').trim()); }
 export async function clearKey() { return kvDel(KEY); }
@@ -38,7 +80,7 @@ const SYSTEM = `당신은 의대생의 시험 공부를 돕는 튜터다. 한국
  * @param {string} [p.lecture]
  * @returns {Promise<string>} 답변 텍스트
  */
-export async function ask({ term, question, noteText, subject, lecture }) {
+export async function ask({ term, question, noteText, subject, lecture }, retried = false) {
   const key = await getKey();
   if (!key) throw new Error('NO_KEY');
   const model = await getModel();
@@ -73,6 +115,19 @@ export async function ask({ term, question, noteText, subject, lecture }) {
     const t = await res.text().catch(() => '');
     if (res.status === 400 && /API key not valid/i.test(t)) throw new Error('키가 유효하지 않습니다. 설정에서 다시 넣어주세요.');
     if (res.status === 429) throw new Error('잠시 요청이 많습니다(할당량). 조금 뒤 다시 시도하거나 앱으로 물어보세요.');
+    if (res.status === 404 && !retried) {
+      // 모델 이름이 이 계정에서 안 열린 경우 — 쓸 수 있는 걸 찾아서 한 번만 다시 시도한다.
+      try {
+        const better = await pickModel(key);
+        if (better && better !== model) {
+          await setModel(better);
+          return ask({ term, question, noteText, subject, lecture }, true);
+        }
+      } catch (e) {
+        throw new Error(`사용 가능한 모델을 찾지 못했습니다 — ${e.message}`);
+      }
+      throw new Error(`모델 "${model}"을 쓸 수 없습니다(404). 설정에서 연결 테스트를 다시 해보세요.`);
+    }
     throw new Error(`Gemini 오류 ${res.status}${t ? ' — ' + t.slice(0, 120) : ''}`);
   }
   const json = await res.json();
@@ -84,10 +139,20 @@ export async function ask({ term, question, noteText, subject, lecture }) {
   return text.trim();
 }
 
-/** 설정 화면의 "연결 테스트". */
+/**
+ * 설정 화면의 "연결 테스트".
+ * 키를 확인하면서 **이 계정에서 실제로 쓸 수 있는 모델을 찾아 저장**한다 —
+ * 모델 이름을 고정해두면 계정·시점에 따라 404가 나기 때문(실제로 겪음).
+ */
 export async function verifyKey(key) {
+  let model;
   try {
-    const model = await getModel();
+    model = await pickModel(key);
+  } catch (e) {
+    if (/401|403|API key not valid|400/.test(e.message)) return { ok: false, error: '키가 올바르지 않습니다.' };
+    return { ok: false, error: e.message };
+  }
+  try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
       {
@@ -96,10 +161,13 @@ export async function verifyKey(key) {
         body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'ping' }] }] }),
       }
     );
-    if (res.ok) return { ok: true };
+    if (res.ok) {
+      await setModel(model);
+      return { ok: true, model };
+    }
     const t = await res.text().catch(() => '');
     if (res.status === 400 && /API key not valid/i.test(t)) return { ok: false, error: '키가 올바르지 않습니다.' };
-    return { ok: false, error: `응답 ${res.status}` };
+    return { ok: false, error: `응답 ${res.status}${t ? ' — ' + t.slice(0, 100) : ''}` };
   } catch (e) {
     return { ok: false, error: `연결 실패: ${e.message}` };
   }
