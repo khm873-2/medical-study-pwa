@@ -11,7 +11,12 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="달모">
 <meta name="theme-color" content="#f7f7f9">
-<link rel="apple-touch-icon" href="icons/icon-180.png">
+<!-- iOS는 홈화면에 추가하는 순간 아이콘을 복사해 박아두고 서버가 바뀌어도 갱신하지 않는다.
+     게다가 Safari는 아이콘 URL을 자체 DB에 캐시한다 → **URL에 버전을 박아** 둘 다 우회한다.
+     아이콘을 바꾸면 ?v= 를 올리고, 홈화면 아이콘은 지웠다 다시 추가해야 바뀐다. -->
+<link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png?v=3">
+<link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png?v=3">
+<link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png?v=3">
 </head>
 <body>
 <div id="app">

@@ -163,6 +163,38 @@ ok('구버전 .with-wiki 규칙 없음', !/\.with-wiki[\s.{]/.test(css), (css.ma
 const penLayerRules = (css.match(/^\.penlayer\s*\{/gm) || []).length;
 ok('.penlayer 규칙이 하나뿐', penLayerRules === 1, `${penLayerRules}개`);
 
+// ── 6. 아이콘 — iOS 홈화면 아이콘이 안 바뀌던 문제(2026-10-09) ──
+// iOS는 설치 시점에 아이콘을 복사해 박아두고, Safari는 아이콘 URL을 자체 DB에 캐시한다.
+// URL에 ?v= 가 없으면 파일을 바꿔도 예전 아이콘이 계속 나온다.
+{
+  const { readFileSync: rf, existsSync: ex } = await import('fs');
+  const touch = [...html.matchAll(/<link[^>]+rel="apple-touch-icon"[^>]*>/g)].map((m) => m[0]);
+  ok('apple-touch-icon 선언이 있다', touch.length >= 1, `${touch.length}개`);
+  ok('apple-touch-icon에 캐시버스터(?v=)', touch.every((t) => /\?v=\d+/.test(t)),
+    touch.map((t) => (t.match(/href="([^"]+)"/) || [])[1]).join(' '));
+  ok('apple-touch-icon에 sizes 명시', touch.every((t) => /sizes="\d+x\d+"/.test(t)));
+
+  const mf = JSON.parse(rf(`${PWA}/manifest.json`, 'utf8'));
+  ok('manifest 아이콘에도 같은 캐시버스터', mf.icons.every((i) => /\?v=\d+/.test(i.src)),
+    mf.icons.map((i) => i.src).join(' '));
+
+  // index.html과 manifest의 버전이 어긋나면 한쪽만 갱신돼 헷갈린다
+  const vs = new Set([
+    ...touch.map((t) => (t.match(/\?v=(\d+)/) || [])[1]),
+    ...mf.icons.map((i) => (i.src.match(/\?v=(\d+)/) || [])[1]),
+  ]);
+  ok('index.html과 manifest의 아이콘 버전이 같다', vs.size === 1, [...vs].join('/'));
+
+  // ?v= 를 뗀 실제 파일이 존재해야 한다
+  const missing = mf.icons.map((i) => i.src.split('?')[0]).filter((f) => !ex(`${PWA}/${f}`));
+  ok('manifest가 가리키는 아이콘 파일이 전부 존재', missing.length === 0, missing.join(' '));
+  ok('maskable 아이콘이 있다', mf.icons.some((i) => i.purpose === 'maskable'));
+
+  ok('앱 이름이 달모', mf.short_name === '달모', mf.short_name);
+  const t = html.match(/<meta name="apple-mobile-web-app-title" content="([^"]+)"/);
+  ok('홈화면 표시 이름이 달모', t && t[1] === '달모', t ? t[1] : 'null');
+}
+
 console.log(`\n통과 ${pass}건`);
 if (fail.length) {
   console.log(`실패 ${fail.length}건:`);
