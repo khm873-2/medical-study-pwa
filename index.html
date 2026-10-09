@@ -169,22 +169,17 @@
 
   <!-- ======== 풀이 ======== -->
   <section id="quizScreen" class="hidden">
-    <header>
+    <!-- 헤더와 도구를 한 줄로 합쳤다(세로 공간 절약) -->
+    <header class="quiz-head">
       <button class="icon-btn" id="backToListBtn" title="목록">‹</button>
       <h1 id="quizTitle"></h1>
       <span class="badge-pill" id="scoreBadge">0/0</span>
-    </header>
-
-    <!-- 도구막대 — 모드 전환은 없다. 펜은 항상 쓸 수 있고 손가락은 항상 스크롤. -->
-    <div id="penBar">
-      <span class="pen-hint">🖊 네모로 감싸면 질문 · 번호 탭 = 답 선택</span>
       <span class="tool-sep"></span>
       <button class="tool" id="toolErase" title="지우개">🧽</button>
       <button class="tool" id="toolUndo" title="되돌리기">↶</button>
       <button class="tool" id="toolClear" title="필기 지우기">🗑</button>
-      <span class="tool-sep"></span>
       <button class="tool" id="toolWiki" title="관련 노트">📖</button>
-    </div>
+    </header>
 
     <div class="split">
     <div class="card" id="qcard">
@@ -236,10 +231,7 @@
       </div>
       <div id="wikiBody" class="wiki-body"></div>
     </div>
-    </div><!-- /.side-col -->
-    </div><!-- /.split -->
-
-    <div class="navbar">
+    <div class="navbar quiz-nav">
       <button class="icon-btn nav-arrow" id="prevBtn">‹</button>
       <div class="center">
         <button class="icon-btn" id="bookmarkBtn" title="북마크">☆</button>
@@ -249,6 +241,9 @@
       <button id="resultBtn">결과 보기</button>
       <button class="icon-btn nav-arrow" id="nextBtn">›</button>
     </div>
+    </div><!-- /.side-col -->
+    </div><!-- /.split -->
+
   </section>
 
   <!-- ======== 결과 ======== -->

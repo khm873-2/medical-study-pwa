@@ -52,17 +52,37 @@ export class PenLayer {
     this._ro.observe(host);
     this.resize();
 
-    // **문서 전체**에서 펜 이벤트를 받는다.
-    // host에만 걸면 카드 경계 **밖에서 긋기 시작할 때** 이벤트가 안 들어와 획이 끊긴다
-    // (2026-10-09 실제 증상 — 지문 왼쪽 여백에서 대각선으로 그으면 유지가 안 됐다).
-    // 손가락은 여전히 통과시키므로 스크롤·탭은 그대로다.
+    // ── 입력 처리 (2026-10-09 전면 수정) ───────────────────────────────────
+    // 증상: 1cm도 못 긋고 획이 죽었다.
+    // 원인: `touch-action: none`을 빼둔 탓에 iOS가 **펜 드래그를 스크롤로 가로채
+    //       pointercancel**을 쏴버렸다. 손가락 스크롤을 살리려다 펜을 죽인 셈.
+    // 해결: iPadOS는 `Touch.touchType === 'stylus'`로 펜을 확실히 구분할 수 있다.
+    //       → 터치 이벤트 단계에서 **펜일 때만** preventDefault로 스크롤을 막고,
+    //         손가락은 그대로 흘려보내 스크롤·탭을 유지한다.
+    //       pointercancel도 더 이상 획을 버리지 않고 **그 자리에서 확정**한다.
     this._onDown = (e) => this._down(e);
     this._onMove = (e) => this._move(e);
     this._onUp = (e) => this._up(e);
+    this._onCancel = (e) => this._up(e, true);
     document.addEventListener('pointerdown', this._onDown, { passive: false });
     document.addEventListener('pointermove', this._onMove, { passive: false });
     document.addEventListener('pointerup', this._onUp);
-    document.addEventListener('pointercancel', this._onUp);
+    document.addEventListener('pointercancel', this._onCancel);
+
+    // 펜 터치만 스크롤에서 제외 — 이게 없으면 iOS가 획을 취소한다.
+    this._onTouch = (e) => {
+      if (!e.touches || !e.touches.length) return;
+      const stylus = [...e.touches].some((t) => t.touchType === 'stylus');
+      if (stylus && this._nearTouch(e)) e.preventDefault();
+    };
+    for (const t of ['touchstart', 'touchmove']) {
+      document.addEventListener(t, this._onTouch, { passive: false });
+    }
+  }
+
+  _nearTouch(e) {
+    const t = e.touches[0];
+    return t ? this._nearHost({ clientX: t.clientX, clientY: t.clientY }, 160) : false;
   }
 
   /** 펜인가? (마우스는 데스크톱 개발용으로 허용) */
@@ -98,9 +118,13 @@ export class PenLayer {
     if (!this._isPen(e)) return;          // 손가락은 통과 → 평소대로 스크롤·탭
     // 이 레이어가 담당하는 영역 근처에서 시작한 것만 받는다(여러 화면이 동시에 떠 있을 때 혼선 방지).
     // 바깥 여백에서 시작하는 경우가 흔하므로 넉넉히 본다.
-    if (!this._nearHost(e, 120)) return;
+    if (!this._nearHost(e, 160)) return;
     e.preventDefault();
-    // 문서 레벨로 받으므로 캡처는 필요 없다. 캡처하면 오히려 host 밖 이동이 막힌다.
+    e.stopPropagation();
+    // 포인터를 캔버스에 묶어둔다 — 이게 있어야 손이 카드 밖으로 나가도 move가 계속 온다.
+    // (문서 레벨로 받으므로 host가 아니라 canvas에 건다)
+    try { this.canvas.setPointerCapture(e.pointerId); } catch {}
+    this._activeId = e.pointerId;
     const pt = this._pos(e);
     this._start = { x: e.clientX, y: e.clientY };
     if (this.erasing) { this._eraseAt(pt); this._isErasing = true; return; }
@@ -111,17 +135,39 @@ export class PenLayer {
     if (!this._isPen(e)) return;
     if (this._isErasing) { this._eraseAt(this._pos(e)); return; }
     if (!this._cur) return;
+    // 그리는 중에는 다른 포인터의 move를 섞지 않는다
+    if (this._activeId != null && e.pointerId !== this._activeId) return;
     e.preventDefault();
-    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    e.stopPropagation();
+    let evs = [e];
+    if (e.getCoalescedEvents) {
+      try { const c = e.getCoalescedEvents(); if (c && c.length) evs = c; } catch {}
+    }
     for (const ev of evs) this._cur.pts.push(this._pos(ev));
     this.redraw();
   }
 
-  _up(e) {
+  /**
+   * @param {boolean} cancelled pointercancel로 들어온 경우 — OS가 제스처로 가로챈 것이다.
+   *        예전엔 여기서 획을 버렸는데, 그게 "1cm도 못 긋는" 증상의 일부였다.
+   *        이제는 지금까지 그은 만큼을 **그대로 확정**한다.
+   */
+  _up(e, cancelled = false) {
+    this._activeId = null;
     if (this._isErasing) { this._isErasing = false; this.onChange(); return; }
     if (!this._cur) return;
     const stroke = this._cur;
     this._cur = null;
+
+    if (cancelled && stroke.pts.length > 2) {
+      // 취소돼도 이미 충분히 그었으면 선택 후보로 넘긴다
+      this._pending = this._pending || [];
+      this._pending.push(stroke);
+      this._showPendingBox();
+      clearTimeout(this._settle);
+      this._settle = setTimeout(() => this._commit(), SETTLE_MS);
+      return;
+    }
 
     if (classify(stroke.pts) === 'tap') {
       this.redraw();
@@ -280,7 +326,8 @@ export class PenLayer {
     document.removeEventListener('pointerdown', this._onDown);
     document.removeEventListener('pointermove', this._onMove);
     document.removeEventListener('pointerup', this._onUp);
-    document.removeEventListener('pointercancel', this._onUp);
+    document.removeEventListener('pointercancel', this._onCancel);
+    for (const t of ['touchstart', 'touchmove']) document.removeEventListener(t, this._onTouch);
     this.canvas.remove();
   }
 }

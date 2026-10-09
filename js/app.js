@@ -312,6 +312,13 @@ async function openExam(subject, ex) {
     show('quizScreen');
     quiz.start();
     ensurePen();
+    // 넓은 화면이면 오른쪽 공간이 어차피 비므로 관련 노트를 바로 띄운다
+    if (wideScreen()) {
+      document.getElementById('wikiPanel').classList.remove('hidden');
+      document.getElementById('toolWiki').classList.add('active');
+      syncSideCol();
+      loadWiki(quiz.q, quiz.answers[quiz.qIndex] !== null);
+    }
     if (had) toast('이어서 풉니다.');
   } catch (e) {
     body.innerHTML = prev;
@@ -558,7 +565,11 @@ document.getElementById('aiSave').onclick = () => {
 };
 document.getElementById('aiOpenApp').onclick = () => { if (askCtx) fillAskSheet(askCtx.term); };
 
-/** 사이드 칼럼에 보이는 게 하나도 없으면 2단 레이아웃을 푼다. */
+/**
+ * 사이드 칼럼 상태 동기화.
+ * 넓은 화면에선 사이드가 **항상** 있다(네비가 거기 들어가므로) — 패널 유무와 무관.
+ * 좁은 화면에선 패널이 열릴 때만 공간을 차지한다.
+ */
 function syncSideCol() {
   const anyOpen =
     !document.getElementById('aiPanel').classList.contains('hidden') ||
@@ -566,6 +577,9 @@ function syncSideCol() {
   document.getElementById('quizScreen').classList.toggle('with-side', anyOpen);
   requestAnimationFrame(() => pen && pen.resize());
 }
+
+/** 넓은 화면인가? (사이드바를 상시 쓰는 기준) */
+const wideScreen = () => window.matchMedia('(min-width: 900px)').matches;
 
 function escapeText(s) {
   return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));

@@ -73,7 +73,7 @@ const pen = new PenLayer(host, {
 });
 const ev = (x, y, type = 'pen') => ({
   pointerType: type, clientX: x, clientY: y, pressure: .5, pointerId: 1,
-  preventDefault() {}, getCoalescedEvents: null,
+  preventDefault() {}, stopPropagation() {}, getCoalescedEvents: null,
 });
 const settle = () => new Promise((r) => setTimeout(r, 520));   // SETTLE_MS(420) 이후
 /** 한 획 긋기 */
@@ -155,6 +155,15 @@ const far = pen.strokes.length;
 draw(-400, -400, -350, -380, 5);
 await settle();
 ok('멀리 떨어진 획은 무시', selected === null && pen.strokes.length === far, `${selected}`);
+
+// ★ pointercancel(OS가 스크롤로 가로챔)이 와도 획이 죽지 않아야 한다
+//   — "1cm도 못 긋는" 증상의 핵심 원인이었다
+selected = null;
+pen._down(ev(20, 72));
+line(20, 72, 120, 73, 8).slice(1).forEach((p) => pen._move(ev(p.x, p.y)));
+pen._up(ev(120, 73), true);      // cancelled = true
+await settle();
+ok('pointercancel이 와도 선택이 살아남음', selected && selected.includes('65세'), `"${selected}"`);
 
 // ---- 펜 탭 → 선지 선택 ----
 tapped = null;

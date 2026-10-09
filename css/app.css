@@ -334,7 +334,11 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 /* ═══════════ 펜 상호작용 개편 · AI 사이드 패널 (2026-10-09) ═══════════ */
 
 /* 캔버스는 보이기만 하고 이벤트는 host가 받는다 — 손가락이 아래 UI로 그대로 통과하도록 */
-.penlayer { position: absolute; inset: 0; z-index: 10; pointer-events: none; }
+.penlayer {
+  position: absolute; inset: 0; z-index: 10;
+  pointer-events: none;      /* 손가락은 아래 UI로 통과 */
+  touch-action: none;        /* 펜 드래그가 스크롤로 가로채이지 않게 */
+}
 /* 펜으로 그리는 중에도 손가락 스크롤이 살아 있어야 하므로 touch-action은 건드리지 않는다 */
 
 .pen-hint { flex: 1; font-size: 12px; color: var(--sub); padding-left: 4px; }
@@ -370,3 +374,64 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 
 /* 선택 피드백 — 긁은 줄을 잠깐 하이라이트 */
 .tok.picked { background: rgba(37,99,235,.18); border-radius: 3px; }
+
+/* ═══════════ 공간 효율 개선 (2026-10-09) ═══════════
+   헤더·도구막대·하단네비가 세로를 잡아먹고 오른쪽은 비어 있었다.
+   → 헤더에 도구를 합치고, 넓은 화면에선 사이드바를 **상시** 띄워 오른쪽을 쓴다. */
+
+.quiz-head {
+  display: flex; align-items: center; gap: 2px;
+  padding: 2px 0 8px; flex-wrap: nowrap;
+}
+.quiz-head h1 { font-size: 14px; flex: 1; min-width: 0; }
+.quiz-head .tool { min-width: 38px; min-height: 38px; padding: 6px 8px; font-size: 17px; }
+.quiz-head .badge-pill { padding: 4px 10px; font-size: 12px; }
+.quiz-head .tool-sep { height: 20px; margin: 0 2px; }
+
+/* 카드 위쪽 여백 축소 */
+#qnum { margin-bottom: 4px; font-size: 12px; }
+#qsource { margin-bottom: 8px; padding: 3px 9px; font-size: 11.5px; }
+#qtext { margin-bottom: 14px; }
+
+/* ── 넓은 화면: 사이드바 상시 노출 + 네비를 사이드로 ───────────────── */
+@media (min-width: 900px) {
+  #app { padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
+
+  #quizScreen .split {
+    display: flex; gap: 14px; align-items: flex-start;
+  }
+  #quizScreen .split > #qcard { flex: 1 1 auto; min-width: 0; }
+  #quizScreen .side-col {
+    flex: 0 0 clamp(300px, 34vw, 460px);
+    position: sticky; top: 8px;
+    display: flex; flex-direction: column; gap: 10px;
+    max-height: calc(100vh - 80px);
+  }
+  /* 사이드의 패널들이 공간을 나눠 갖는다 */
+  #quizScreen .side-col > #aiPanel,
+  #quizScreen .side-col > #wikiPanel { margin-top: 0; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  #quizScreen .side-col #aiBody,
+  #quizScreen .side-col .wiki-body { flex: 1 1 auto; max-height: none; min-height: 0; }
+
+  /* 하단 고정 네비 → 사이드 칼럼 하단에 붙이는 작은 바로 */
+  #quizScreen .quiz-nav {
+    position: static; border-top: none; border: 1px solid var(--border);
+    border-radius: 12px; padding: 8px 10px; background: var(--card);
+    flex: 0 0 auto; order: 99;
+  }
+  /* 사이드가 비어 있을 때도 네비는 보여야 하므로 side-col은 항상 표시 */
+  #quizScreen .side-col { display: flex !important; }
+}
+
+/* 좁은 화면(세로)에서는 기존처럼 아래 고정 네비 */
+@media (max-width: 899px) {
+  #quizScreen .side-col { display: block; }
+}
+
+/* 사이드 패널 내부 여백 축소 */
+.wiki-head { padding: 8px 6px 8px 10px; }
+#wikiHeading, #aiTerm { font-size: 13px; }
+.wiki-sub { font-size: 10.5px; }
+.wiki-body, #aiBody { padding: 10px 12px; font-size: 14.5px; }
+.ai-foot { padding: 8px 10px; }
+.ai-foot .btn { min-height: 36px; padding: 7px 10px; font-size: 12.5px; }
