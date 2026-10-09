@@ -265,3 +265,67 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 }
 .sheet-actions { display: flex; gap: 10px; margin-top: 12px; }
 .sheet-actions .btn { flex: 1; }
+
+/* ═══════════ Phase 4·5 — 읽기 모드 · 플래시카드 · 검색 ═══════════ */
+
+/* ---- 탭 ---- */
+.tabs { display: flex; gap: 6px; margin-bottom: 14px; background: var(--badge-bg); padding: 4px; border-radius: 11px; }
+.tab {
+  flex: 1; padding: 11px 8px; border: none; background: none; border-radius: 8px;
+  font-size: 14px; font-weight: 600; color: var(--sub); cursor: pointer; font-family: inherit;
+}
+.tab.active { background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+
+/* ---- 읽기 모드 ---- */
+#readCard { position: relative; }
+.read-heading { font-size: 17px; font-weight: 700; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.read-body { max-height: none; padding: 0; font-size: 17px; line-height: 1.75; }
+.read-body h4, .read-body h5, .read-body h6 { margin: 18px 0 8px; }
+/* 선택 가능하게 — 올가미 대신 네이티브 선택을 쓴다 */
+.read-body, .read-body * { -webkit-user-select: text; user-select: text; }
+#readScreen .icon-btn.active { color: var(--accent); background: var(--badge-bg); }
+
+/* 누운 자세: 가로모드에서 글줄 길이를 읽기 좋게 제한하고 여백을 키운다 */
+@media (orientation: landscape) {
+  #readScreen #app, #readScreen { }
+  .read-body { max-width: 72ch; margin: 0 auto; }
+  #readCard { padding: 26px 30px; }
+}
+
+/* ---- 플래시카드 ---- */
+.card-face { min-height: 46vh; display: flex; flex-direction: column; justify-content: center; text-align: center; }
+.card-context { font-size: 20px; line-height: 1.65; margin: 18px 0; }
+.card-answer {
+  font-size: 20px; font-weight: 700; color: var(--correct);
+  padding: 16px; background: var(--badge-bg); border-radius: 12px; margin-top: 12px; line-height: 1.6;
+}
+#cardSource { font-size: 12px; }
+.grade-row { display: flex; gap: 10px; width: 100%; }
+.grade-row .btn { flex: 1; }
+.card-stats { display: flex; gap: 10px; margin-bottom: 12px; }
+.card-stat { flex: 1; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px; text-align: center; }
+.card-stat b { display: block; font-size: 22px; margin-bottom: 2px; }
+.card-stat span { font-size: 12px; color: var(--sub); }
+
+/* ---- 검색 ---- */
+#searchInput {
+  width: 100%; padding: 13px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 16px; font-family: inherit; margin-bottom: 10px;
+}
+.search-results { max-height: 58vh; overflow-y: auto; }
+.search-hit {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  border-bottom: 1px solid var(--border); padding: 12px 4px; cursor: pointer;
+  font-family: inherit; color: var(--text);
+}
+.search-hit:active { background: var(--badge-bg); }
+.search-hit .sh-title { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
+.search-hit .sh-snip { font-size: 13px; color: var(--sub); line-height: 1.5; }
+.search-hit mark { background: #fde68a; color: #78350f; }
+
+/* ---- 오프라인 저장 ---- */
+.cache-row { display: flex; align-items: center; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+.cache-row .cr-name { flex: 1; font-size: 14px; font-weight: 600; }
+.cache-row .cr-meta { font-size: 12px; color: var(--sub); }
+.cache-row button { padding: 9px 14px; font-size: 13px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-family: inherit; font-weight: 600; }
+.cache-row button:disabled { opacity: .5; }

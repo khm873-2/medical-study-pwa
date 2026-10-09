@@ -53,6 +53,16 @@
     </div>
 
     <div class="card">
+      <h2>오프라인 저장</h2>
+      <p class="muted">
+        과목을 저장해두면 네트워크 없이도 풀 수 있고, 검색 범위에도 들어옵니다.
+        (한 번 열어본 자료는 자동으로 저장됩니다.)
+      </p>
+      <div id="cacheList" style="margin-top:12px"></div>
+      <p class="muted" id="cacheProgress" style="margin-top:10px"></p>
+    </div>
+
+    <div class="card">
       <h2>저장된 데이터</h2>
       <p class="muted" id="storageInfo">확인 중…</p>
       <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
@@ -75,10 +85,60 @@
   <section id="listScreen" class="hidden">
     <header>
       <h1>모의고사</h1>
+      <button class="icon-btn" id="searchBtn" title="검색">🔍</button>
       <button class="icon-btn" id="refreshBtn" title="새로고침">↻</button>
       <button class="icon-btn" id="settingsBtn" title="설정">⚙</button>
     </header>
+    <div class="tabs">
+      <button class="tab active" data-tab="exams">모의고사</button>
+      <button class="tab" data-tab="notes">노트 읽기</button>
+      <button class="tab" data-tab="cards">플래시카드</button>
+    </div>
     <div id="listBody"></div>
+    <div id="notesBody" class="hidden"></div>
+    <div id="cardsBody" class="hidden"></div>
+  </section>
+
+  <!-- ======== 노트 읽기 ======== -->
+  <section id="readScreen" class="hidden">
+    <header>
+      <button class="icon-btn" id="readBack" title="목록">‹</button>
+      <h1 id="readTitle"></h1>
+      <button class="icon-btn" id="readAwake" title="화면 켜두기">☀</button>
+      <button class="icon-btn" id="readTts" title="읽어주기">🔊</button>
+      <button class="icon-btn" id="readPen" title="펜">🖊</button>
+    </header>
+    <div class="card" id="readCard">
+      <div id="readHeading" class="read-heading"></div>
+      <div id="readBody" class="wiki-body read-body"></div>
+    </div>
+    <div class="navbar">
+      <button class="icon-btn nav-arrow" id="readPrev">‹</button>
+      <div class="center"><span id="readPos">0/0</span></div>
+      <button class="icon-btn" id="readAsk" title="선택한 내용 질문">❓</button>
+      <button class="icon-btn nav-arrow" id="readNext">›</button>
+    </div>
+  </section>
+
+  <!-- ======== 플래시카드 ======== -->
+  <section id="cardScreen" class="hidden">
+    <header>
+      <button class="icon-btn" id="cardBack" title="목록">‹</button>
+      <h1 id="cardTitle"></h1>
+      <span class="badge-pill" id="cardProgress">0/0</span>
+    </header>
+    <div class="card card-face">
+      <div class="muted" id="cardSource"></div>
+      <div id="cardContext" class="card-context"></div>
+      <div id="cardAnswer" class="card-answer hidden"></div>
+    </div>
+    <div class="navbar">
+      <button class="btn full" id="cardShow">답 보기</button>
+      <div id="cardGrade" class="grade-row hidden">
+        <button class="btn" id="cardAgain">다시</button>
+        <button class="btn primary" id="cardGot">알았다</button>
+      </div>
+    </div>
   </section>
 
   <!-- ======== 풀이 ======== -->
@@ -175,6 +235,20 @@
 <div id="syncBar" class="hidden">
   <span id="syncText"></span>
   <button id="syncNowBtn">지금 보내기</button>
+</div>
+
+<!-- 검색 시트 -->
+<div id="searchSheet" class="sheet hidden">
+  <div class="sheet-card">
+    <div class="sheet-head">
+      <b>검색</b>
+      <button class="icon-btn" id="searchClose">✕</button>
+    </div>
+    <input id="searchInput" type="search" placeholder="문항·노트 내용 검색 (2글자 이상)"
+           autocapitalize="off" autocorrect="off">
+    <div class="muted" id="searchMsg"></div>
+    <div id="searchResults" class="search-results"></div>
+  </div>
 </div>
 
 <!-- 동그라미 → 질문 시트 -->

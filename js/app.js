@@ -9,6 +9,11 @@ import { wikiFor } from './wiki.js';
 import { renderMarkdown, hydrateEmbeds } from './markdown.js';
 import { buildPrompt, appList, sendTo, share, buildQaMarkdown } from './ask.js';
 import {
+  noteList, loadNote, renderSection, extractCards,
+  loadSrs, saveSrs, dueCards, gradeCard, srsStats, keepAwake,
+} from './reader.js';
+import { search, cacheSubject, storageInfo } from './search.js';
+import {
   kvGet, kvSet, cacheClear, enqueue, listOutbox, dequeue, bumpTries,
   allSessions, clearSession,
 } from './db.js';
@@ -16,7 +21,7 @@ import {
 const EXAM_ROOT = '06_모의고사';
 const LOG_DIR = '00_Raw_Text/AI대화로그';
 
-const screens = ['setupScreen', 'listScreen', 'quizScreen', 'resultScreen'];
+const screens = ['setupScreen', 'listScreen', 'quizScreen', 'resultScreen', 'readScreen', 'cardScreen'];
 let quiz = null;
 let lastResult = null;
 let currentExam = null; // {subject, file, path, title}
@@ -42,19 +47,59 @@ async function openSetup() {
   document.getElementById('setupMsg').textContent = '';
   document.getElementById('setupCloseBtn').classList.toggle('hidden', !(await hasToken()));
   updateStorageInfo();
+  if (await hasToken()) renderCacheList();
   show('setupScreen');
 }
 
 async function updateStorageInfo() {
   const el = document.getElementById('storageInfo');
   try {
-    const est = await navigator.storage?.estimate?.();
-    const mb = est?.usage ? (est.usage / 1024 / 1024).toFixed(1) : '?';
+    const info = await storageInfo();
     const outbox = await listOutbox();
     const sessions = Object.keys(await allSessions()).length;
-    el.textContent = `사용 중 ${mb}MB · 저장 대기 ${outbox.length}건 · 풀던 시험 ${sessions}개`;
+    const mb = info.usageMB != null ? info.usageMB.toFixed(1) : '?';
+    el.textContent =
+      `사용 중 ${mb}MB · 저장된 파일 ${info.files}개 · 저장 대기 ${outbox.length}건 · 풀던 시험 ${sessions}개`;
   } catch {
     el.textContent = '확인할 수 없음';
+  }
+}
+
+/** 설정 화면의 과목별 오프라인 저장 목록 */
+async function renderCacheList() {
+  const box = document.getElementById('cacheList');
+  box.innerHTML = '<p class="muted">과목을 확인하는 중…</p>';
+  try {
+    const subjects = (await listDir(EXAM_ROOT)).filter((e) => e.type === 'dir');
+    box.innerHTML = '';
+    for (const s of subjects) {
+      const row = document.createElement('div');
+      row.className = 'cache-row';
+      const name = document.createElement('div');
+      name.className = 'cr-name';
+      name.textContent = s.name.replace(/_/g, ' ');
+      const btn = document.createElement('button');
+      btn.textContent = '저장';
+      btn.onclick = async () => {
+        btn.disabled = true;
+        const prog = document.getElementById('cacheProgress');
+        try {
+          await cacheSubject(s.name, (done, total, label) => {
+            prog.textContent = `${s.name}: ${done}/${total} — ${label}`;
+          });
+          prog.textContent = `${s.name} 저장 완료`;
+          btn.textContent = '완료 ✓';
+          updateStorageInfo();
+        } catch (e) {
+          prog.textContent = `실패: ${e.message}`;
+          btn.disabled = false;
+        }
+      };
+      row.append(name, btn);
+      box.appendChild(row);
+    }
+  } catch (e) {
+    box.innerHTML = `<p class="muted">목록을 불러오지 못했습니다: ${e.message}</p>`;
   }
 }
 
@@ -361,17 +406,21 @@ function handleLasso(text, box) {
 function openAsk(term, imageNote) {
   const q = quiz.q;
   askCtx = { term, qnum: q.num, qtext: q.q, question: q };
-  document.getElementById('askTerm').textContent = term || imageNote || '(선택 없음)';
-  document.getElementById('askAnswer').value = '';
-  document.getElementById('askMsg').textContent = '';
-
-  const prompt = buildPrompt({
+  askCtx.prompt = buildPrompt({
     term,
     question: q,
     subject: currentExam.subject,
     lecture: prettyExamName(currentExam.file),
   });
-  askCtx.prompt = prompt;
+  fillAskSheet(term || imageNote);
+}
+
+/** 질문 시트 채우기 — 모의고사(올가미)와 읽기 모드(텍스트 선택) 둘 다 여기로 온다. */
+function fillAskSheet(label) {
+  const prompt = askCtx.prompt;
+  document.getElementById('askTerm').textContent = label || '(선택 없음)';
+  document.getElementById('askAnswer').value = '';
+  document.getElementById('askMsg').textContent = '';
 
   const apps = document.getElementById('askApps');
   apps.innerHTML = '';
@@ -421,6 +470,330 @@ document.getElementById('askSaveLater').onclick = () => {
   document.getElementById('askSheet').classList.add('hidden');
   toast('질문만 기록했습니다.');
 };
+
+// ═══════════ Phase 4 — 읽기 모드 · 플래시카드 ═══════════
+
+let reader = null;      // {note, secIdx}
+let readerPen = null;
+let cardDeck = null;    // {cards, idx, srs, title}
+
+// ---- 탭 ----
+document.querySelectorAll('.tab').forEach((t) => {
+  t.onclick = () => {
+    document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === t));
+    const which = t.dataset.tab;
+    document.getElementById('listBody').classList.toggle('hidden', which !== 'exams');
+    document.getElementById('notesBody').classList.toggle('hidden', which !== 'notes');
+    document.getElementById('cardsBody').classList.toggle('hidden', which !== 'cards');
+    if (which === 'notes') loadNotesTab();
+    if (which === 'cards') loadCardsTab();
+  };
+});
+
+// ---- 노트 목록 ----
+async function loadNotesTab(force) {
+  const body = document.getElementById('notesBody');
+  body.innerHTML = '<p class="muted">불러오는 중…</p>';
+  try {
+    const groups = await noteList(force);
+    body.innerHTML = '';
+    if (!groups.length) { body.innerHTML = '<p class="muted">노트를 찾지 못했습니다.</p>'; return; }
+    for (const g of groups) {
+      const h = document.createElement('div');
+      h.className = 'subject-head';
+      h.textContent = `${g.subject.replace(/_/g, ' ')}  ·  ${g.root.replace(/^\d+_/, '')}`;
+      body.appendChild(h);
+      for (const n of g.notes) {
+        const b = document.createElement('button');
+        b.className = 'exam-item';
+        const name = document.createElement('span');
+        name.className = 'exam-name';
+        name.textContent = n.name.replace(/^\d{4}_/, '');
+        const arrow = document.createElement('span');
+        arrow.className = 'exam-progress';
+        arrow.textContent = '›';
+        b.appendChild(name); b.appendChild(arrow);
+        b.onclick = () => openNote(n.path);
+        body.appendChild(b);
+      }
+    }
+  } catch (e) {
+    body.innerHTML = `<div class="warn-box">노트 목록을 불러오지 못했습니다: ${e.message}</div>`;
+  }
+}
+
+async function openNote(path) {
+  const body = document.getElementById('notesBody');
+  const prev = body.innerHTML;
+  body.innerHTML = '<p class="muted">노트를 여는 중…</p>';
+  try {
+    const note = await loadNote(path);
+    reader = { note, secIdx: 0 };
+    show('readScreen');
+    renderReader();
+    ensureReaderPen();
+  } catch (e) {
+    body.innerHTML = prev;
+    toast(`노트를 열지 못했습니다: ${e.message}`);
+  }
+}
+
+function renderReader() {
+  if (!reader) return;
+  const { note, secIdx } = reader;
+  const sec = note.sections[secIdx];
+  document.getElementById('readTitle').textContent = note.title;
+  document.getElementById('readHeading').textContent = sec.heading;
+  document.getElementById('readPos').textContent = `${secIdx + 1}/${note.sections.length}`;
+  renderSection(document.getElementById('readBody'), sec);
+  document.getElementById('readPrev').disabled = secIdx === 0;
+  document.getElementById('readNext').disabled = secIdx === note.sections.length - 1;
+  window.scrollTo(0, 0);
+  if (readerPen) requestAnimationFrame(() => readerPen.resize());
+}
+
+function ensureReaderPen() {
+  if (readerPen) return;
+  readerPen = new PenLayer(document.getElementById('readCard'), {
+    onLasso: (text) => { if (text) openAskFromReader(text); },
+  });
+  readerPen.setMode('touch');
+}
+
+document.getElementById('readBack').onclick = () => {
+  if (readerPen) { readerPen.destroy(); readerPen = null; }
+  keepAwake(false);
+  stopTts();
+  reader = null;
+  show('listScreen');
+};
+document.getElementById('readPrev').onclick = () => {
+  if (reader && reader.secIdx > 0) { reader.secIdx--; renderReader(); }
+};
+document.getElementById('readNext').onclick = () => {
+  if (reader && reader.secIdx < reader.note.sections.length - 1) { reader.secIdx++; renderReader(); }
+};
+document.getElementById('readPen').onclick = () => {
+  if (!readerPen) return;
+  const on = readerPen.mode === 'touch';
+  readerPen.setMode(on ? 'pen' : 'touch');
+  document.getElementById('readPen').classList.toggle('active', on);
+};
+document.getElementById('readAwake').onclick = async () => {
+  const btn = document.getElementById('readAwake');
+  const on = !btn.classList.contains('active');
+  const ok = await keepAwake(on);
+  btn.classList.toggle('active', ok && on);
+  toast(ok && on ? '화면이 꺼지지 않습니다.' : on ? '이 기기에서는 지원되지 않습니다.' : '해제했습니다.');
+};
+
+// 선택한 텍스트로 질문 — 올가미보다 정확해서 읽기 모드에선 이쪽을 쓴다
+document.getElementById('readAsk').onclick = () => {
+  const sel = String(window.getSelection() || '').trim();
+  if (!sel) { toast('먼저 궁금한 부분을 드래그해서 선택하세요.'); return; }
+  openAskFromReader(sel);
+};
+
+function openAskFromReader(term) {
+  const { note, secIdx } = reader;
+  askCtx = { term, qnum: '—', qtext: `${note.title} · ${note.sections[secIdx].heading}`, question: null };
+  askCtx.prompt = buildPrompt({ term, question: null, subject: note.title, lecture: note.sections[secIdx].heading });
+  fillAskSheet(term);
+}
+
+// ---- TTS ----
+let ttsOn = false;
+function stopTts() {
+  try { window.speechSynthesis.cancel(); } catch {}
+  ttsOn = false;
+  document.getElementById('readTts').classList.remove('active');
+}
+document.getElementById('readTts').onclick = () => {
+  if (!('speechSynthesis' in window)) { toast('이 기기는 읽어주기를 지원하지 않습니다.'); return; }
+  if (ttsOn) { stopTts(); return; }
+  const text = document.getElementById('readBody').textContent.replace(/\s+/g, ' ').trim();
+  if (!text) return;
+  const u = new SpeechSynthesisUtterance(text.slice(0, 4000));
+  u.lang = 'ko-KR';
+  u.rate = 1.05;
+  u.onend = () => stopTts();
+  window.speechSynthesis.speak(u);
+  ttsOn = true;
+  document.getElementById('readTts').classList.add('active');
+};
+
+// ---- 플래시카드 ----
+async function loadCardsTab() {
+  const body = document.getElementById('cardsBody');
+  body.innerHTML = '<p class="muted">카드를 세는 중…</p>';
+  try {
+    const groups = await noteList(false);
+    const srs = await loadSrs();
+    body.innerHTML = '';
+
+    const hint = document.createElement('p');
+    hint.className = 'muted';
+    hint.textContent = '노트의 ⭐ ==하이라이트== 를 그대로 카드로 씁니다. 노트를 고르면 복습이 시작됩니다.';
+    body.appendChild(hint);
+
+    for (const g of groups) {
+      const h = document.createElement('div');
+      h.className = 'subject-head';
+      h.textContent = g.subject.replace(/_/g, ' ');
+      body.appendChild(h);
+      for (const n of g.notes) {
+        const b = document.createElement('button');
+        b.className = 'exam-item';
+        const name = document.createElement('span');
+        name.className = 'exam-name';
+        name.textContent = n.name.replace(/^\d{4}_/, '');
+        const meta = document.createElement('span');
+        meta.className = 'exam-progress';
+        meta.textContent = '›';
+        b.appendChild(name); b.appendChild(meta);
+        b.onclick = () => startCards(n.path, srs);
+        body.appendChild(b);
+      }
+    }
+  } catch (e) {
+    body.innerHTML = `<div class="warn-box">${e.message}</div>`;
+  }
+}
+
+async function startCards(path, srs) {
+  const body = document.getElementById('cardsBody');
+  const prev = body.innerHTML;
+  body.innerHTML = '<p class="muted">카드를 만드는 중…</p>';
+  try {
+    const note = await loadNote(path);
+    const all = extractCards(note);
+    if (!all.length) {
+      body.innerHTML = prev;
+      toast('이 노트에는 ==하이라이트== 가 없습니다.');
+      return;
+    }
+    const srsNow = srs || (await loadSrs());
+    const due = dueCards(all, srsNow);
+    const deck = due.length ? due : all;   // 복습할 게 없으면 전체를 한 번 더
+    shuffle(deck);
+    cardDeck = { cards: deck, idx: 0, srs: srsNow, title: note.title, all };
+    show('cardScreen');
+    renderCard();
+    if (!due.length) toast('오늘 복습할 카드가 없어 전체를 보여줍니다.');
+  } catch (e) {
+    body.innerHTML = prev;
+    toast(`카드를 만들지 못했습니다: ${e.message}`);
+  }
+}
+
+function renderCard() {
+  if (!cardDeck) return;
+  const c = cardDeck.cards[cardDeck.idx];
+  document.getElementById('cardTitle').textContent = cardDeck.title;
+  document.getElementById('cardProgress').textContent = `${cardDeck.idx + 1}/${cardDeck.cards.length}`;
+  document.getElementById('cardSource').textContent = c.heading;
+  document.getElementById('cardContext').textContent = c.context;
+  document.getElementById('cardAnswer').textContent = c.answer;
+  document.getElementById('cardAnswer').classList.add('hidden');
+  document.getElementById('cardShow').classList.remove('hidden');
+  document.getElementById('cardGrade').classList.add('hidden');
+  window.scrollTo(0, 0);
+}
+
+document.getElementById('cardShow').onclick = () => {
+  document.getElementById('cardAnswer').classList.remove('hidden');
+  document.getElementById('cardShow').classList.add('hidden');
+  document.getElementById('cardGrade').classList.remove('hidden');
+};
+document.getElementById('cardAgain').onclick = () => advanceCard(false);
+document.getElementById('cardGot').onclick = () => advanceCard(true);
+document.getElementById('cardBack').onclick = () => { cardDeck = null; show('listScreen'); };
+
+async function advanceCard(remembered) {
+  if (!cardDeck) return;
+  const c = cardDeck.cards[cardDeck.idx];
+  gradeCard(cardDeck.srs, c.id, remembered);
+  await saveSrs(cardDeck.srs);
+  if (cardDeck.idx + 1 >= cardDeck.cards.length) {
+    const s = srsStats(cardDeck.all, cardDeck.srs);
+    toast(`끝! 처음 ${s.new} · 학습중 ${s.learning} · 익힘 ${s.mature}`);
+    cardDeck = null;
+    show('listScreen');
+    return;
+  }
+  cardDeck.idx++;
+  renderCard();
+}
+
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+}
+
+// ═══════════ Phase 5 — 검색 ═══════════
+
+document.getElementById('searchBtn').onclick = () => {
+  document.getElementById('searchSheet').classList.remove('hidden');
+  document.getElementById('searchInput').focus();
+};
+document.getElementById('searchClose').onclick = () =>
+  document.getElementById('searchSheet').classList.add('hidden');
+document.getElementById('searchSheet').onclick = (e) => {
+  if (e.target.id === 'searchSheet') e.target.classList.add('hidden');
+};
+
+let searchTimer = null;
+document.getElementById('searchInput').oninput = (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => runSearch(e.target.value), 250);
+};
+
+async function runSearch(q) {
+  const msg = document.getElementById('searchMsg');
+  const box = document.getElementById('searchResults');
+  if (String(q).trim().length < 2) { box.innerHTML = ''; msg.textContent = ''; return; }
+  msg.textContent = '찾는 중…';
+  const hits = await search(q);
+  box.innerHTML = '';
+  if (!hits.length) {
+    msg.textContent = '결과가 없습니다. (한 번도 열어보지 않은 자료는 검색되지 않습니다 — 설정에서 과목을 오프라인 저장하면 전체가 검색됩니다.)';
+    return;
+  }
+  msg.textContent = `${hits.length}건`;
+  for (const h of hits) {
+    const b = document.createElement('button');
+    b.className = 'search-hit';
+    const t = document.createElement('div');
+    t.className = 'sh-title';
+    t.textContent = `${h.kind === 'question' ? '📝' : '📖'} ${h.title}`;
+    const s = document.createElement('div');
+    s.className = 'sh-snip';
+    s.append(h.snippet.before);
+    const mk = document.createElement('mark');
+    mk.textContent = h.snippet.match;
+    s.append(mk, h.snippet.after);
+    b.append(t, s);
+    b.onclick = () => {
+      document.getElementById('searchSheet').classList.add('hidden');
+      if (h.kind === 'note') openNote(h.path);
+      else openExamAt(h.path, h.qnum);
+    };
+    box.appendChild(b);
+  }
+}
+
+/** 검색 결과에서 특정 문항으로 바로 이동 */
+async function openExamAt(path, qnum) {
+  const subject = path.split('/')[1];
+  const file = path.split('/').pop();
+  await openExam(subject, { file, path });
+  if (quiz) {
+    const i = quiz.all.findIndex((x) => x.num === qnum);
+    if (i >= 0) { quiz.cur = quiz.order.indexOf(i); if (quiz.cur < 0) quiz.cur = 0; quiz.render(); }
+  }
+}
 
 // ---------- 결과 ----------
 function showResult(res) {

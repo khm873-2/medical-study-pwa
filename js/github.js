@@ -4,7 +4,7 @@
 // 기존 파일을 read-modify-write 하지 않으므로 git 충돌이 구조적으로 생기지 않는다.
 
 import { getToken, getRepo } from './auth.js';
-import { cacheGet, cacheSet } from './db.js';
+import { cacheGet, cacheSet, kvGet, kvSet } from './db.js';
 
 const API = 'https://api.github.com';
 
@@ -65,8 +65,16 @@ export async function getText(path, { useCache = true } = {}) {
     throw new Error(`파일 읽기 실패 (${res.status}) — ${path}`);
   }
   const text = await res.text();
-  if (useCache) await cacheSet(path, text);
+  if (useCache) { await cacheSet(path, text); await rememberCached(path); }
   return text;
+}
+
+/** 검색 범위를 알기 위해 "캐시에 들어있는 경로"를 따로 모아둔다(search.js가 읽는다). */
+async function rememberCached(path) {
+  try {
+    const list = (await kvGet('cached_paths')) || [];
+    if (!list.includes(path)) { list.push(path); await kvSet('cached_paths', list); }
+  } catch {}
 }
 
 function refreshInBackground(path) {
