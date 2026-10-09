@@ -275,6 +275,19 @@
   <button id="syncNowBtn">지금 보내기</button>
 </div>
 
+<!-- 선택 직후 뜨는 작은 팝업 — 바로 질문하지 않고 무엇을 할지 고르게 한다.
+     (실수로 그었을 때 호출이 낭비되지 않고, 복사만 하고 싶을 때도 길이 열린다) -->
+<div id="selPop" class="hidden">
+  <div class="sel-text" id="selPopText"></div>
+  <div class="sel-actions">
+    <button class="sel-btn primary" id="selAsk">🤖 여기서 질문</button>
+    <button class="sel-btn" id="selSend">↗ 다른 앱으로</button>
+    <button class="sel-btn" id="selCopy">📋 복사</button>
+    <button class="sel-btn" id="selNote">✎ 메모에 추가</button>
+    <button class="sel-btn ghost" id="selCancel">✕</button>
+  </div>
+</div>
+
 <!-- 검색 시트 -->
 <div id="searchSheet" class="sheet hidden">
   <div class="sheet-card">

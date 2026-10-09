@@ -7,7 +7,7 @@
 // 또한 api.github.com 요청은 절대 가로채지 않는다 — 인증 헤더가 붙은 요청을 캐시하면
 // 토큰이 섞인 응답이 남을 수 있어서다.
 
-const VERSION = 'v9';
+const VERSION = 'v10';
 const SHELL = `shell-${VERSION}`;
 
 const SHELL_FILES = [

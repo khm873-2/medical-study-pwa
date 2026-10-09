@@ -470,9 +470,13 @@ document.getElementById('wikiNextSec').onclick = () => {
   renderWikiSection();
 };
 
-// ---------- 밑줄/올가미로 긁기 → 질문 ----------
-function handleSelect(text) {
-  if (!text) { toast('글자 위에 밑줄을 그어보세요.'); return; }
+// ---------- 긁기 → 무엇을 할지 고르기 ----------
+//
+// 예전엔 긁자마자 Gemini로 질문이 나갔다. 실수로 그어도 호출이 낭비되고, "복사만 하고
+// 다른 앱에 던지고 싶다"는 길이 막혀 있었다. 이제 작은 팝업으로 한 번 고르게 한다.
+
+function handleSelect(text, info) {
+  if (!text) { toast('글자 위에 선을 그어보세요.'); return; }
   const q = quiz ? quiz.q : null;
   askCtx = {
     term: text,
@@ -486,8 +490,69 @@ function handleSelect(text) {
     subject: currentExam ? currentExam.subject : '',
     lecture: currentExam ? prettyExamName(currentExam.file) : '',
   });
-  askNow(text);
+  showSelPop(text, info && info.box);
 }
+
+/** 선택한 자리 근처에 팝업을 띄운다. */
+function showSelPop(text, box) {
+  const pop = document.getElementById('selPop');
+  document.getElementById('selPopText').textContent = text;
+  pop.classList.remove('hidden');
+
+  // 선택 영역 바로 아래에 두되 화면 밖으로 나가지 않게
+  pop.style.visibility = 'hidden';
+  pop.style.left = '0px';
+  pop.style.top = '0px';
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    let x = 16, y = 16;
+    if (box && pen) {
+      const cr = pen.canvas.getBoundingClientRect();
+      x = cr.left + (box.l + box.r) / 2 - pr.width / 2;
+      y = cr.top + box.b + 10;
+      // 아래로 넘치면 위쪽에
+      if (y + pr.height > window.innerHeight - 8) y = cr.top + box.t - pr.height - 10;
+    } else {
+      x = (window.innerWidth - pr.width) / 2;
+      y = window.innerHeight - pr.height - 90;
+    }
+    pop.style.left = `${Math.max(8, Math.min(x, window.innerWidth - pr.width - 8))}px`;
+    pop.style.top = `${Math.max(8, Math.min(y, window.innerHeight - pr.height - 8))}px`;
+    pop.style.visibility = 'visible';
+  });
+}
+
+function hideSelPop() { document.getElementById('selPop').classList.add('hidden'); }
+
+document.getElementById('selCancel').onclick = hideSelPop;
+document.getElementById('selAsk').onclick = () => {
+  hideSelPop();
+  // 읽기 모드엔 사이드 패널이 없으므로 시트 쪽에 답변을 띄운다
+  if (!document.getElementById('readScreen').classList.contains('hidden')) askInReader(askCtx.term);
+  else askNow(askCtx.term);
+};
+document.getElementById('selSend').onclick = () => { hideSelPop(); fillAskSheet(askCtx.term); };
+document.getElementById('selCopy').onclick = async () => {
+  hideSelPop();
+  try { await navigator.clipboard.writeText(askCtx.term); toast('📋 복사했습니다.'); }
+  catch { toast('복사에 실패했습니다.'); }
+};
+document.getElementById('selNote').onclick = () => {
+  hideSelPop();
+  if (!quiz) { toast('메모는 문제 화면에서만 됩니다.'); return; }
+  const i = quiz.qIndex;
+  quiz.memos[i] = (quiz.memos[i] ? quiz.memos[i] + '\n' : '') + askCtx.term;
+  quiz.persist();
+  document.getElementById('memoInput').value = quiz.memos[i];
+  document.getElementById('memoBox').style.display = 'block';
+  toast('메모에 넣었습니다.');
+};
+// 팝업 밖을 건드리면 닫는다
+document.addEventListener('pointerdown', (e) => {
+  const pop = document.getElementById('selPop');
+  if (pop.classList.contains('hidden')) return;
+  if (!pop.contains(e.target)) hideSelPop();
+}, true);
 
 /**
  * 질문한다 — Gemini 키가 있으면 사이드 패널에 바로 답을, 없으면 기존 앱 전달 시트를 연다.
@@ -727,7 +792,7 @@ function renderReader() {
 function ensureReaderPen() {
   if (readerPen) return;
   readerPen = new PenLayer(document.getElementById('readCard'), {
-    onSelect: (text) => { if (text) openAskFromReader(text); },
+    onSelect: (text, info) => { if (text) openAskFromReader(text, info); },
   });
 }
 
@@ -764,24 +829,29 @@ document.getElementById('readAwake').onclick = async () => {
 document.getElementById('readAsk').onclick = () => {
   const sel = String(window.getSelection() || '').trim();
   if (!sel) { toast('먼저 궁금한 부분을 드래그해서 선택하세요.'); return; }
-  openAskFromReader(sel);
+  openAskFromReader(sel, null);
 };
 
-async function openAskFromReader(term) {
+/** 읽기 모드에서 긁었을 때 — 여기서도 바로 묻지 않고 팝업으로 고르게 한다. */
+function openAskFromReader(term, info) {
   const { note, secIdx } = reader;
   const sec = note.sections[secIdx];
-  askCtx = { term, qnum: '—', qtext: `${note.title} · ${sec.heading}`, question: null };
+  askCtx = { term, qnum: '—', qtext: `${note.title} · ${sec.heading}`, question: null, noteText: sec.text };
   askCtx.prompt = buildPrompt({ term, question: null, subject: note.title, lecture: sec.heading });
+  showSelPop(term, info && info.box);
+}
 
+/** 읽기 모드에서 "여기서 질문"을 고른 경우 — 시트 안에 답변을 띄운다(화면 전환 없음). */
+async function askInReader(term) {
   if (!(await gem.hasKey())) { fillAskSheet(term); return; }
-  // 읽기 모드에선 전용 패널이 없으니 시트 안에 답변을 띄운다(화면은 그대로).
   fillAskSheet(term);
   const ta = document.getElementById('askAnswer');
   const msg = document.getElementById('askMsg');
   msg.textContent = '묻는 중…';
   try {
     const answer = await gem.ask({
-      term, question: null, noteText: sec.text, subject: note.title, lecture: sec.heading,
+      term, question: null, noteText: askCtx.noteText || '',
+      subject: reader ? reader.note.title : '', lecture: askCtx.qtext || '',
     });
     askCtx.answer = answer;
     ta.value = answer;
