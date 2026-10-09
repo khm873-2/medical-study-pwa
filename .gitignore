@@ -1,0 +1,22 @@
+# ⚠️ 이 저장소는 공개다. 의학 콘텐츠가 절대 들어오면 안 된다.
+# (계획서 "콘텐츠 저장소 분리 원칙" — 콘텐츠는 전부 비공개 medical-vault에 있고,
+#  이 앱은 런타임에 PAT로 가져와 쓴다.)
+
+# 혹시라도 복사해 올 수 있는 것들을 선제 차단
+*.md.bak
+06_모의고사/
+02_Wiki/
+98_예습노트_보관/
+00_Raw_Text/
+attachments/
+*.pdf
+
+# 토큰·비밀
+.env
+*.token
+secrets.*
+
+# 잡동사니
+.DS_Store
+node_modules/
+__test_*.mjs
