@@ -68,6 +68,21 @@
     </div>
 
     <div class="card">
+      <h2>백업 · 복원</h2>
+      <p class="muted">
+        iOS는 <b>홈화면 아이콘을 지우면 앱 데이터를 통째로 지웁니다.</b>
+        플래시카드 일정·풀던 시험·저장 대기 중인 결과를 비공개 vault에 자동으로 백업해둡니다.
+        (보안상 GitHub 토큰과 Gemini 키는 백업하지 않습니다 — 다시 설치하면 그 둘만 넣으면 됩니다.)
+      </p>
+      <p class="muted" id="backupInfo" style="margin-top:10px">확인 중…</p>
+      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+        <button class="btn" id="backupNowBtn">지금 백업</button>
+        <button class="btn" id="restoreBtn">백업에서 복원</button>
+      </div>
+      <div id="backupMsg" style="margin-top:10px;font-size:14px"></div>
+    </div>
+
+    <div class="card">
       <h2>저장된 데이터</h2>
       <p class="muted" id="storageInfo">확인 중…</p>
       <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
@@ -195,10 +210,12 @@
       <span class="badge-pill" id="scoreBadge">0/0</span>
       <span class="tool-sep"></span>
       <button class="tool" id="toolErase" title="지우개">🧽</button>
+      <button class="tool" id="toolCapture" title="영역 캡처 (펜으로 네모)">✂️</button>
       <button class="tool" id="toolUndo" title="되돌리기">↶</button>
       <button class="tool" id="toolClear" title="필기 지우기">🗑</button>
       <button class="tool" id="toolWiki" title="관련 노트">📖</button>
       <button class="tool" id="toolAi" title="AI 해설">🤖</button>
+      <button class="tool" id="toolBreak" title="문제 뜯어보기">🔍</button>
     </header>
 
     <div class="split">
@@ -207,6 +224,8 @@
       <div id="qnum"></div>
       <div id="qsource"></div>
       <div id="qtext"></div>
+      <!-- 문제 뜯어보기 — 지문의 단서마다 "시험에서 이게 뭘 뜻하는지"를 붙인다 -->
+      <div id="breakdown" class="breakdown hidden"></div>
       <div id="qimgContainer"></div>
       <div id="optsContainer"></div>
       <div id="ox-row" class="hidden">

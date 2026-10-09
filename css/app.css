@@ -659,3 +659,46 @@ summary.subject-head > .head-row, summary.root-head > .head-row {
 .root-group > summary.root-head:active { background: var(--border); }
 .root-group > .subject-group { margin-left: 10px; }
 .root-group > .subject-group > summary.subject-head { font-weight: 600; padding: 10px 13px; }
+
+/* 모의고사 ↔ 퀴즈 구분, 교수 이름 (2026-10-10) */
+.kind-tag {
+  margin-left: 7px; padding: 2px 7px; border-radius: 6px;
+  background: var(--badge-bg); color: var(--sub);
+  font-size: 11px; font-weight: 700; vertical-align: middle;
+}
+.teacher-tag {
+  margin-left: 7px; color: var(--sub); font-size: 11.5px; font-weight: 500;
+}
+
+/* ═══════════ 문제 뜯어보기 (2026-10-10) ═══════════
+   지문의 단서마다 "시험에서 이게 뭘 뜻하는지"를 붙여 읽는 법을 훈련한다. */
+.breakdown {
+  margin: 14px 0 18px; padding: 13px 15px;
+  background: var(--badge-bg); border-radius: 11px;
+  border-left: 3px solid var(--accent);
+  animation: bdIn .16s ease-out;
+}
+@keyframes bdIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.bd-head { font-size: 12px; font-weight: 700; color: var(--sub); margin-bottom: 9px; }
+.bd-loading { font-size: 14px; color: var(--sub); padding: 4px 0; }
+.bd-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px;
+  padding: 7px 0; font-size: 14px; line-height: 1.5;
+  border-top: 1px solid var(--border);
+}
+.bd-row:first-of-type { border-top: none; }
+.bd-frag {
+  font-weight: 700; color: var(--text);
+  border-bottom: 2px solid var(--accent); padding-bottom: 1px;
+}
+.bd-arrow { color: var(--sub); font-size: 12px; }
+.bd-note { color: var(--sub); flex: 1; min-width: 160px; }
+.bd-concl {
+  margin-top: 4px; padding-top: 10px; border-top: 2px solid var(--border);
+}
+.bd-concl .bd-note { color: var(--accent); font-weight: 700; }
+/* 지문 쪽에 같은 조각을 표시해 눈으로 잇는다 */
+#qtext .tok.bd-mark {
+  background: linear-gradient(transparent 62%, rgba(37,99,235,.22) 62%);
+  border-radius: 2px;
+}

@@ -29,14 +29,17 @@ export class PenLayer {
    * @param {Function} opts.onSelect (text, info) => void  텍스트를 긁었을 때
    * @param {Function} opts.onTap    (el, e) => boolean    펜으로 탭했을 때(true면 소비)
    * @param {Function} opts.onChange ()=>void              획 변화(저장용)
+   * @param {Function} opts.onCapture (box) => void         캡처 모드에서 네모를 쳤을 때
    */
-  constructor(host, { onSelect, onTap, onChange } = {}) {
+  constructor(host, { onSelect, onTap, onChange, onCapture } = {}) {
     this.host = host;
     this.onSelect = onSelect || (() => {});
     this.onTap = onTap || (() => false);
     this.onChange = onChange || (() => {});
+    this.onCapture = onCapture || (() => {});
 
     this.erasing = false;        // 지우개 버튼을 켠 상태
+    this.capturing = false;      // 캡처 버튼을 켠 상태 — 네모 친 영역을 이미지로 뜬다
     this.color = '#2563eb';
     this.width = 2.6;
     this.strokes = [];
@@ -259,6 +262,14 @@ export class PenLayer {
     const box = boundsOf(pend);
     const w = box.r - box.l, h = box.b - box.t;
 
+    // 캡처 모드 — 네모 친 영역을 **이미지로** 넘긴다(글자 추출이 아니라).
+    // 표·그림·수식처럼 텍스트로 긁어봐야 의미가 깨지는 걸 그대로 들고 가려는 용도.
+    if (this.capturing) {
+      this.redraw();
+      if (Math.max(w, h) >= BOX_MIN) this.onCapture(box);
+      return;
+    }
+
     // 너무 작으면 선택 의도가 아니다 → 필기로 남긴다
     if (Math.max(w, h) < BOX_MIN) {
       pend.forEach((s) => { if (s.pts.length > 1) this.strokes.push(s); });
@@ -397,7 +408,8 @@ export class PenLayer {
     ctx.restore();
   }
 
-  setErasing(on) { this.erasing = !!on; }
+  setErasing(on) { this.erasing = !!on; if (on) this.capturing = false; }
+  setCapturing(on) { this.capturing = !!on; if (on) this.erasing = false; }
   clear() { this.strokes = []; this.redraw(); this.onChange(); }
   undo() { this.strokes.pop(); this.redraw(); this.onChange(); }
   get isEmpty() { return this.strokes.length === 0; }

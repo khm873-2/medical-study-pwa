@@ -146,3 +146,48 @@ export function base64EncodeUtf8(str) {
   }
   return btoa(bin);
 }
+
+/**
+ * 파일 하나를 **덮어쓴다**(없으면 만든다).
+ *
+ * 이 저장소의 원칙은 append-only다 — 노트를 덮어쓰면 옵시디언·클로드코드 편집과
+ * 충돌하기 때문이다. 하지만 앱 상태 백업처럼 **앱만 쓰는 파일**은 충돌 상대가 없고,
+ * 매번 새 파일을 만들면 수천 개가 쌓인다. 그래서 이 함수는 백업 전용으로만 쓴다.
+ */
+export async function putFile(path, content, message) {
+  const repo = await getRepo();
+  const b64 = base64EncodeUtf8(content);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let sha;
+    const cur = await fetch(`${API}/repos/${repo}/contents/${encPath(path)}`, {
+      headers: await headers({ Accept: 'application/vnd.github+json' }),
+    });
+    if (cur.ok) sha = (await cur.json()).sha;
+    else if (cur.status !== 404) throw new Error(`백업 조회 실패 (${cur.status})`);
+
+    const res = await fetch(`${API}/repos/${repo}/contents/${encPath(path)}`, {
+      method: 'PUT',
+      headers: await headers({
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+      }),
+      body: JSON.stringify({ message: message || `iPad: ${path}`, content: b64, ...(sha ? { sha } : {}) }),
+    });
+    if (res.ok) return { path };
+    if (res.status === 409) continue;      // 그사이 바뀜 → sha 다시 읽어 재시도
+    const body = await res.text().catch(() => '');
+    throw new Error(`백업 저장 실패 (${res.status}) — ${body.slice(0, 160)}`);
+  }
+  throw new Error('백업 저장 실패 — 다른 기기와 충돌이 계속됩니다.');
+}
+
+/** 캐시를 거치지 않고 읽는다. 없으면 null(백업 존재 확인용). */
+export async function getTextIfExists(path) {
+  const repo = await getRepo();
+  const res = await fetch(`${API}/repos/${repo}/contents/${encPath(path)}`, {
+    headers: await headers({ Accept: 'application/vnd.github.raw' }),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`조회 실패 (${res.status}) — ${path}`);
+  return res.text();
+}

@@ -505,6 +505,108 @@ await run('위키 렌더', async () => {
   return out;
 });
 
+// ══════════ 5g. 캡처 모드 · 문제 뜯어보기 (2026-10-10) ══════════
+await run('신규 기능', async () => {
+  const out = [];
+  document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+
+  // 버튼이 있는가
+  const cap = document.getElementById('toolCapture');
+  const brk = document.getElementById('toolBreak');
+  out.push({ name: '캡처 버튼이 지우개 옆에 있다',
+    ok: !!cap && cap.previousElementSibling && cap.previousElementSibling.id === 'toolErase' });
+  out.push({ name: '뜯어보기 버튼이 있다', ok: !!brk });
+  out.push({ name: '두 버튼 모두 탭 가능한 크기',
+    ok: cap.getBoundingClientRect().height >= 34 && brk.getBoundingClientRect().height >= 34,
+    detail: `${Math.round(cap.getBoundingClientRect().height)}px` });
+
+  // 펜 레이어의 캡처 모드
+  const { PenLayer } = await import('/js/pen.js');
+  let captured = null, selected = null;
+  const pen = new PenLayer(document.getElementById('qcard'), {
+    onSelect: (t) => { selected = t; },
+    onCapture: (b) => { captured = b; },
+  });
+  out.push({ name: '펜 레이어가 캡처 모드를 안다', ok: typeof pen.setCapturing === 'function' });
+  pen.setCapturing(true);
+  out.push({ name: '캡처를 켜면 지우개가 꺼진다', ok: pen.capturing && !pen.erasing });
+  pen.setErasing(true);
+  out.push({ name: '지우개를 켜면 캡처가 꺼진다', ok: pen.erasing && !pen.capturing });
+  pen.setErasing(false);
+  pen.setCapturing(true);
+
+  // 지문을 토큰으로 채우고 네모를 그린다
+  const mk = (t) => t.split(/(\s+)/).map((w) => /^\s+$/.test(w) ? w : `<span class="tok">${w}</span>`).join('');
+  const QTEXT = '12세 남아가 왼쪽 무릎이 아파 병원에 왔다. 항생제와 비스테로이드 소염제로 치료를 하였으나 좋아지지 않았다. metaphysis에서 발생한 골종양 소견이 확인되었다.';
+  document.getElementById('qtext').innerHTML = mk(QTEXT);
+
+  const pev = (type, x, y) => {
+    const e = new PointerEvent(type, { pointerId: 1, pointerType: 'pen', isPrimary: true,
+      pressure: type === 'pointerup' ? 0 : 0.5, clientX: x, clientY: y,
+      bubbles: true, cancelable: true, composed: true });
+    (document.elementFromPoint(x, y) || document.body).dispatchEvent(e);
+  };
+  const toks = [...document.querySelectorAll('#qtext .tok')];
+  const a = toks[0].getBoundingClientRect(), b = toks[5].getBoundingClientRect();
+  pev('pointerdown', a.left - 4, a.top - 4);
+  for (let i = 1; i <= 6; i++) pev('pointermove', a.left + ((b.right - a.left) * i) / 6, a.top + ((b.bottom - a.top) * i) / 6);
+  pev('pointerup', b.right + 4, b.bottom + 4);
+  await new Promise((r) => setTimeout(r, 520));
+
+  out.push({ name: '캡처 모드에서 네모 → onCapture가 불린다', ok: !!captured,
+    detail: captured ? `${Math.round(captured.r - captured.l)}x${Math.round(captured.b - captured.t)}` : 'null' });
+  out.push({ name: '캡처 모드에서는 텍스트를 선택하지 않는다', ok: selected === null });
+  out.push({ name: '캡처 모드에서 궤적을 남기지 않는다', ok: pen.strokes.length === 0,
+    detail: `${pen.strokes.length} stroke` });
+  pen.destroy();
+
+  // 캡처 모듈이 실제로 이미지를 만드는가
+  const { captureRect, canvasToBlob } = await import('/js/capture.js');
+  const qb = document.getElementById('qcard').getBoundingClientRect();
+  const cv = await captureRect({ left: qb.left + 5, top: qb.top + 5, width: 200, height: 80 });
+  out.push({ name: '캡처가 캔버스를 만든다', ok: cv && cv.width > 100 && cv.height > 40,
+    detail: cv ? `${cv.width}x${cv.height}` : 'null' });
+  const blob = await canvasToBlob(cv);
+  out.push({ name: '캡처가 PNG blob을 만든다', ok: blob && blob.type === 'image/png' && blob.size > 100,
+    detail: blob ? `${blob.type} ${blob.size}B` : 'null' });
+
+  // ── 문제 뜯어보기 렌더링 ──
+  const { parseBreakdown } = await import('/js/gemini.js');
+  const resp = [
+    'metaphysis에서 발생한 골종양 || 골간단 발생 → 골육종 전형 위치',
+    '항생제와 비스테로이드 소염제로 치료를 하였으나 좋아지지 않았다 || 골수염 배제',
+    '지문에 없는 문장 || 이건 버려져야 한다',
+    '⇒ || 골육종을 묻는 문제',
+  ].join('\n');
+  const items = parseBreakdown(resp, QTEXT);
+  out.push({ name: '지문에 없는 조각은 버린다', ok: items.length === 3, detail: `${items.length}개` });
+  out.push({ name: '결론 줄을 따로 표시한다', ok: items[items.length - 1].conclusion === true });
+
+  const el = document.getElementById('breakdown');
+  out.push({ name: '뜯어보기 영역이 지문 바로 아래', ok: !!el &&
+    el.previousElementSibling && el.previousElementSibling.id === 'qtext' });
+  el.classList.remove('hidden');
+  el.innerHTML = '';
+  for (const it of items) {
+    const row = document.createElement('div');
+    row.className = it.conclusion ? 'bd-row bd-concl' : 'bd-row';
+    if (!it.conclusion) {
+      const f = document.createElement('span'); f.className = 'bd-frag'; f.textContent = it.frag; row.appendChild(f);
+    }
+    const n = document.createElement('span'); n.className = 'bd-note'; n.textContent = it.note; row.appendChild(n);
+    el.appendChild(row);
+  }
+  out.push({ name: '뜯어보기가 화면에 높이를 가진다', ok: el.getBoundingClientRect().height > 40,
+    detail: `${Math.round(el.getBoundingClientRect().height)}px` });
+  const frag = el.querySelector('.bd-frag');
+  out.push({ name: '원문 조각에 밑줄 강조',
+    ok: getComputedStyle(frag).borderBottomWidth !== '0px', detail: getComputedStyle(frag).borderBottomWidth });
+  out.push({ name: '결론 줄이 강조된다',
+    ok: Number(getComputedStyle(el.querySelector('.bd-concl .bd-note')).fontWeight) >= 700 });
+  return out;
+});
+
 // ══════════ 6. 좁은 화면(아이패드 세로) ══════════
 await page.setViewport({ width: 820, height: 1180 });
 await new Promise((r) => setTimeout(r, 120));

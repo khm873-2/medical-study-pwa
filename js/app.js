@@ -2,11 +2,13 @@
 
 import { hasToken, setToken, clearToken, verifyToken, getRepo, setRepo } from './auth.js';
 import { listDir, getText, getBlobUrl, createFile } from './github.js';
-import { parseExamHtml, prettyExamName, examDate } from './parser.js';
+import { parseExamHtml, prettyExamName, examDate, examSortKey, teacherName } from './parser.js';
 import { Quiz } from './quiz.js';
 import { PenLayer, tokenizeTree } from './pen.js';
 import * as gem from './gemini.js';
 import { wikiFor, fitLabel } from './wiki.js';
+import * as backup from './backup.js';
+import { captureRect, canvasToBlob, copyBlobToClipboard } from './capture.js';
 import { renderMarkdown, hydrateEmbeds } from './markdown.js';
 import { buildPrompt, appList, sendTo, share, buildQaMarkdown } from './ask.js';
 import {
@@ -19,7 +21,12 @@ import {
   allSessions, clearSession,
 } from './db.js';
 
-const EXAM_ROOT = '06_모의고사';
+// 모의고사와 퀴즈를 둘 다 읽는다 — vault에서 내가 만든 퀴즈도 앱에서 풀 수 있어야 한다.
+// 두 폴더의 HTML이 같은 QUESTIONS 스키마를 쓰므로 파서는 그대로 재사용한다(2026-10-10).
+const EXAM_ROOTS = [
+  { root: '06_모의고사', kind: '모의고사' },
+  { root: '05_퀴즈', kind: '퀴즈' },
+];
 const LOG_DIR = '00_Raw_Text/AI대화로그';
 
 const screens = ['setupScreen', 'listScreen', 'quizScreen', 'resultScreen', 'readScreen', 'cardScreen'];
@@ -48,6 +55,8 @@ async function openSetup() {
   document.getElementById('setupMsg').textContent = '';
   document.getElementById('setupCloseBtn').classList.toggle('hidden', !(await hasToken()));
   updateStorageInfo();
+  refreshBackupInfo();
+  document.getElementById('backupMsg').textContent = '';
   if (await hasToken()) renderCacheList();
   show('setupScreen');
 }
@@ -117,8 +126,78 @@ document.getElementById('saveTokenBtn').onclick = async () => {
   msg.className = 'ok';
   msg.textContent = `연결됨 — ${r.name}${r.private ? ' (비공개)' : ''}`;
   document.getElementById('setupCloseBtn').classList.remove('hidden');
+  refreshBackupInfo();
+  await offerRestoreIfFresh();        // 새로 설치했으면 백업을 되살릴지 묻는다
   setTimeout(() => loadList(true), 700);
 };
+
+// ---------- 백업 · 복원 ----------
+// iOS는 홈화면 아이콘을 지우면 앱 데이터를 통째로 지운다. 아이콘을 바꾸려면 지웠다
+// 다시 추가하는 수밖에 없어서, 그때마다 플래시카드 일정·이어풀기가 날아갔다(2026-10-09).
+async function refreshBackupInfo() {
+  const el = document.getElementById('backupInfo');
+  if (!el) return;
+  if (!(await hasToken())) { el.textContent = '토큰을 연결하면 백업할 수 있습니다.'; return; }
+  const at = await backup.lastBackupAt();
+  el.textContent = at
+    ? `마지막 백업: ${new Date(at).toLocaleString('ko-KR')}`
+    : '아직 백업한 적이 없습니다.';
+}
+
+/** 이 기기가 "방금 설치한 빈 상태"면 백업 복원을 제안한다. */
+async function offerRestoreIfFresh() {
+  const mine = await backup.collectState();
+  const empty = !Object.keys(mine.kv.srs || {}).length
+    && !Object.keys(mine.sessions || {}).length;
+  if (!empty) return;
+  let remote;
+  try { remote = await backup.fetchBackup(); } catch { return; }
+  if (!remote) return;
+  const msg = document.getElementById('backupMsg');
+  msg.className = '';
+  msg.innerHTML = '';
+  const box = document.createElement('div');
+  box.className = 'warn-box';
+  box.textContent = `이전 백업이 있습니다 — ${backup.describe(remote)}. 되살릴까요?`;
+  const btn = document.createElement('button');
+  btn.className = 'btn primary';
+  btn.style.marginTop = '10px';
+  btn.textContent = '복원하기';
+  btn.onclick = () => doRestore(remote);
+  msg.append(box, btn);
+}
+
+async function doRestore(state) {
+  const msg = document.getElementById('backupMsg');
+  msg.className = ''; msg.textContent = '복원 중…';
+  try {
+    const got = state || (await backup.fetchBackup());
+    if (!got) { msg.className = 'err'; msg.textContent = '백업을 찾지 못했습니다.'; return; }
+    const n = await backup.restore(got);
+    msg.className = 'ok';
+    msg.textContent =
+      `복원 완료 — 플래시카드 ${n.srs}장 · 시험 ${n.sessions}개 · 저장 대기 ${n.outbox}건. ` +
+      'GitHub 토큰과 Gemini 키는 보안상 백업하지 않으므로 직접 넣어주세요.';
+    await applyTheme();
+    refreshBackupInfo();
+    updateStorageInfo();
+  } catch (e) {
+    msg.className = 'err'; msg.textContent = `복원 실패: ${e.message}`;
+  }
+}
+
+document.getElementById('backupNowBtn').onclick = async () => {
+  const msg = document.getElementById('backupMsg');
+  msg.className = ''; msg.textContent = '백업 중…';
+  try {
+    const s = await backup.backupNow();
+    msg.className = 'ok'; msg.textContent = `백업했습니다 — ${backup.describe(s)}`;
+    refreshBackupInfo();
+  } catch (e) {
+    msg.className = 'err'; msg.textContent = `백업 실패: ${e.message}`;
+  }
+};
+document.getElementById('restoreBtn').onclick = () => doRestore(null);
 
 document.getElementById('saveGeminiBtn').onclick = async () => {
   const msg = document.getElementById('geminiMsg');
@@ -202,24 +281,35 @@ async function loadList(force) {
   body.innerHTML = '<p class="muted">불러오는 중…</p>';
 
   try {
-    const cacheKey = 'exam_index';
+    const cacheKey = 'exam_index_v2';     // 퀴즈가 들어오면서 구조가 바뀌어 키를 올린다
     let index = force ? null : await kvGet(cacheKey);
     if (!index) {
-      const subjects = (await listDir(EXAM_ROOT)).filter((e) => e.type === 'dir');
-      index = [];
-      for (const s of subjects) {
-        const files = (await listDir(s.path)).filter(
-          (f) => f.type === 'file' && f.name.endsWith('.html')
-        );
-        if (files.length) {
-          index.push({
-            subject: s.name,
-            exams: files
-              .map((f) => ({ file: f.name, path: f.path }))
-              .sort((a, b) => a.file.localeCompare(b.file, 'ko')),
-          });
+      const byKey = new Map();            // "과목 · 종류" 단위로 묶는다
+      for (const { root, kind } of EXAM_ROOTS) {
+        let subjects;
+        try { subjects = (await listDir(root)).filter((e) => e.type === 'dir'); }
+        catch { continue; }               // 폴더가 없는 과목도 있다 — 조용히 넘어간다
+        for (const sub of subjects) {
+          let files;
+          try { files = await listDir(sub.path); } catch { continue; }
+          const items = files
+            .filter((f) => f.type === 'file' && f.name.endsWith('.html') && !f.name.startsWith('_'))
+            .map((f) => ({ file: f.name, path: f.path, kind }));
+          if (!items.length) continue;
+          const k = `${sub.name}|${kind}`;
+          if (!byKey.has(k)) byKey.set(k, { subject: sub.name, kind, exams: [] });
+          byKey.get(k).exams.push(...items);
         }
       }
+      index = [...byKey.values()];
+      for (const g of index) {
+        // 날짜 **내림차순** — 최근에 배운 것부터 복습한다(2026-10-10 요청)
+        g.exams.sort((a, b) => examSortKey(b.file).localeCompare(examSortKey(a.file))
+          || a.file.localeCompare(b.file, 'ko'));
+      }
+      // 모의고사를 먼저, 그 다음 퀴즈. 같은 종류 안에서는 과목 이름순.
+      index.sort((a, b) => (a.kind === b.kind ? a.subject.localeCompare(b.subject, 'ko')
+        : a.kind === '모의고사' ? -1 : 1));
       await kvSet(cacheKey, index);
     }
     renderList(index, await allSessions());
@@ -254,16 +344,18 @@ function renderList(index, sessions) {
   index.forEach((group, gi) => {
     const det = document.createElement('details');
     det.className = 'subject-group';
-    det.open = lastOpen ? group.subject === lastOpen : gi === 0;
-    det.ontoggle = () => { if (det.open) localStorage.setItem('open_subject', group.subject); };
+    const gkey = `${group.subject}|${group.kind || ''}`;
+    det.open = lastOpen ? gkey === lastOpen : gi === 0;
+    det.ontoggle = () => { if (det.open) localStorage.setItem('open_subject', gkey); };
 
     const sum = document.createElement('summary');
     sum.className = 'subject-head';
     const inProgress = group.exams.filter((e) => sessions[e.path]).length;
-    sum.innerHTML =
-      `<span>${escapeText(group.subject.replace(/_/g, ' '))}</span>` +
+    sum.innerHTML = '<span class="head-row">' +
+      `<span>${escapeText(group.subject.replace(/_/g, ' '))}` +
+      `<span class="kind-tag">${escapeText(group.kind || '모의고사')}</span></span>` +
       `<span class="subject-count">${group.exams.length}개` +
-      (inProgress ? ` · 풀던 중 ${inProgress}` : '') + `</span>`;
+      (inProgress ? ` · 풀던 중 ${inProgress}` : '') + '</span></span>';
     det.appendChild(sum);
     body.appendChild(det);
 
@@ -278,6 +370,13 @@ function renderList(index, sessions) {
       const nameWrap = document.createElement('span');
       nameWrap.className = 'exam-name';
       nameWrap.textContent = prettyExamName(ex.file);
+      const who = teacherName(ex.file);
+      if (who) {
+        const t = document.createElement('span');
+        t.className = 'teacher-tag';
+        t.textContent = who;
+        nameWrap.appendChild(t);
+      }
 
       const s = sessions[ex.path];
       if (s) {
@@ -353,6 +452,7 @@ function ensurePen() {
   const host = document.querySelector('#quizScreen .split') || document.getElementById('qcard');
   pen = new PenLayer(host, {
     onSelect: handleSelect,
+    onCapture: handleCapture,
     onTap: handlePenTap,
     onChange: () => { if (quiz) penStrokes[quiz.qIndex] = pen.serialize(); },
   });
@@ -746,6 +846,143 @@ function updatePaneLayout() {
   document.getElementById('toolAi').classList.toggle('active', aiOpen);
   document.getElementById('toolWiki').classList.toggle('active', wikiOpen);
 }
+
+// ---------- 영역 캡처 ----------
+// 글자 긁기로는 표·그림·수식이 깨진다 → 보이는 그대로 이미지로 떠서 클립보드에 넣는다.
+async function handleCapture(box) {
+  const r = pen.canvas.getBoundingClientRect();
+  const rect = {
+    left: r.left + box.l, top: r.top + box.t,
+    width: box.r - box.l, height: box.b - box.t,
+  };
+  toast('캡처하는 중…');
+  try {
+    const cv = await captureRect(rect);
+    const blob = await canvasToBlob(cv);
+    if (!blob) throw new Error('이미지를 만들지 못했습니다.');
+    try {
+      await copyBlobToClipboard(Promise.resolve(blob));
+      toast('📋 이미지를 복사했습니다.');
+    } catch {
+      // iOS에서 클립보드 권한이 없으면 — 새 탭으로 띄워 길게 눌러 저장하게 한다
+      const url = URL.createObjectURL(blob);
+      const w = window.open();
+      if (w) { w.document.write(`<img src="${url}" style="max-width:100%">`); toast('새 탭에 띄웠습니다 — 길게 눌러 저장하세요.'); }
+      else toast('복사에 실패했습니다.');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
+  } catch (e) {
+    toast(`캡처 실패: ${e.message}`);
+  }
+}
+
+document.getElementById('toolCapture').onclick = () => {
+  if (!pen) return;
+  const on = !pen.capturing;
+  pen.setCapturing(on);
+  document.getElementById('toolCapture').classList.toggle('active', on);
+  document.getElementById('toolErase').classList.remove('active');
+  toast(on ? '캡처 모드 — 펜으로 네모를 그리세요' : '캡처 모드 끔');
+};
+
+// ---------- 문제 뜯어보기 ----------
+// 지문을 단서별로 끊어 "시험에서 이게 뭘 뜻하는지"를 붙인다.
+// 답을 알려주는 게 아니라 읽는 법을 훈련하는 용도(2026-10-10 요청).
+let breakdownBusy = false;
+
+async function runBreakdown() {
+  if (!quiz || breakdownBusy) return;
+  const q = quiz.all[quiz.order[quiz.cur]];
+  const el = document.getElementById('breakdown');
+
+  // 이미 떠 있으면 토글로 닫는다
+  if (!el.classList.contains('hidden') && el.dataset.forNum === String(q.num)) {
+    el.classList.add('hidden');
+    document.getElementById('toolBreak').classList.remove('active');
+    return;
+  }
+  if (!(await gem.hasKey())) { askNoKey(q.q); return; }
+
+  breakdownBusy = true;
+  el.dataset.forNum = String(q.num);
+  el.classList.remove('hidden');
+  el.innerHTML = '<div class="bd-loading">지문을 뜯어보는 중…</div>';
+  document.getElementById('toolBreak').classList.add('active');
+  try {
+    const items = await gem.breakdown(q);
+    renderBreakdown(el, items, q);
+  } catch (e) {
+    const wait = /^RATE_WAIT:(\d+)$/.exec(e.message);
+    el.innerHTML = '';
+    const w = document.createElement('div');
+    w.className = 'warn-box';
+    w.textContent = wait ? `요청이 많습니다 — ${wait[1]}초 뒤에 다시 눌러주세요.` : e.message;
+    el.appendChild(w);
+  } finally {
+    breakdownBusy = false;
+    if (pen) requestAnimationFrame(() => pen.resize());
+  }
+}
+
+function renderBreakdown(el, items, q) {
+  el.innerHTML = '';
+  if (!items.length) {
+    el.innerHTML = '<p class="muted">뜯어볼 단서를 찾지 못했습니다.</p>';
+    return;
+  }
+  const head = document.createElement('div');
+  head.className = 'bd-head';
+  head.textContent = '🔍 지문 뜯어보기';
+  el.appendChild(head);
+
+  for (const it of items) {
+    const row = document.createElement('div');
+    row.className = it.conclusion ? 'bd-row bd-concl' : 'bd-row';
+    if (!it.conclusion) {
+      const f = document.createElement('span');
+      f.className = 'bd-frag';
+      f.textContent = it.frag;
+      row.appendChild(f);
+      const arrow = document.createElement('span');
+      arrow.className = 'bd-arrow';
+      arrow.textContent = '→';
+      row.appendChild(arrow);
+    }
+    const n = document.createElement('span');
+    n.className = 'bd-note';
+    n.textContent = it.note;
+    row.appendChild(n);
+    el.appendChild(row);
+  }
+  // 지문에서 해당 조각에 밑줄을 그어 눈으로 잇는다
+  highlightFragments(items);
+  tokenizeTree(el);     // 분석 결과도 펜으로 긁어서 다시 물어볼 수 있게
+}
+
+/** 지문 안의 해당 조각에 밑줄 표시. 토큰 구조를 깨지 않게 조각 단위로만 감싼다. */
+function highlightFragments(items) {
+  const host = document.getElementById('qtext');
+  if (!host) return;
+  host.querySelectorAll('.bd-mark').forEach((m) => m.classList.remove('bd-mark'));
+  const frags = items.filter((x) => !x.conclusion).map((x) => x.frag);
+  const toks = [...host.querySelectorAll('.tok')];
+  if (!toks.length) return;
+  for (const frag of frags) {
+    // 토큰들을 이어붙여 조각과 겹치는 구간을 찾는다
+    let acc = '';
+    const starts = [];
+    toks.forEach((t) => { starts.push(acc.length); acc += t.textContent; });
+    const at = acc.indexOf(frag.replace(/\s+/g, ''));
+    if (at < 0) continue;
+    const end = at + frag.replace(/\s+/g, '').length;
+    toks.forEach((t, i) => {
+      const a = starts[i], b = a + t.textContent.length;
+      if (b > at && a < end) t.classList.add('bd-mark');
+    });
+  }
+}
+
+document.getElementById('toolBreak').onclick = runBreakdown;
 
 // ---------- 패널 크기 조절 ----------
 // 사용자가 "창이 2~3개 생기는데 크기 조절이 됐으면" 요청. 끌어서 조절하고 기억한다.
@@ -1230,6 +1467,7 @@ async function advanceCard(remembered) {
   const c = cardDeck.cards[cardDeck.idx];
   gradeCard(cardDeck.srs, c.id, remembered);
   await saveSrs(cardDeck.srs);
+  backup.scheduleBackup();       // 외운 기록은 되찾을 수 없다 — 모아서 vault에 올린다
   if (cardDeck.idx + 1 >= cardDeck.cards.length) {
     const s = srsStats(cardDeck.all, cardDeck.srs);
     toast(`끝! 처음 ${s.new} · 학습중 ${s.learning} · 익힘 ${s.mature}`);
@@ -1533,6 +1771,11 @@ function alertBox(text) {
   box.textContent = text;
   body.prepend(box);
 }
+
+// 앱이 가려질 때 대기 중인 백업을 밀어낸다 — iOS는 백그라운드 타이머를 멈춘다.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') backup.flushBackup().catch(() => {});
+});
 
 // ---------- 시작 ----------
 (async function init() {

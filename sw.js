@@ -7,7 +7,7 @@
 // 또한 api.github.com 요청은 절대 가로채지 않는다 — 인증 헤더가 붙은 요청을 캐시하면
 // 토큰이 섞인 응답이 남을 수 있어서다.
 
-const VERSION = 'v19';
+const VERSION = 'v20';
 const SHELL = `shell-${VERSION}`;
 
 const SHELL_FILES = [
@@ -28,6 +28,8 @@ const SHELL_FILES = [
   './js/reader.js',
   './js/search.js',
   './js/gemini.js',
+  './js/backup.js',
+  './js/capture.js',
 ];
 
 self.addEventListener('install', (e) => {

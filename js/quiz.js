@@ -4,6 +4,7 @@
 import { getBlobUrl } from './github.js';
 import { imagePaths } from './parser.js';
 import { saveSession, loadSession, clearSession } from './db.js';
+import { scheduleBackup } from './backup.js';
 import { tokenize, tokenizeTree } from './pen.js';
 
 const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
@@ -107,6 +108,7 @@ export class Quiz {
       title: this.title,
       total: this.all.length,
     }).catch(() => {});
+    scheduleBackup();   // 이어풀기 상태도 재설치 때 되살릴 수 있게
   }
   _debouncePersist() {
     clearTimeout(this._pt);
