@@ -803,3 +803,23 @@ summary.subject-head > .head-row, summary.root-head > .head-row {
   cursor: pointer; min-height: 32px;
 }
 .key-del:active { background: var(--badge-bg); }
+
+/* 새 버전 알림 — 배포해도 안 바뀌던 문제(2026-10-10) 이후 추가.
+   캐시 때문에 옛 버전에 머무르면 사용자가 알 길이 없었다. */
+#updateBar {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom) + 16px);
+  display: flex; align-items: center; gap: 12px;
+  background: var(--accent); color: #fff;
+  padding: 11px 13px 11px 18px; border-radius: 24px;
+  font-size: 14px; font-weight: 600; z-index: 300;
+  box-shadow: 0 8px 28px rgba(0,0,0,.26);
+  animation: capIn .2s ease-out;
+}
+#updateBar button {
+  border: none; background: rgba(255,255,255,.22); color: #fff;
+  border-radius: 16px; padding: 7px 14px; font-size: 13px; font-weight: 700;
+  font-family: inherit; cursor: pointer; min-height: 34px; white-space: nowrap;
+}
+#updateBar button:active { background: rgba(255,255,255,.34); }
+#updateBar button:disabled { opacity: .6; }

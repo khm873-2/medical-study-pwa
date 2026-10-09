@@ -938,6 +938,51 @@ await run('탭 분리', () => {
   return out;
 });
 
+// ══════════ 5l. 서비스워커가 옛 버전에 갇히지 않는가 (2026-10-10 버그) ══════════
+// 배포했는데 아이패드에서 안 바뀌었다. GitHub Pages가 max-age=600을 주는 탓에
+// sw.js가 fetch해도 **브라우저 HTTP 캐시가 옛 파일을 돌려줘서** 네트워크 우선이
+// 무력화되고 있었다. cache:'no-cache'로 매번 서버에 검증하게 바꿨다.
+await run('캐시 우회', () => {
+  const out = [];
+  return fetch('/sw.js').then((r) => r.text()).then(async (sw) => {
+    out.push({ name: "fetch에 cache:'no-cache'를 준다",
+      ok: /fetch\(e\.request,\s*\{\s*cache:\s*'no-cache'\s*\}\)/.test(sw),
+      detail: (sw.match(/fetch\(e\.request[^)]*\)/) || [''])[0] });
+    out.push({ name: '설치 때도 캐시를 거치지 않는다',
+      ok: /addAll\(SHELL_FILES\.map\(\(u\) => new Request\(u, \{ cache: 'no-cache' \}\)\)\)/.test(sw) });
+    out.push({ name: '실패한 응답은 캐시에 넣지 않는다', ok: /if \(res && res\.ok\)/.test(sw) });
+    out.push({ name: 'SKIP_WAITING 메시지를 받는다', ok: /SKIP_WAITING/.test(sw) });
+    out.push({ name: 'VERSION을 돌려준다', ok: /e\.ports\[0\]\.postMessage/.test(sw) });
+
+    const app = await fetch('/js/app.js').then((r) => r.text());
+    out.push({ name: '켤 때마다 새 버전을 확인한다', ok: /reg\.update\(\)/.test(app) });
+    out.push({ name: '포그라운드로 돌아올 때도 확인한다',
+      ok: /visibilitychange[\s\S]{0,200}check\(\)/.test(app) });
+    out.push({ name: '새 버전이 있으면 알린다', ok: /showUpdateBar/.test(app) });
+    out.push({ name: '첫 설치에는 알리지 않는다(controller 있을 때만)',
+      ok: /navigator\.serviceWorker\.controller\) showUpdateBar/.test(app) });
+    out.push({ name: '교체되면 화면을 새로 그린다', ok: /controllerchange[\s\S]{0,160}location\.reload/.test(app) });
+    out.push({ name: '새로고침이 한 번만 돈다(무한루프 방지)', ok: /reloaded/.test(app) });
+    out.push({ name: '설정에 앱 버전이 보인다', ok: !!document.getElementById('appVersion') });
+
+    // 업데이트 배너가 실제로 보이고 눌리는가
+    const bar = document.createElement('div');
+    bar.id = 'updateBar';
+    bar.innerHTML = '<span>새 버전이 준비됐습니다</span><button>지금 적용</button>';
+    document.body.appendChild(bar);
+    const cs = getComputedStyle(bar);
+    const btn = bar.querySelector('button');
+    out.push({ name: '배너가 화면 위에 뜬다', ok: cs.position === 'fixed' && Number(cs.zIndex) >= 300,
+      detail: `${cs.position} z=${cs.zIndex}` });
+    out.push({ name: '배너 버튼이 눌릴 크기', ok: btn.getBoundingClientRect().height >= 32,
+      detail: `${Math.round(btn.getBoundingClientRect().height)}px` });
+    out.push({ name: '배너가 화면 안에 있다',
+      ok: bar.getBoundingClientRect().left >= 0 && bar.getBoundingClientRect().right <= window.innerWidth + 1 });
+    bar.remove();
+    return out;
+  });
+});
+
 // ══════════ 6. 좁은 화면(아이패드 세로) ══════════
 await page.setViewport({ width: 820, height: 1180 });
 await new Promise((r) => setTimeout(r, 120));

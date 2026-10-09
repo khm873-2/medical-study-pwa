@@ -57,6 +57,10 @@ async function openSetup() {
   updateStorageInfo();
   refreshBackupInfo();
   renderKeyList();
+  runningVersion().then((v) => {
+    const el = document.getElementById('appVersion');
+    if (el) el.textContent = `앱 버전 ${v}`;
+  });
   document.getElementById('backupMsg').textContent = '';
   if (await hasToken()) renderCacheList();
   show('setupScreen');
@@ -1949,6 +1953,68 @@ function alertBox(text) {
   body.prepend(box);
 }
 
+// ---------- 서비스워커 · 업데이트 ----------
+// 배포해도 아이패드에서 안 바뀌는 일이 있었다. 두 겹의 캐시가 원인이다:
+//   ① GitHub Pages의 max-age=600 → sw.js가 fetch해도 HTTP 캐시가 옛 파일을 준다(sw.js에서 해결)
+//   ② 이미 켜져 있는 앱은 새 워커가 대기만 하고 교체되지 않는다(여기서 해결)
+// 새 버전이 준비되면 **알려주고 한 번 눌러 바로 넘어가게** 한다.
+function initServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    // 앱을 켤 때마다, 그리고 다시 포그라운드로 올 때마다 새 버전을 확인한다
+    const check = () => reg.update().catch(() => {});
+    check();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') check();
+    });
+    reg.addEventListener('updatefound', () => {
+      const sw = reg.installing;
+      if (!sw) return;
+      sw.addEventListener('statechange', () => {
+        // 이미 쓰던 앱이 있을 때만 "새 버전" — 첫 설치는 그냥 쓰면 된다
+        if (sw.state === 'installed' && navigator.serviceWorker.controller) showUpdateBar(reg);
+      });
+    });
+  }).catch(() => {});
+  // 새 워커가 제어권을 잡으면 화면을 새로 그린다
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloaded) return;
+    reloaded = true;
+    location.reload();
+  });
+}
+
+function showUpdateBar(reg) {
+  if (document.getElementById('updateBar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'updateBar';
+  const txt = document.createElement('span');
+  txt.textContent = '새 버전이 준비됐습니다';
+  const btn = document.createElement('button');
+  btn.textContent = '지금 적용';
+  btn.onclick = () => {
+    btn.disabled = true;
+    btn.textContent = '적용 중…';
+    const sw = reg.waiting || reg.installing;
+    if (sw) sw.postMessage('SKIP_WAITING');
+    setTimeout(() => location.reload(), 1200);   // 메시지가 묻혀도 결국 새로고침
+  };
+  bar.append(txt, btn);
+  document.body.appendChild(bar);
+}
+
+/** 지금 돌고 있는 앱 버전 — 설정에 표시해 "배포됐는데 안 바뀐다"를 바로 확인한다. */
+async function runningVersion() {
+  if (!navigator.serviceWorker || !navigator.serviceWorker.controller) return '(서비스워커 없음)';
+  return new Promise((res) => {
+    const ch = new MessageChannel();
+    ch.port1.onmessage = (e) => res((e.data && e.data.version) || '?');
+    navigator.serviceWorker.controller.postMessage('VERSION', [ch.port2]);
+    setTimeout(() => res('?'), 1000);
+  });
+}
+
 // 앱이 가려질 때 대기 중인 백업을 밀어낸다 — iOS는 백그라운드 타이머를 멈춘다.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') backup.flushBackup().catch(() => {});
@@ -1957,9 +2023,7 @@ document.addEventListener('visibilitychange', () => {
 // ---------- 시작 ----------
 (async function init() {
   await applyTheme();
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-  }
+  initServiceWorker();
   initResizers();
   refreshSyncBar();
   flushOutbox();

@@ -7,7 +7,7 @@
 // 또한 api.github.com 요청은 절대 가로채지 않는다 — 인증 헤더가 붙은 요청을 캐시하면
 // 토큰이 섞인 응답이 남을 수 있어서다.
 
-const VERSION = 'v24';
+const VERSION = 'v25';
 const SHELL = `shell-${VERSION}`;
 
 const SHELL_FILES = [
@@ -34,7 +34,7 @@ const SHELL_FILES = [
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(SHELL).then((c) => c.addAll(SHELL_FILES)).then(() => self.skipWaiting())
+    caches.open(SHELL).then((c) => c.addAll(SHELL_FILES.map((u) => new Request(u, { cache: 'no-cache' })))).then(() => self.skipWaiting())
   );
 });
 
@@ -53,13 +53,31 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
 
   // 앱 셸: 네트워크 우선, 실패 시 캐시(오프라인에서도 앱이 열리게)
+  //
+  // ⚠️ cache:'no-cache'가 **반드시** 있어야 한다. GitHub Pages가 max-age=600을 주는데,
+  //    그냥 fetch하면 브라우저 HTTP 캐시가 10분간 옛 파일을 돌려줘서 "네트워크 우선"이
+  //    무력화된다 — 배포해도 아이패드에서 안 바뀌던 원인이다(2026-10-10).
+  //    no-cache는 캐시를 안 쓰는 게 아니라 **매번 서버에 물어본다**(ETag 검증).
+  //    안 바뀌었으면 304라서 데이터도 거의 안 쓴다.
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: 'no-cache' })
       .then((res) => {
-        const copy = res.clone();
-        caches.open(SHELL).then((c) => c.put(e.request, copy)).catch(() => {});
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(SHELL).then((c) => c.put(e.request, copy)).catch(() => {});
+        }
         return res;
       })
       .catch(() => caches.match(e.request).then((r) => r || caches.match('./index.html')))
   );
+});
+
+// 앱이 "지금 당장 새 버전으로" 요청하면 기다리지 않고 교체한다.
+self.addEventListener('message', (e) => {
+  if (e.data === 'SKIP_WAITING') self.skipWaiting();
+  if (e.data === 'VERSION') {
+    const reply = { type: 'VERSION', version: VERSION };
+    if (e.ports && e.ports[0]) e.ports[0].postMessage(reply);
+    else if (e.source) e.source.postMessage(reply);
+  }
 });
