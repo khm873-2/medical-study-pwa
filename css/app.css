@@ -234,10 +234,6 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 
 /* 가로모드에서는 문제와 노트를 나란히 */
 @media (orientation: landscape) and (min-width: 860px) {
-  #quizScreen.with-wiki .split { display: flex; gap: 16px; align-items: flex-start; }
-  #quizScreen.with-wiki .split > #qcard { flex: 1 1 56%; min-width: 0; }
-  #quizScreen.with-wiki .split > #wikiPanel { flex: 1 1 44%; margin-top: 0; position: sticky; top: 58px; }
-  #quizScreen.with-wiki .wiki-body { max-height: 70vh; }
 }
 
 /* ---- 질문 시트 ---- */
@@ -361,16 +357,6 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 .ai-foot { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--badge-bg); }
 .ai-foot .btn { flex: 1; min-height: 40px; padding: 9px 12px; font-size: 13px; }
 
-/* 가로 넓은 화면: 문제 | (노트 + AI) 2단 */
-@media (orientation: landscape) and (min-width: 860px) {
-  #quizScreen.with-side .split { display: flex; gap: 16px; align-items: flex-start; }
-  #quizScreen.with-side .split > #qcard { flex: 1 1 54%; min-width: 0; }
-  #quizScreen.with-side .side-col { flex: 1 1 46%; min-width: 0; position: sticky; top: 58px; }
-  #quizScreen.with-side #aiPanel, #quizScreen.with-side #wikiPanel { margin-top: 0; }
-  #quizScreen.with-side #wikiPanel { margin-top: 12px; }
-  #quizScreen.with-side #aiBody { max-height: 40vh; }
-  #quizScreen.with-side .wiki-body { max-height: 34vh; }
-}
 
 /* 선택 피드백 — 긁은 줄을 잠깐 하이라이트 */
 .tok.picked { background: rgba(37,99,235,.18); border-radius: 3px; }
@@ -580,3 +566,49 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 }
 .inline-next .muted { flex: 1; font-size: 13px; }
 .inline-next .btn { min-width: 150px; }
+
+/* ═══════════ 2단 레이아웃 정리 (2026-10-09 재작성) ═══════════
+   구버전 .with-side/.with-wiki 규칙이 #qcard를 직접 자식으로 가정해
+   --side-w(크기 조절)를 덮어쓰고 네비 sticky도 깨뜨리고 있었다. 하나로 통일한다. */
+
+@media (min-width: 900px) {
+  #quizScreen .split { display: flex; gap: 0; align-items: stretch; }
+
+  /* 왼쪽: 문제 + 네비(항상 맨 아래에 붙어 있다) */
+  #quizScreen .split > .main-col {
+    flex: 1 1 auto; min-width: 0;
+    display: flex; flex-direction: column;
+    min-height: calc(100vh - 86px);      /* 내용이 짧아도 네비가 위로 딸려오지 않게 */
+  }
+  #quizScreen .main-col > #qcard { flex: 0 0 auto; }
+  #quizScreen .main-col > .quiz-nav { margin-top: auto; }   /* ← 핵심: 항상 바닥 */
+
+  /* 오른쪽: 사이드 패널들 */
+  #quizScreen .side-col {
+    flex: 0 0 var(--side-w, clamp(300px, 34vw, 460px));
+    min-width: 0; align-self: flex-start;
+    position: sticky; top: 8px;
+    display: flex; flex-direction: column; gap: 0;
+    max-height: calc(100vh - 80px);
+  }
+  #quizScreen .side-col > #aiPanel,
+  #quizScreen .side-col > #wikiPanel {
+    margin-top: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+  }
+  #quizScreen .side-col #aiBody,
+  #quizScreen .side-col .wiki-body { flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; }
+
+  /* 패널이 하나도 안 열렸으면 사이드는 자리를 차지하지 않는다 */
+  #quizScreen:not(.with-side) .side-col,
+  #quizScreen:not(.with-side) .col-resizer { display: none; }
+}
+
+/* 좁은 화면: 세로로 쌓고 네비는 하단 고정(기존 동작) */
+@media (max-width: 899px) {
+  #quizScreen .split { display: block; }
+  #quizScreen .col-resizer, #quizScreen .pane-resizer { display: none; }
+  #quizScreen .quiz-nav {
+    position: fixed; bottom: 0; left: 0; right: 0; border-radius: 0;
+    border: none; border-top: 1px solid var(--border);
+  }
+}

@@ -90,6 +90,35 @@ export class PenLayer {
     return e.pointerType === 'pen' || (e.pointerType === 'mouse' && e.buttons === 1 && this.mouseDraws);
   }
 
+  /** 그 좌표에 UI(팝업·버튼)가 있는가? — 캔버스 밖 요소까지 좌표로 확인한다. */
+  _overUi(e) {
+    if (!document.elementsFromPoint) {
+      const el = document.elementFromPoint ? document.elementFromPoint(e.clientX, e.clientY) : null;
+      return isUiTarget(el);
+    }
+    return document.elementsFromPoint(e.clientX, e.clientY).some(isUiTarget);
+  }
+
+  /**
+   * 획이 놓인 **패널(칼럼)**의 가로 범위. 문제 카드와 사이드 패널이 나란히 있을 때
+   * 한쪽에 그은 선택이 반대쪽까지 번지지 않게 한다.
+   */
+  _paneAt(box) {
+    const cr = this.canvas.getBoundingClientRect();
+    const cx = (box.l + box.r) / 2;
+    const panes = this.host.querySelectorAll('#qcard, #wikiPanel, #aiPanel, #readCard, .card');
+    let best = null;
+    panes.forEach((el) => {
+      const b = el.getBoundingClientRect();
+      if (!b.width) return;
+      const l = b.left - cr.left, r = b.right - cr.left;
+      if (cx < l - 8 || cx > r + 8) return;
+      // 가장 안쪽(작은) 패널을 고른다 — .card 가 바깥을 겹쳐 잡는 걸 피한다
+      if (!best || r - l < best.r - best.l) best = { l, r };
+    });
+    return best;
+  }
+
   /** 이 레이어 영역에서 pad px 이내인가? (여백에서 시작하는 획을 허용하되 무관한 화면은 거른다) */
   _nearHost(e, pad = 120) {
     const r = this.canvas.getBoundingClientRect();
@@ -116,9 +145,12 @@ export class PenLayer {
 
   _down(e) {
     if (!this._isPen(e)) return;          // 손가락은 통과 → 평소대로 스크롤·탭
-    // UI 위(팝업·버튼)에서는 펜도 평범한 포인터로 동작해야 한다 —
-    // 그러지 않으면 "펜으로는 팝업 버튼이 안 눌린다"(2026-10-09 피드백).
-    if (e.target && e.target.closest && e.target.closest('.pen-passthrough, button, summary, input, textarea, a, .sel-btn')) return;
+    // UI 위(팝업·버튼)에서는 펜도 평범한 포인터로 동작해야 한다.
+    // 펜으로 네모를 그려 띄운 팝업을 손으로만 눌러야 하는 건 말이 안 된다(2026-10-09).
+    //
+    // 주의: 캔버스가 pointer-events:none 이라 e.target은 그 아래 요소가 잡히지만,
+    // 팝업처럼 캔버스 **바깥**(body 직속)에 있는 요소는 좌표로도 확인해야 한다.
+    if (isUiTarget(e.target) || this._overUi(e)) return;
     // 이 레이어가 담당하는 영역 근처에서 시작한 것만 받는다(여러 화면이 동시에 떠 있을 때 혼선 방지).
     // 바깥 여백에서 시작하는 경우가 흔하므로 넉넉히 본다.
     if (!this._nearHost(e, 160)) return;
@@ -148,6 +180,13 @@ export class PenLayer {
     }
     for (const ev of evs) this._cur.pts.push(this._pos(ev));
     this.redraw();
+
+    // 안전장치: pointerup이 영영 안 오는 경우가 있다(펜을 화면 밖으로 빼거나 OS가 삼킴).
+    // 그러면 _cur가 남아 파란 선이 지워지지 않는다 — 2026-10-09 실제 버그.
+    clearTimeout(this._stuck);
+    this._stuck = setTimeout(() => {
+      if (this._cur) this._up({ pointerId: this._activeId }, true);
+    }, 2500);
   }
 
   /**
@@ -161,6 +200,8 @@ export class PenLayer {
     if (!this._cur) return;
     const stroke = this._cur;
     this._cur = null;
+
+    clearTimeout(this._stuck);
 
     if (cancelled && stroke.pts.length > 2) {
       // 취소돼도 이미 충분히 그었으면 선택 후보로 넘긴다
@@ -260,9 +301,18 @@ export class PenLayer {
     const yTop = box.t - 24;
     const yBot = box.b + 8;
 
+    // 획이 시작된 **패널 안에서만** 줄을 모은다.
+    // 그러지 않으면 문제 카드에 그었는데 오른쪽 노트 패널의 같은 높이 줄까지 딸려온다
+    // (2026-10-09 — "그 공간 안에서 끝까지 가야지"라는 지적).
+    const pane = this._paneAt(box);
+    const inPane = pane
+      ? toks.filter((t) => t.l >= pane.l - 2 && t.r <= pane.r + 2)
+      : toks;
+    if (!inPane.length) { this._coveredBox = null; return ''; }
+
     const picked = [];
     const covered = [];                 // 실제로 잡힌 줄의 화면 범위(미리보기용)
-    for (const line of groupLines(toks)) {
+    for (const line of groupLines(inPane)) {
       if (line.cy < yTop || line.cy > yBot) continue;
       // 가로로 조금이라도 걸쳤으면 그 줄 전체를 가져간다
       const touches = line.toks.some((t) => t.r >= box.l - 6 && t.l <= box.r + 6);
@@ -355,6 +405,15 @@ export class PenLayer {
     for (const t of ['touchstart', 'touchmove']) document.removeEventListener(t, this._onTouch);
     this.canvas.remove();
   }
+}
+
+/** 펜이 건드리면 안 되는 UI 요소인가? */
+function isUiTarget(el) {
+  if (!el || !el.closest) return false;
+  return !!el.closest(
+    '.pen-passthrough, button, summary, input, textarea, select, a, label, ' +
+    '.sel-btn, .navbar, .quiz-head, .col-resizer, .pane-resizer, .sheet'
+  );
 }
 
 /** 탭인지 선택/필기인지만 구분한다(모양별 분기는 네모 방식으로 통일되며 사라졌다). */

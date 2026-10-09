@@ -45,6 +45,7 @@ global.document = {
   createDocumentFragment: () => { const f = mkEl(); f.isFrag = true; return f; },
   createTextNode: (t) => ({ nodeType: 3, textContent: t }),
   elementFromPoint: () => elementAt,
+  elementsFromPoint: () => (elementAt ? [elementAt] : []),
   // 펜은 문서 전체에서 이벤트를 받는다(카드 바깥에서 긋기 시작해도 끊기지 않게)
   addEventListener() {}, removeEventListener() {},
 };
@@ -71,9 +72,9 @@ const pen = new PenLayer(host, {
   onSelect: (t) => { selected = t; },
   onTap: (el) => { tapped = el; return true; },
 });
-const ev = (x, y, type = 'pen') => ({
+const ev = (x, y, type = 'pen', target = null) => ({
   pointerType: type, clientX: x, clientY: y, pressure: .5, pointerId: 1,
-  preventDefault() {}, stopPropagation() {}, getCoalescedEvents: null,
+  target, preventDefault() {}, stopPropagation() {}, getCoalescedEvents: null,
 });
 const settle = () => new Promise((r) => setTimeout(r, 520));   // SETTLE_MS(420) 이후
 /** 한 획 긋기 */
@@ -197,6 +198,32 @@ draw(300, 250, 314, 256, 4);
 await settle();
 ok('작은 끄적임은 필기로 남음', pen.strokes.length === 1, `${pen.strokes.length}`);
 pen.clear();
+
+// ★ 펜으로 UI(팝업 버튼 등)를 누를 수 있어야 한다 — 캔버스가 가로채면 안 된다
+{
+  const before = pen.strokes.length;
+  const btn = mkEl('sel-btn');
+  btn.closest = (sel) => (/sel-btn|button/.test(sel) ? btn : null);
+  elementAt = btn;
+  pen._down(ev(200, 200, 'pen', btn));
+  ok('펜이 버튼 위에선 그리지 않음', pen._cur == null);
+  pen._up(ev(200, 200, 'pen', btn));
+  ok('버튼 위 펜 입력은 획을 안 남김', pen.strokes.length === before);
+  elementAt = null;
+}
+
+// ★ 획이 멈춘 채 pointerup이 안 와도 파란 선이 남지 않아야 한다
+{
+  pen.clear();
+  host._query = () => [];
+  pen._down(ev(300, 250));
+  [[310,252],[320,254]].forEach(([x,y]) => pen._move(ev(x, y)));
+  ok('그리는 중엔 _cur 존재', pen._cur != null);
+  pen._up({ pointerId: 1 }, true);              // 취소로 들어옴
+  await settle();
+  ok('취소돼도 _cur이 남지 않음', pen._cur == null);
+  pen.clear();
+}
 
 // ---- 지우개 ----
 draw(100, 200, 140, 200, 5);
