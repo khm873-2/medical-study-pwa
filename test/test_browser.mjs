@@ -423,6 +423,88 @@ await run('노트 탭', () => {
   return out;
 });
 
+// ══════════ 5e. 유령 DOM 참조 — 이번 회귀의 직접 원인 ══════════
+// 드롭다운을 넣으면서 #wikiHeading을 지웠는데 loadWiki가 계속 참조해서,
+// 위키 패널이 **통째로 빈 채로** 뜨고 있었다(2026-10-09). 다시는 못 일어나게 전수조사한다.
+await run('유령 참조', () => {
+  const out = [];
+  const ids = new Set([...document.querySelectorAll('[id]')].map((e) => e.id));
+  return fetch('/js/app.js').then((r) => r.text()).then(async (appSrc) => {
+    const srcs = { 'app.js': appSrc };
+    for (const f of ['quiz.js', 'wiki.js', 'ask.js', 'reader.js', 'search.js', 'pen.js', 'markdown.js']) {
+      srcs[f] = await fetch(`/js/${f}`).then((r) => r.text());
+    }
+    const bad = [];
+    for (const [f, src] of Object.entries(srcs)) {
+      for (const m of src.matchAll(/getElementById\(\s*'([^']+)'\s*\)/g)) {
+        if (ids.has(m[1])) continue;
+        // 없으면 만들어 쓰는 패턴(let x = getElementById(...); if (!x) { ... create })은 정상
+        const after = src.slice(m.index, m.index + 260);
+        if (/if\s*\(\s*!\w+\s*\)\s*\{[\s\S]{0,160}createElement/.test(after)) continue;
+        bad.push(`${f}: #${m[1]}`);
+      }
+    }
+    out.push({ name: 'HTML에 없는 id를 참조하는 코드가 없다', ok: bad.length === 0, detail: bad.join(' | ') });
+    return out;
+  });
+});
+
+// ══════════ 5f. 위키 자동 매칭이 실제로 화면에 뜨는가 ══════════
+// wikiRefs가 없는 기존 시험에서도 폴백이 동작해야 한다 — 이게 안 되면 패널이 빈다.
+await run('위키 렌더', async () => {
+  const out = [];
+  const { splitSections, contentSections, rankSections, fitLabel } = await import('/js/wiki.js');
+  const { renderMarkdown } = await import('/js/markdown.js');
+  document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+  document.getElementById('quizScreen').classList.add('with-side');
+  document.getElementById('wikiPanel').classList.remove('hidden');
+
+  const md = [
+    '# 중환자실 감염관리', '',
+    '## 0. Exam Cheat Sheet', '핵심 키워드', '',
+    '## 1. 표준주의와 전파경로별 주의', '공기주의는 N95를 쓴다. 결핵·수두·홍역이 공기매개다.', '',
+    '## 2. 중심정맥관 관련 혈류감염', '삽입 시 최대멸균차단막을 쓴다.', '',
+  ].join('\n');
+  const all = splitSections(md);
+  const body = contentSections(all);
+  out.push({ name: '노트가 섹션으로 쪼개진다', ok: all.length === 3, detail: `${all.length}개` });
+  out.push({ name: 'Cheat Sheet는 매칭 후보에서 빠진다', ok: body.length === 2 });
+
+  const q = { num: 1, q: '격리병실 소아환자 회진 시 N95 마스크가 필요한 질환은?',
+    opts: ['독감', '수두', '백일해', '볼거리', '손발입병'], explain: '수두는 공기매개다.' };
+  const ranked = rankSections(q, body);
+  out.push({ name: '자동 매칭이 맞는 섹션을 1등으로', ok: ranked[0].heading.startsWith('1.'),
+    detail: ranked[0].heading });
+
+  // 실제로 loadWiki가 하는 일을 그대로 해본다
+  const refs = { noteName: '1014_응급중환자_중환자실감염관리', auto: true,
+    sections: [...ranked, ...all.filter((s) => !body.some((b) => b.heading === s.heading))
+      .map((s) => ({ ...s, score: 0, fit: 0, extra: true }))] };
+  const pick = document.getElementById('wikiSecPick');
+  pick.innerHTML = '';
+  refs.sections.forEach((s, i) => {
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = s.heading + (s.extra ? ' · 참고' : (i === 0 ? ` · ${fitLabel(s.fit || 0)}` : ''));
+    pick.appendChild(o);
+  });
+  document.getElementById('wikiNote').textContent = `${refs.noteName} · 1/${refs.sections.length} · 자동 매칭`;
+  const wb = document.getElementById('wikiBody');
+  wb.innerHTML = renderMarkdown(refs.sections[0].text);
+
+  out.push({ name: '드롭다운에 섹션이 전부 들어간다', ok: pick.options.length === 3,
+    detail: `${pick.options.length}개` });
+  out.push({ name: '참고 섹션에 · 참고 꼬리표', ok: [...pick.options].some((o) => /· 참고$/.test(o.textContent)) });
+  out.push({ name: '위키 본문이 실제로 렌더된다', ok: wb.textContent.includes('N95'),
+    detail: wb.textContent.slice(0, 40) });
+  out.push({ name: '위키 본문이 화면에서 높이를 가진다',
+    ok: wb.getBoundingClientRect().height > 20, detail: `${Math.round(wb.getBoundingClientRect().height)}px` });
+  out.push({ name: '노트 이름 줄이 비어있지 않다',
+    ok: document.getElementById('wikiNote').textContent.includes('자동 매칭') });
+  return out;
+});
+
 // ══════════ 6. 좁은 화면(아이패드 세로) ══════════
 await page.setViewport({ width: 820, height: 1180 });
 await new Promise((r) => setTimeout(r, 120));

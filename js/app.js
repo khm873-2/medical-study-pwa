@@ -437,10 +437,19 @@ function closeWiki() {
 }
 document.getElementById('wikiClose').onclick = closeWiki;
 
+/** 섹션 드롭다운에 상태 한 줄만 띄운다(불러오는 중·오류 등). */
+function wikiStatus(text) {
+  const pick = document.getElementById('wikiSecPick');
+  pick.innerHTML = '';
+  const o = document.createElement('option');
+  o.textContent = text;
+  pick.appendChild(o);
+}
+
 async function loadWiki(q, answered) {
   const body = document.getElementById('wikiBody');
   const lock = document.getElementById('wikiLock');
-  document.getElementById('wikiHeading').textContent = '불러오는 중…';
+  wikiStatus('불러오는 중…');
   document.getElementById('wikiNote').textContent = '';
   body.innerHTML = '';
   lock.classList.add('hidden');
@@ -449,12 +458,12 @@ async function loadWiki(q, answered) {
   try {
     refs = await wikiFor(q, currentExam.path);
   } catch (e) {
-    document.getElementById('wikiHeading').textContent = '노트를 불러오지 못했습니다';
-    body.innerHTML = `<p class="muted">${e.message}</p>`;
+    wikiStatus('노트를 불러오지 못했습니다');
+    body.innerHTML = `<p class="muted">${escapeText(e.message)}</p>`;
     return;
   }
   if (!refs || !refs.sections.length) {
-    document.getElementById('wikiHeading').textContent = '연결된 노트 없음';
+    wikiStatus('연결된 노트 없음');
     body.innerHTML = '<p class="muted">이 모의고사에 연계노트가 지정돼 있지 않습니다.</p>';
     return;
   }
@@ -611,8 +620,33 @@ document.addEventListener('pointerdown', (e) => {
 /**
  * 질문한다 — Gemini 키가 있으면 사이드 패널에 바로 답을, 없으면 기존 앱 전달 시트를 연다.
  */
+/** Gemini 키가 없을 때 — 조용히 다른 앱으로 넘기지 않고 이유를 보여준다.
+ *  "여기서 질문"을 눌렀는데 설명 없이 앱 선택 시트가 뜨면 고장으로 보인다(2026-10-09). */
+function askNoKey(term) {
+  openAi(term);
+  const body = document.getElementById('aiBody');
+  document.getElementById('aiStatus').textContent = '';
+  body.innerHTML = '';
+
+  const box = document.createElement('div');
+  box.className = 'warn-box';
+  box.textContent = '여기서 바로 답하려면 Gemini API 키가 필요합니다. 무료이고 1분이면 됩니다.';
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;margin-top:12px;flex-wrap:wrap';
+  const set = document.createElement('button');
+  set.className = 'btn primary';
+  set.textContent = '설정에서 키 넣기';
+  set.onclick = () => openSetup();
+  const app = document.createElement('button');
+  app.className = 'btn';
+  app.textContent = '다른 앱에서 묻기';
+  app.onclick = () => fillAskSheet(term);
+  row.append(set, app);
+  body.append(box, row);
+}
+
 async function askNow(term) {
-  if (!(await gem.hasKey())) { fillAskSheet(term); return; }
+  if (!(await gem.hasKey())) { askNoKey(term); return; }
   openAi(term);
   const body = document.getElementById('aiBody');
   const status = document.getElementById('aiStatus');
@@ -631,7 +665,7 @@ async function askNow(term) {
     tokenizeTree(body);        // AI 답변에서도 긁어서 다시 물어볼 수 있게
     status.textContent = '저장하지 않으면 사라집니다';
   } catch (e) {
-    if (e.message === 'NO_KEY') { closeAi(); fillAskSheet(term); return; }
+    if (e.message === 'NO_KEY') { askNoKey(term); return; }
     const wait = /^RATE_WAIT:(\d+)$/.exec(e.message);
     if (wait) { showRateWait(Number(wait[1]), term); return; }
     body.innerHTML = `<div class="warn-box">${escapeText(e.message)}</div>`;
