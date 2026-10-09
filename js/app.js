@@ -1,9 +1,13 @@
 // 메인 — 화면 전환, 모의고사 목록, 결과 저장, 동기화 큐.
 
 import { hasToken, setToken, clearToken, verifyToken, getRepo, setRepo } from './auth.js';
-import { listDir, getText, createFile } from './github.js';
+import { listDir, getText, getBlobUrl, createFile } from './github.js';
 import { parseExamHtml, prettyExamName, examDate } from './parser.js';
 import { Quiz } from './quiz.js';
+import { PenLayer } from './pen.js';
+import { wikiFor } from './wiki.js';
+import { renderMarkdown, hydrateEmbeds } from './markdown.js';
+import { buildPrompt, appList, sendTo, share, buildQaMarkdown } from './ask.js';
 import {
   kvGet, kvSet, cacheClear, enqueue, listOutbox, dequeue, bumpTries,
   allSessions, clearSession,
@@ -197,22 +201,226 @@ async function openExam(subject, ex) {
     currentExam = { subject, file: ex.file, path: ex.path, title: title || prettyExamName(ex.file) };
 
     if (quiz) quiz.destroy();
+    destroyPen();
     quiz = new Quiz({
       examKey: ex.path,
       questions,
       title: currentExam.title,
       onFinish: showResult,
-      onExit: () => { quiz.destroy(); loadList(false); },
+      onExit: () => { quiz.destroy(); destroyPen(); loadList(false); },
+      onRender: onQuestionRender,
     });
     const had = await quiz.restore();
     show('quizScreen');
     quiz.start();
+    ensurePen();
     if (had) toast('이어서 풉니다.');
   } catch (e) {
     body.innerHTML = prev;
     alertBox(`시험을 열지 못했습니다: ${e.message}`);
   }
 }
+
+// ═══════════ Phase 3 — 펜 · 위키 패널 · AI 질문 ═══════════
+
+let pen = null;
+let penStrokes = {};      // {문항index: serialize()}  문항별 필기 보관
+let wikiState = null;     // {refs, secIdx, unlocked}
+let askItems = [];        // 이번 시험에서 물어본 것들(저장용)
+let askCtx = null;        // 현재 질문 시트의 맥락
+
+function ensurePen() {
+  if (pen) return;
+  const card = document.getElementById('qcard');
+  pen = new PenLayer(card, {
+    onLasso: handleLasso,
+    onChange: () => { if (quiz) penStrokes[quiz.qIndex] = pen.serialize(); },
+  });
+  setPenMode('touch');
+}
+function destroyPen() {
+  if (pen) { pen.destroy(); pen = null; }
+  penStrokes = {};
+  closeWiki();
+}
+
+function setPenMode(m) {
+  if (!pen) return;
+  pen.setMode(m);
+  document.querySelectorAll('#penBar .tool[data-mode]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.mode === m);
+  });
+}
+
+document.querySelectorAll('#penBar .tool[data-mode]').forEach((b) => {
+  b.onclick = () => setPenMode(b.dataset.mode);
+});
+document.getElementById('toolUndo').onclick = () => pen && pen.undo();
+document.getElementById('toolClear').onclick = () => pen && pen.clear();
+document.getElementById('toolWiki').onclick = () => toggleWiki();
+
+/** 문항이 바뀔 때마다 — 필기 복원 + 위키 갱신 */
+function onQuestionRender(q, idx, { answered }) {
+  if (pen) {
+    pen.load(penStrokes[idx] || null);
+    requestAnimationFrame(() => pen && pen.resize());
+  }
+  if (!document.getElementById('wikiPanel').classList.contains('hidden')) {
+    loadWiki(q, answered);
+  }
+}
+
+// ---------- 위키 패널 ----------
+function toggleWiki() {
+  const panel = document.getElementById('wikiPanel');
+  if (panel.classList.contains('hidden')) {
+    panel.classList.remove('hidden');
+    // 가로·넓은 화면에서는 문제와 노트를 나란히 놓는다(CSS .with-wiki .split)
+    document.getElementById('quizScreen').classList.add('with-wiki');
+    document.getElementById('toolWiki').classList.add('active');
+    loadWiki(quiz.q, quiz.answers[quiz.qIndex] !== null);
+    requestAnimationFrame(() => pen && pen.resize()); // 폭이 바뀌었으니 캔버스 재계산
+  } else {
+    closeWiki();
+  }
+}
+function closeWiki() {
+  document.getElementById('wikiPanel').classList.add('hidden');
+  document.getElementById('quizScreen').classList.remove('with-wiki');
+  document.getElementById('toolWiki').classList.remove('active');
+  requestAnimationFrame(() => pen && pen.resize());
+}
+document.getElementById('wikiClose').onclick = closeWiki;
+
+async function loadWiki(q, answered) {
+  const body = document.getElementById('wikiBody');
+  const lock = document.getElementById('wikiLock');
+  document.getElementById('wikiHeading').textContent = '불러오는 중…';
+  document.getElementById('wikiNote').textContent = '';
+  body.innerHTML = '';
+  lock.classList.add('hidden');
+
+  let refs;
+  try {
+    refs = await wikiFor(q, currentExam.path);
+  } catch (e) {
+    document.getElementById('wikiHeading').textContent = '노트를 불러오지 못했습니다';
+    body.innerHTML = `<p class="muted">${e.message}</p>`;
+    return;
+  }
+  if (!refs || !refs.sections.length) {
+    document.getElementById('wikiHeading').textContent = '연결된 노트 없음';
+    body.innerHTML = '<p class="muted">이 모의고사에 연계노트가 지정돼 있지 않습니다.</p>';
+    return;
+  }
+  wikiState = { refs, secIdx: 0, unlocked: !!answered };
+  renderWikiSection();
+}
+
+function renderWikiSection() {
+  if (!wikiState) return;
+  const { refs, secIdx, unlocked } = wikiState;
+  const sec = refs.sections[secIdx];
+  document.getElementById('wikiHeading').textContent = sec.heading;
+  document.getElementById('wikiNote').textContent =
+    `${refs.noteName}  ·  ${secIdx + 1}/${refs.sections.length}${refs.auto ? '  · 자동 매칭' : ''}`;
+
+  const body = document.getElementById('wikiBody');
+  const lock = document.getElementById('wikiLock');
+  if (!unlocked) {
+    // 정답을 고르기 전에는 내용을 가린다 — 노트에 같은 문항이 정답과 함께 실려 있을 수 있다.
+    lock.classList.remove('hidden');
+    body.innerHTML = '';
+    return;
+  }
+  lock.classList.add('hidden');
+  body.innerHTML = renderMarkdown(sec.text);
+  hydrateEmbeds(body, (name) => getBlobUrl(`attachments/${name}`)).catch(() => {});
+}
+
+document.getElementById('wikiUnlock').onclick = () => {
+  if (wikiState) { wikiState.unlocked = true; renderWikiSection(); }
+};
+document.getElementById('wikiPrevSec').onclick = () => {
+  if (!wikiState) return;
+  wikiState.secIdx = (wikiState.secIdx - 1 + wikiState.refs.sections.length) % wikiState.refs.sections.length;
+  renderWikiSection();
+};
+document.getElementById('wikiNextSec').onclick = () => {
+  if (!wikiState) return;
+  wikiState.secIdx = (wikiState.secIdx + 1) % wikiState.refs.sections.length;
+  renderWikiSection();
+};
+
+// ---------- 동그라미 → 질문 ----------
+function handleLasso(text, box) {
+  if (!text && !(box && box.image)) { toast('글자를 동그라미 안에 넣어주세요.'); return; }
+  openAsk(text, box && box.image ? '(이미지 영역)' : null);
+}
+
+function openAsk(term, imageNote) {
+  const q = quiz.q;
+  askCtx = { term, qnum: q.num, qtext: q.q, question: q };
+  document.getElementById('askTerm').textContent = term || imageNote || '(선택 없음)';
+  document.getElementById('askAnswer').value = '';
+  document.getElementById('askMsg').textContent = '';
+
+  const prompt = buildPrompt({
+    term,
+    question: q,
+    subject: currentExam.subject,
+    lecture: prettyExamName(currentExam.file),
+  });
+  askCtx.prompt = prompt;
+
+  const apps = document.getElementById('askApps');
+  apps.innerHTML = '';
+  appList().forEach((a) => {
+    const b = document.createElement('button');
+    b.textContent = a.label;
+    b.onclick = async () => {
+      const ok = await sendTo(a.id, prompt);
+      document.getElementById('askMsg').textContent = ok
+        ? '질문을 복사했습니다. 앱에서 붙여넣고, 답변을 복사해 돌아오세요.'
+        : '앱을 여는 데 실패했습니다. 아래 "질문 복사"를 쓰세요.';
+    };
+    apps.appendChild(b);
+  });
+  const sh = document.createElement('button');
+  sh.textContent = '공유…';
+  sh.onclick = async () => {
+    const ok = await share(prompt);
+    document.getElementById('askMsg').textContent = ok ? '전달했습니다.' : '공유를 취소했습니다.';
+  };
+  apps.appendChild(sh);
+
+  const cp = document.createElement('button');
+  cp.textContent = '질문 복사';
+  cp.onclick = async () => {
+    try { await navigator.clipboard.writeText(prompt); document.getElementById('askMsg').textContent = '📋 복사했습니다.'; }
+    catch { document.getElementById('askMsg').textContent = '복사에 실패했습니다.'; }
+  };
+  apps.appendChild(cp);
+
+  document.getElementById('askSheet').classList.remove('hidden');
+}
+
+document.getElementById('askClose').onclick = () => document.getElementById('askSheet').classList.add('hidden');
+document.getElementById('askSheet').onclick = (e) => {
+  if (e.target.id === 'askSheet') document.getElementById('askSheet').classList.add('hidden');
+};
+document.getElementById('askSave').onclick = () => {
+  const a = document.getElementById('askAnswer').value.trim();
+  if (!a) { document.getElementById('askMsg').textContent = '답변을 붙여넣어 주세요.'; return; }
+  askItems.push({ ...askCtx, answer: a });
+  document.getElementById('askSheet').classList.add('hidden');
+  toast(`기록했습니다 (${askItems.length}건) — 결과 화면에서 vault에 저장됩니다.`);
+};
+document.getElementById('askSaveLater').onclick = () => {
+  askItems.push({ ...askCtx, answer: '' });
+  document.getElementById('askSheet').classList.add('hidden');
+  toast('질문만 기록했습니다.');
+};
 
 // ---------- 결과 ----------
 function showResult(res) {
@@ -333,16 +541,37 @@ function buildMarkdown(res) {
 document.getElementById('saveToVaultBtn').onclick = async () => {
   if (!lastResult) return;
   const msg = document.getElementById('saveMsg');
-  const payload = buildMarkdown(lastResult);
   msg.textContent = '저장 중…';
-  try {
-    const r = await createFile(payload.path, payload.content, payload.message);
-    msg.textContent = `✅ 저장됨 — ${r.path}`;
-    clearSession(currentExam.path).catch(() => {});
-  } catch (e) {
-    await enqueue(payload);
-    msg.textContent = `⚠️ 지금은 저장하지 못해 대기열에 넣었습니다 (${e.message}). 네트워크가 돌아오면 보냅니다.`;
+
+  // 풀이기록 + (물어본 게 있으면) 질문기록을 각각 새 파일로 저장한다.
+  const payloads = [buildMarkdown(lastResult)];
+  if (askItems.length) {
+    payloads.push(buildQaMarkdown({
+      subject: currentExam.subject,
+      lecture: prettyExamName(currentExam.file),
+      examPath: currentExam.path,
+      items: askItems,
+    }));
+  }
+
+  const saved = [];
+  const queued = [];
+  for (const p of payloads) {
+    try {
+      const r = await createFile(p.path, p.content, p.message);
+      saved.push(r.path.split('/').pop());
+    } catch (e) {
+      await enqueue(p);
+      queued.push(p.path.split('/').pop());
+    }
+  }
+  if (queued.length) {
+    msg.textContent = `⚠️ ${saved.length}건 저장, ${queued.length}건은 대기열로 (네트워크 복구 시 자동 전송)`;
     refreshSyncBar();
+  } else {
+    msg.textContent = `✅ 저장됨 — ${saved.join(', ')}`;
+    askItems = [];
+    clearSession(currentExam.path).catch(() => {});
   }
 };
 

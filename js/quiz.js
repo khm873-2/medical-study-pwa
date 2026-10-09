@@ -4,6 +4,7 @@
 import { getBlobUrl } from './github.js';
 import { imagePaths } from './parser.js';
 import { saveSession, loadSession, clearSession } from './db.js';
+import { tokenize } from './pen.js';
 
 const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
 
@@ -16,13 +17,15 @@ export class Quiz {
    * @param {Function} opts.onFinish 결과 보기 눌렀을 때
    * @param {Function} opts.onExit   목록으로 나갈 때
    */
-  constructor({ examKey, questions, title, onFinish, onExit }) {
+  constructor({ examKey, questions, title, onFinish, onExit, onRender }) {
     this.examKey = examKey;
     this.all = questions;
     this.order = questions.map((_, i) => i); // 재시도 모드에서 부분집합이 된다
     this.title = title;
     this.onFinish = onFinish;
     this.onExit = onExit;
+    // 문항이 바뀔 때마다 알려준다 — 펜 레이어·위키 패널이 여기에 붙는다.
+    this.onRender = onRender || (() => {});
 
     this.cur = 0;
     this.answers = new Array(questions.length).fill(null);
@@ -134,7 +137,8 @@ export class Quiz {
     if (src) { this.el.qsource.textContent = `📚 ${src}`; this.el.qsource.style.display = 'inline-block'; }
     else { this.el.qsource.style.display = 'none'; }
 
-    this.el.qtext.textContent = q.q;
+    // 단어 단위 span으로 깔아둔다 — 올가미(동그라미)가 이걸 hit-test 한다.
+    tokenize(this.el.qtext, q.q);
     this._renderImages(q);
 
     this.el.pos.textContent = `${this.cur + 1}/${this.order.length}`;
@@ -152,6 +156,7 @@ export class Quiz {
     if (this.answers[idx] !== null) this._showExplain(q);
     this._updateScore();
     window.scrollTo({ top: 0, behavior: 'instant' });
+    this.onRender(q, idx, { answered: this.answers[idx] !== null });
   }
 
   _renderMC(q, idx) {
@@ -173,7 +178,7 @@ export class Quiz {
       wrap.style.flex = '1';
       const txt = document.createElement('div');
       txt.className = 'opt-text';
-      txt.textContent = opt;
+      tokenize(txt, opt);   // 선지도 올가미 대상
       wrap.appendChild(txt);
 
       if (locked && Array.isArray(q.opt) && q.opt[i]) {

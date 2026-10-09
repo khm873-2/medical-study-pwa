@@ -44,6 +44,9 @@ registry['ox-row'].querySelectorAll = () => [oxA, oxB];
 global.document = {
   getElementById: (id) => registry[id] || (registry[id] = makeEl(id)),
   createElement: (t) => makeEl('new-' + t),
+  // quiz.js가 pen.js의 tokenize()를 쓰면서 필요해졌다(지문을 단어 span으로 감싼다)
+  createDocumentFragment: () => { const f = makeEl('frag'); f.isFrag = true; return f; },
+  createTextNode: (t) => ({ nodeType: 3, textContent: t }),
   addEventListener() {},
 };
 global.window = { scrollTo() {}, addEventListener() {} };
@@ -130,7 +133,15 @@ const q = new Quiz({
 q.start();
 
 check('첫 문항 렌더: 번호 표시', registry.qnum.textContent.startsWith('문제 1'), registry.qnum.textContent);
-check('첫 문항 렌더: 지문 표시', registry.qtext.textContent === questions[0].q);
+// 지문은 이제 단어 단위 <span class="tok">으로 들어간다(올가미 hit-test용) —
+// 스텁에선 프래그먼트 자식으로 쌓이므로 그걸 다시 이어붙여 원문과 대조한다.
+const qtextJoined = (registry.qtext._children[0]?._children || [])
+  .map((c) => c.textContent || '')
+  .join('');
+check('첫 문항 렌더: 지문 표시', qtextJoined === questions[0].q,
+  `"${qtextJoined.slice(0, 40)}…"`);
+check('첫 문항 렌더: 단어가 tok span으로 감싸짐',
+  (registry.qtext._children[0]?._children || []).some((c) => c.className === 'tok'));
 check('출처 표시(풀기 전부터)', registry.qsource.textContent.startsWith('📚'), registry.qsource.textContent);
 check('5지선다 렌더', registry.optsContainer._children.length === questions[0].opts.length,
   `${registry.optsContainer._children.length}개`);

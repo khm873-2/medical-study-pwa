@@ -165,3 +165,103 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 
 /* 스크롤 영역이 하단 네비에 가리지 않게 */
 #quizScreen, #resultScreen, #listScreen, #setupScreen { padding-bottom: 8px; }
+
+/* ═══════════ Phase 3 — 펜 · 위키 패널 · 질문 시트 ═══════════ */
+
+/* ---- 펜 도구막대 ---- */
+#penBar {
+  display: flex; align-items: center; gap: 4px; margin-bottom: 10px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 6px 8px; position: sticky; top: 0; z-index: 20;
+}
+.tool {
+  border: none; background: none; font-size: 19px; cursor: pointer;
+  padding: 8px 10px; border-radius: 9px; min-width: 42px; min-height: 42px;
+  color: var(--text); font-family: inherit;
+}
+.tool:active { background: var(--badge-bg); }
+.tool.active { background: var(--accent); }
+.tool-sep { width: 1px; height: 24px; background: var(--border); margin: 0 4px; }
+
+/* ---- 필기 캔버스 ---- */
+#qcard { position: relative; }
+.penlayer { position: absolute; inset: 0; z-index: 10; touch-action: auto; }
+.penlayer.lasso-mode { cursor: crosshair; }
+/* 올가미 hit-test 대상 — 보이기엔 그냥 글자 */
+.tok { display: inline; }
+
+/* ---- 위키 패널 ---- */
+#wikiPanel {
+  margin-top: 14px; background: var(--card); border: 1px solid var(--border);
+  border-radius: 14px; overflow: hidden;
+}
+.wiki-head {
+  display: flex; align-items: center; gap: 4px; padding: 10px 8px 10px 12px;
+  border-bottom: 1px solid var(--border); background: var(--badge-bg);
+}
+.wiki-title { flex: 1; min-width: 0; }
+#wikiHeading { font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-sub { font-size: 11px; color: var(--sub); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-lock { padding: 18px 16px; text-align: center; }
+.wiki-lock .btn { margin-top: 10px; }
+.wiki-body { padding: 14px 16px; max-height: 52vh; overflow-y: auto; font-size: 15px; line-height: 1.65; }
+.wiki-body h4, .wiki-body h5, .wiki-body h6 { margin: 14px 0 6px; font-size: 15px; }
+.wiki-body p { margin: 8px 0; }
+.wiki-body ul, .wiki-body ol { margin: 8px 0; padding-left: 22px; }
+.wiki-body li { margin: 4px 0; }
+.wiki-body mark { background: #fde68a; color: #78350f; padding: 0 3px; border-radius: 3px; }
+.wiki-body code { background: var(--badge-bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.wiki-body blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid var(--border); color: var(--sub); }
+.wiki-body img.embed { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); margin: 8px 0; }
+.wiki-body .wikilink { color: var(--accent); }
+.wiki-body hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.tablewrap { overflow-x: auto; margin: 10px 0; }
+.wiki-body table { border-collapse: collapse; font-size: 13.5px; min-width: 100%; }
+.wiki-body th, .wiki-body td { border: 1px solid var(--border); padding: 7px 9px; text-align: left; vertical-align: top; }
+.wiki-body th { background: var(--badge-bg); font-weight: 700; white-space: nowrap; }
+/* 콜아웃 */
+.wiki-body .cal { margin: 10px 0; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--bg); }
+.wiki-body .cal summary { padding: 9px 12px; cursor: pointer; font-weight: 600; font-size: 14px; background: var(--badge-bg); }
+.wiki-body .cal-body { padding: 10px 12px; }
+.wiki-body .cal-success { border-color: var(--correct); }
+.wiki-body .cal-example { border-color: var(--accent); }
+.wiki-body .cal-warning { border-color: var(--warn); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .wiki-body mark { background: #78350f; color: #fde68a; }
+}
+:root[data-theme="dark"] .wiki-body mark { background: #78350f; color: #fde68a; }
+
+/* 가로모드에서는 문제와 노트를 나란히 */
+@media (orientation: landscape) and (min-width: 1000px) {
+  #quizScreen.with-wiki .split { display: flex; gap: 16px; align-items: flex-start; }
+  #quizScreen.with-wiki .split > #qcard { flex: 1 1 56%; min-width: 0; }
+  #quizScreen.with-wiki .split > #wikiPanel { flex: 1 1 44%; margin-top: 0; position: sticky; top: 58px; }
+  #quizScreen.with-wiki .wiki-body { max-height: 70vh; }
+}
+
+/* ---- 질문 시트 ---- */
+.sheet {
+  position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.4);
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.sheet-card {
+  background: var(--card); width: 100%; max-width: 620px;
+  border-radius: 16px 16px 0 0; padding: 18px 18px calc(env(safe-area-inset-bottom) + 18px);
+  max-height: 88vh; overflow-y: auto;
+}
+.sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.sheet-head b { font-size: 17px; word-break: break-all; }
+.ask-apps { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
+.ask-apps button {
+  flex: 1 1 auto; min-width: 96px; padding: 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer;
+}
+.ask-apps button:active { background: var(--badge-bg); }
+#askAnswer {
+  width: 100%; min-height: 120px; border-radius: 10px; border: 1px solid var(--border);
+  padding: 11px; font-size: 15px; font-family: inherit; resize: vertical;
+  background: var(--bg); color: var(--text);
+}
+.sheet-actions { display: flex; gap: 10px; margin-top: 12px; }
+.sheet-actions .btn { flex: 1; }
