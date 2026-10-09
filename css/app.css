@@ -739,6 +739,37 @@ summary.subject-head > .head-row, summary.root-head > .head-row {
   background: linear-gradient(transparent 62%, rgba(37,99,235,.22) 62%);
   border-radius: 2px;
 }
+/* 밑줄 끝에 붙는 번호 — 뜯어보기 란의 같은 번호와 짝이다 */
+#qtext .bd-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 15px; height: 15px; padding: 0 3px; margin: 0 1px 0 2px;
+  background: var(--accent); color: #fff;
+  font-size: 9.5px; font-weight: 800; line-height: 1;
+  border-radius: 7px; vertical-align: super;
+  cursor: pointer; user-select: none;
+}
+/* 뜯어보기 란의 번호 */
+.bd-idx {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 17px; height: 17px; padding: 0 4px;
+  background: var(--accent); color: #fff;
+  font-size: 10.5px; font-weight: 800; line-height: 1;
+  border-radius: 8px;
+}
+.bd-row { cursor: pointer; }
+.bd-row:active { background: rgba(37,99,235,.06); }
+/* 번호를 누르면 반대쪽이 잠깐 깜빡여 짝을 알려준다 */
+.bd-flash { animation: bdFlash .9s ease-out; }
+@keyframes bdFlash {
+  0%, 100% { background: transparent; }
+  25%      { background: rgba(37,99,235,.28); }
+}
+#qtext .bd-badge.bd-flash { animation: bdFlashBadge .9s ease-out; }
+@keyframes bdFlashBadge {
+  0%, 100% { transform: scale(1); }
+  30%      { transform: scale(1.5); }
+}
 
 /* ═══════════ 캡처 완료 토스트 (2026-10-10) ═══════════
    새 창을 띄우면 아이패드에서 돌아올 길이 없어 앱을 껐다 켜야 했다.

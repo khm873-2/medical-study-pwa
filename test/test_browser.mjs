@@ -633,6 +633,97 @@ await run('신규 기능', async () => {
   return out;
 });
 
+// ══════════ 5g-2. 단서 번호가 지문 ↔ 뜯어보기를 잇는가 (2026-10-10) ══════════
+await run('단서 번호', async () => {
+  const out = [];
+  const mk = (t) => t.split(/(\s+)/).map((w) => /^\s+$/.test(w) ? w : `<span class="tok">${w}</span>`).join('');
+  const QT = '갑상샘절제술 후 높은음이 올라가지 않고 목소리가 쉰 환자가 왔다. 후두내시경에서 성대 움직임은 정상이었다.';
+  document.getElementById('qtext').innerHTML = mk(QT);
+
+  const { parseBreakdown } = await import('/js/gemini.js');
+  // 일부러 **본문 순서와 다르게** 준다 — 읽는 순서대로 번호가 매겨져야 한다
+  const resp = [
+    '[단서]',
+    '성대 움직임은 정상 || 반회후두신경 마비 배제',
+    '갑상샘절제술 후 || 상후두신경 외지 손상 의심',
+    '높은음이 올라가지 않고 || 윤상갑상근 마비 — 고음 생성 불가',
+    '[인상]',
+    '상후두신경 외지 손상',
+  ].join('\n');
+  const bd = parseBreakdown(resp, { q: QT, opts: ['가', '나'] });
+  out.push({ name: '단서 3개를 읽는다', ok: bd.clues.length === 3, detail: `${bd.clues.length}개` });
+
+  // 앱과 같은 방식으로 번호를 매긴다
+  const toks = [...document.querySelectorAll('#qtext .tok')];
+  let acc = ''; const starts = [];
+  toks.forEach((t) => { starts.push(acc.length); acc += t.textContent; });
+  const numbered = bd.clues
+    .map((c) => ({ ...c, pos: acc.indexOf(c.frag.replace(/\s+/g, '')) }))
+    .sort((a, b) => (a.pos < 0 ? 1e9 : a.pos) - (b.pos < 0 ? 1e9 : b.pos))
+    .map((c, i) => ({ ...c, n: i + 1 }));
+
+  out.push({ name: '모든 단서를 지문에서 찾는다', ok: numbered.every((c) => c.pos >= 0),
+    detail: numbered.map((c) => c.pos).join(',') });
+  out.push({ name: '읽는 순서대로 번호가 매겨진다',
+    ok: numbered[0].frag.startsWith('갑상샘절제술') && numbered[2].frag.startsWith('성대'),
+    detail: numbered.map((c) => `${c.n}.${c.frag.slice(0, 6)}`).join(' ') });
+
+  // 지문에 배지를 심는다(앱의 highlightFragments와 동일한 로직)
+  document.querySelectorAll('#qtext .bd-badge').forEach((b) => b.remove());
+  for (const c of numbered) {
+    const needle = c.frag.replace(/\s+/g, '');
+    const at = acc.indexOf(needle), end = at + needle.length;
+    let last = null;
+    toks.forEach((t, i) => {
+      const a = starts[i], b = a + t.textContent.length;
+      if (b > at && a < end) { t.classList.add('bd-mark'); last = t; }
+    });
+    if (!last) continue;
+    const badge = document.createElement('sup');
+    badge.className = 'bd-badge'; badge.textContent = c.n; badge.dataset.n = String(c.n);
+    last.after(badge);
+  }
+  const badges = [...document.querySelectorAll('#qtext .bd-badge')];
+  out.push({ name: '지문에 번호 배지가 3개 붙는다', ok: badges.length === 3, detail: `${badges.length}개` });
+  out.push({ name: '배지 번호가 1,2,3 순서로 나타난다',
+    ok: badges.map((b) => b.textContent).join('') === '123', detail: badges.map((b) => b.textContent).join('') });
+  out.push({ name: '배지가 화면에 보인다',
+    ok: badges.every((b) => b.getBoundingClientRect().width > 8),
+    detail: `${Math.round(badges[0].getBoundingClientRect().width)}px` });
+  out.push({ name: '배지가 글자 위로 올라간다(vertical-align)',
+    ok: getComputedStyle(badges[0]).verticalAlign === 'super', detail: getComputedStyle(badges[0]).verticalAlign });
+
+  // 뜯어보기 란에 같은 번호
+  const el = document.getElementById('breakdown');
+  el.classList.remove('hidden'); el.innerHTML = '';
+  for (const c of numbered) {
+    const row = document.createElement('div'); row.className = 'bd-row';
+    const i2 = document.createElement('span'); i2.className = 'bd-idx'; i2.textContent = c.n;
+    const f = document.createElement('span'); f.className = 'bd-frag'; f.textContent = c.frag;
+    const n2 = document.createElement('span'); n2.className = 'bd-note'; n2.textContent = c.note;
+    row.append(i2, f, n2); el.appendChild(row);
+  }
+  const idxs = [...el.querySelectorAll('.bd-idx')];
+  out.push({ name: '뜯어보기 란에도 같은 번호', ok: idxs.map((x) => x.textContent).join('') === '123',
+    detail: idxs.map((x) => x.textContent).join('') });
+  out.push({ name: '번호가 동그란 배지로 보인다',
+    ok: idxs[0].getBoundingClientRect().width >= 15 && getComputedStyle(idxs[0]).borderRadius !== '0px',
+    detail: `${Math.round(idxs[0].getBoundingClientRect().width)}px r=${getComputedStyle(idxs[0]).borderRadius}` });
+
+  // 같은 번호끼리 내용이 맞는가 (이게 핵심 — 번호가 엇갈리면 쓸모가 없다)
+  const pairOk = numbered.every((c) => {
+    const badge = document.querySelector(`#qtext .bd-badge[data-n="${c.n}"]`);
+    const row = idxs.find((x) => x.textContent === String(c.n)).parentElement;
+    return badge && row.querySelector('.bd-frag').textContent === c.frag;
+  });
+  out.push({ name: '같은 번호끼리 같은 조각을 가리킨다', ok: pairOk });
+
+  // 지문에 없는 조각은 번호를 받지 못한다
+  const withGhost = parseBreakdown(resp + '\n지어낸문장 || 버려져야 함', { q: QT, opts: ['가', '나'] });
+  out.push({ name: '지어낸 조각은 번호도 안 받는다', ok: withGhost.clues.length === 3 });
+  return out;
+});
+
 // ══════════ 5h. 캡처는 새 창을 띄우지 않는다 (2026-10-10 회귀 방지) ══════════
 await run('캡처 토스트', () => {
   const out = [];

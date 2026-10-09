@@ -1000,14 +1000,20 @@ function renderBreakdown(el, data, q) {
     el.classList.add('hidden');
     document.getElementById('toolBreak').classList.remove('active');
     document.querySelectorAll('#qtext .tok.bd-mark').forEach((m) => m.classList.remove('bd-mark'));
+    document.querySelectorAll('#qtext .bd-badge').forEach((b) => b.remove());
   };
   head.appendChild(close);
   el.appendChild(head);
 
-  // ① 단서 — 지문의 어느 말이 무엇을 가리키는가
-  for (const c of clues) {
+  // ① 단서 — 지문의 어느 말이 무엇을 가리키는가.
+  //    **읽는 순서대로 번호를 매겨** 지문 쪽 밑줄과 1:1로 잇는다(2026-10-10 요청).
+  const numbered = numberClues(clues);
+  for (const c of numbered) {
     const row = document.createElement('div');
     row.className = 'bd-row';
+    const idx = document.createElement('span');
+    idx.className = 'bd-idx';
+    idx.textContent = c.n;
     const f = document.createElement('span');
     f.className = 'bd-frag';
     f.textContent = c.frag;
@@ -1017,7 +1023,8 @@ function renderBreakdown(el, data, q) {
     const n = document.createElement('span');
     n.className = 'bd-note';
     n.textContent = c.note;
-    row.append(f, ar, n);
+    row.append(idx, f, ar, n);
+    row.onclick = () => scrollToClue(c.n);
     el.appendChild(row);
   }
 
@@ -1065,30 +1072,71 @@ function renderBreakdown(el, data, q) {
     el.appendChild(w);
   }
 
-  highlightFragments(clues);
+  highlightFragments(numbered);
   tokenizeTree(el);     // 분석 결과도 펜으로 긁어서 다시 물어볼 수 있게
 }
 
-/** 지문 안의 해당 조각에 밑줄 표시. 토큰 구조를 깨지 않게 조각 단위로만 감싼다. */
-function highlightFragments(clues) {
+/** 지문에서의 위치를 찾아 **읽는 순서대로** 1,2,3… 번호를 매긴다. */
+function numberClues(clues) {
+  const host = document.getElementById('qtext');
+  const toks = host ? [...host.querySelectorAll('.tok')] : [];
+  let acc = '';
+  toks.forEach((t) => { acc += t.textContent; });
+  return clues
+    .map((c) => ({ ...c, pos: acc.indexOf(c.frag.replace(/\s+/g, '')) }))
+    .sort((a, b) => (a.pos < 0 ? 1e9 : a.pos) - (b.pos < 0 ? 1e9 : b.pos))
+    .map((c, i) => ({ ...c, n: i + 1 }));
+}
+
+/**
+ * 지문 안의 해당 조각에 밑줄 + 번호 배지를 단다.
+ * 토큰 구조를 깨지 않게 클래스만 붙이고, 배지는 마지막 토큰 뒤에 끼워 넣는다.
+ */
+function highlightFragments(numbered) {
   const host = document.getElementById('qtext');
   if (!host) return;
   host.querySelectorAll('.bd-mark').forEach((m) => m.classList.remove('bd-mark'));
+  host.querySelectorAll('.bd-badge').forEach((b) => b.remove());
   const toks = [...host.querySelectorAll('.tok')];
   if (!toks.length) return;
   let acc = '';
   const starts = [];
   toks.forEach((t) => { starts.push(acc.length); acc += t.textContent; });
-  for (const c of clues) {
+
+  for (const c of numbered) {
     const needle = c.frag.replace(/\s+/g, '');
     const at = acc.indexOf(needle);
     if (at < 0) continue;
     const end = at + needle.length;
+    let last = null;
     toks.forEach((t, i) => {
       const a = starts[i], b = a + t.textContent.length;
-      if (b > at && a < end) t.classList.add('bd-mark');
+      if (b > at && a < end) { t.classList.add('bd-mark'); last = t; }
     });
+    if (!last) continue;
+    const badge = document.createElement('sup');
+    badge.className = 'bd-badge';
+    badge.textContent = c.n;
+    badge.dataset.n = String(c.n);
+    badge.title = c.note;
+    badge.onclick = () => scrollToClue(c.n);
+    last.after(badge);
   }
+}
+
+/** 번호를 누르면 반대쪽(지문 ↔ 뜯어보기)을 잠깐 깜빡여 짝을 알려준다. */
+function scrollToClue(n) {
+  const row = [...document.querySelectorAll('#breakdown .bd-row')]
+    .find((r) => r.querySelector('.bd-idx') && r.querySelector('.bd-idx').textContent === String(n));
+  const badge = document.querySelector(`#qtext .bd-badge[data-n="${n}"]`);
+  [row, badge].forEach((el) => {
+    if (!el) return;
+    el.classList.remove('bd-flash');
+    void el.offsetWidth;            // 애니메이션 재시작
+    el.classList.add('bd-flash');
+    setTimeout(() => el.classList.remove('bd-flash'), 900);
+  });
+  if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 document.getElementById('toolBreak').onclick = runBreakdown;
