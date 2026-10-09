@@ -30,16 +30,19 @@ export class PenLayer {
    * @param {Function} opts.onTap    (el, e) => boolean    펜으로 탭했을 때(true면 소비)
    * @param {Function} opts.onChange ()=>void              획 변화(저장용)
    * @param {Function} opts.onCapture (box) => void         캡처 모드에서 네모를 쳤을 때
+   * @param {Function} opts.onCard    (box) => void         카드 모드에서 네모를 쳤을 때
    */
-  constructor(host, { onSelect, onTap, onChange, onCapture } = {}) {
+  constructor(host, { onSelect, onTap, onChange, onCapture, onCard } = {}) {
     this.host = host;
     this.onSelect = onSelect || (() => {});
     this.onTap = onTap || (() => false);
     this.onChange = onChange || (() => {});
     this.onCapture = onCapture || (() => {});
+    this.onCard = onCard || (() => {});
 
     this.erasing = false;        // 지우개 버튼을 켠 상태
     this.capturing = false;      // 캡처 버튼을 켠 상태 — 네모 친 영역을 이미지로 뜬다
+    this.carding = false;        // 카드 버튼을 켠 상태 — 네모 안 강조를 가려 플래시카드로
     this.color = '#2563eb';
     this.width = 2.6;
     this.strokes = [];
@@ -270,6 +273,13 @@ export class PenLayer {
       return;
     }
 
+    // 카드 모드 — 네모 안의 **강조된 말**을 가려 플래시카드로 만든다.
+    if (this.carding) {
+      this.redraw();
+      if (Math.max(w, h) >= BOX_MIN) this.onCard(box);
+      return;
+    }
+
     // 너무 작으면 선택 의도가 아니다 → 필기로 남긴다
     if (Math.max(w, h) < BOX_MIN) {
       pend.forEach((s) => { if (s.pts.length > 1) this.strokes.push(s); });
@@ -408,8 +418,15 @@ export class PenLayer {
     ctx.restore();
   }
 
-  setErasing(on) { this.erasing = !!on; if (on) this.capturing = false; }
-  setCapturing(on) { this.capturing = !!on; if (on) this.erasing = false; }
+  /** 모드는 하나만 켜진다 — 지우개·캡처·카드가 겹치면 뭐가 일어날지 알 수 없다. */
+  _setMode(which) {
+    this.erasing = which === 'erase';
+    this.capturing = which === 'capture';
+    this.carding = which === 'card';
+  }
+  setErasing(on) { this._setMode(on ? 'erase' : null); }
+  setCapturing(on) { this._setMode(on ? 'capture' : null); }
+  setCarding(on) { this._setMode(on ? 'card' : null); }
   clear() { this.strokes = []; this.redraw(); this.onChange(); }
   undo() { this.strokes.pop(); this.redraw(); this.onChange(); }
   get isEmpty() { return this.strokes.length === 0; }

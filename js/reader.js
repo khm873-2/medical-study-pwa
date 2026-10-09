@@ -164,3 +164,82 @@ async function reacquire() {
     try { _lock = await navigator.wakeLock.request('screen'); } catch {}
   }
 }
+
+/**
+ * 화면에 그려진 범위 안의 **강조된 말**을 가려 플래시카드를 만든다.
+ *
+ * 노트를 읽다가 "이 부분 외웠나?" 싶을 때 펜으로 네모를 치면, 그 안의
+ * **굵게**·*기울임*·==하이라이트== 가 빈칸이 되고 나머지 문장이 문제가 된다.
+ * 되새김질용이라 노트를 떠나지 않고 바로 확인한다(2026-10-10 요청).
+ *
+ * 왜 DOM에서 뽑나: 마크다운 원문이 아니라 **지금 보고 있는 화면**이 기준이어야
+ * 사용자가 친 네모와 어긋나지 않는다.
+ *
+ * @param {HTMLElement} root   본문 요소(#readBody)
+ * @param {{l:number,t:number,r:number,b:number}} box  root 기준이 아니라 **뷰포트** 좌표
+ * @param {object} meta  {notePath, noteTitle, heading}
+ */
+export function cardsFromBox(root, box, meta = {}) {
+  const EMPH = 'mark, strong, b, em, i';
+  const picked = [];
+  root.querySelectorAll(EMPH).forEach((el) => {
+    // 강조 안에 강조가 또 있으면(**==x==**) 가장 안쪽만 쓴다 — 중복 카드를 막는다
+    if (el.querySelector(EMPH)) return;
+    const text = el.textContent.trim();
+    if (text.length < 2 || !/[\w가-힣]/.test(text)) return;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    // 네모와 겹치면 채택(완전히 들어가야 한다고 하면 쓰기 어렵다)
+    if (r.right < box.l || r.left > box.r || r.bottom < box.t || r.top > box.b) return;
+    picked.push({ el, text });
+  });
+  if (!picked.length) return [];
+
+  // 같은 문장 안의 강조끼리는 서로를 가려줘야 문제가 된다
+  const cards = [];
+  const seen = new Set();
+  picked.forEach(({ el, text }, i) => {
+    const key = `${sentenceOf(el)}|${text}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const context = buildContext(el, text, picked.map((p) => p.el));
+    if (!context) return;
+    cards.push({
+      id: `${meta.notePath || ''}#${meta.heading || ''}#box#${text}#${i}`,
+      notePath: meta.notePath || '',
+      noteTitle: meta.noteTitle || '',
+      heading: meta.heading || '',
+      context,
+      answer: text,
+      starred: el.tagName === 'MARK',
+    });
+  });
+  return cards;
+}
+
+/** 이 강조가 속한 문장(또는 블록) 요소. */
+function sentenceOf(el) {
+  let p = el.parentElement;
+  while (p && !/^(P|LI|TD|TH|DIV|BLOCKQUOTE|H1|H2|H3|H4)$/.test(p.tagName)) p = p.parentElement;
+  return p || el.parentElement;
+}
+
+/** 같은 블록의 글을 가져오되, 이 답은 ____ 로, 다른 강조는 그대로 둔다. */
+function buildContext(el, answer, allEmph) {
+  const block = sentenceOf(el);
+  if (!block) return '';
+  const parts = [];
+  const walk = (node) => {
+    if (node.nodeType === 3) { parts.push(node.nodeValue); return; }
+    if (node.nodeType !== 1) return;
+    if (node === el) { parts.push('____'); return; }
+    // 같은 블록 안의 **다른** 강조는 남겨둔다 — 문맥이 너무 비면 풀 수 없다
+    node.childNodes.forEach(walk);
+  };
+  block.childNodes.forEach(walk);
+  const text = parts.join('').replace(/\s+/g, ' ').trim();
+  if (!text.includes('____')) return '';
+  // 문맥이 답만 덩그러니면 카드로 쓸모가 없다
+  if (text.replace(/____/g, '').trim().length < 4) return '';
+  return text.length > 300 ? `${text.slice(0, 300)}…` : text;
+}

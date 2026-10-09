@@ -13,7 +13,7 @@ import { renderMarkdown, hydrateEmbeds } from './markdown.js';
 import { buildPrompt, appList, sendTo, share, buildQaMarkdown } from './ask.js';
 import {
   noteList, loadNote, renderSection, extractCards,
-  loadSrs, saveSrs, dueCards, gradeCard, srsStats, keepAwake,
+  loadSrs, saveSrs, dueCards, gradeCard, srsStats, keepAwake, cardsFromBox,
 } from './reader.js';
 import { search, cacheSubject, storageInfo } from './search.js';
 import {
@@ -1459,7 +1459,52 @@ function ensureReaderPen() {
   if (readerPen) return;
   readerPen = new PenLayer(document.getElementById('readCard'), {
     onSelect: (text, info) => { if (text) openAskFromReader(text, info); },
+    onCard: (box) => makeCardsFromBox(box),
   });
+}
+
+// ---------- 읽다가 바로 카드 만들기 ----------
+// "이 부분 외웠나?" 싶을 때 펜으로 네모 → 그 안의 **굵게·기울임·하이라이트**가
+// 빈칸이 되고 나머지 문장이 문제가 된다. 되새김질용(2026-10-10 요청).
+function readerCardMode(on) {
+  if (!readerPen) return;
+  readerPen.setCarding(on);
+  document.getElementById('readMakeCard').classList.toggle('active', on);
+  document.getElementById('readPen').classList.remove('active');
+  capToast(on ? '펜으로 네모를 치면 그 범위로 카드를 만듭니다' : '카드 만들기 끔');
+}
+
+document.getElementById('readMakeCard').onclick = () => {
+  if (!readerPen) return;
+  readerCardMode(!readerPen.carding);
+};
+
+function makeCardsFromBox(box) {
+  if (!reader) return;
+  const r = readerPen.canvas.getBoundingClientRect();
+  // 펜 좌표(캔버스 기준) → 뷰포트 좌표
+  const vp = { l: r.left + box.l, t: r.top + box.t, r: r.left + box.r, b: r.top + box.b };
+  const sec = reader.note.sections[reader.secIdx];
+  const cards = cardsFromBox(document.getElementById('readBody'), vp, {
+    notePath: reader.note.path,
+    noteTitle: reader.note.title,
+    heading: sec ? sec.heading : '',
+  });
+  if (!cards.length) {
+    capToast('그 범위에 강조된 말이 없습니다 — **굵게**·==하이라이트== 를 덮어 보세요', 2600);
+    return;
+  }
+  readerCardMode(false);
+  startDeck(cards, reader.note.title, { backTo: 'reader' });
+  capToast(`카드 ${cards.length}장을 만들었습니다`);
+}
+
+/** 카드 묶음을 띄운다. 돌아갈 곳을 기억해 읽던 자리로 복귀한다. */
+async function startDeck(cards, title, { backTo = 'list' } = {}) {
+  const srsNow = await loadSrs();
+  cardDeck = { cards, idx: 0, srs: srsNow, title, all: cards, backTo };
+  show('cardScreen');
+  renderCard();
 }
 
 document.getElementById('readBack').onclick = () => {
@@ -1641,7 +1686,13 @@ document.getElementById('cardShow').onclick = () => {
 };
 document.getElementById('cardAgain').onclick = () => advanceCard(false);
 document.getElementById('cardGot').onclick = () => advanceCard(true);
-document.getElementById('cardBack').onclick = () => { cardDeck = null; show('listScreen'); };
+document.getElementById('cardBack').onclick = () => {
+  const back = cardDeck && cardDeck.backTo;
+  cardDeck = null;
+  // 읽다가 만든 카드면 읽던 자리로 돌아간다
+  if (back === 'reader' && reader) { show('readScreen'); if (readerPen) requestAnimationFrame(() => readerPen.resize()); }
+  else show('listScreen');
+};
 
 async function advanceCard(remembered) {
   if (!cardDeck) return;

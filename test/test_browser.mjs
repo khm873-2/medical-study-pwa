@@ -983,6 +983,88 @@ await run('캐시 우회', () => {
   });
 });
 
+// ══════════ 5m. 읽다가 네모 쳐서 플래시카드 만들기 (2026-10-10) ══════════
+await run('카드 만들기', async () => {
+  const out = [];
+  const { cardsFromBox } = await import('/js/reader.js');
+  const { renderMarkdown } = await import('/js/markdown.js');
+
+  document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  const body = document.getElementById('readBody');
+  body.innerHTML = renderMarkdown([
+    '심인성쇼크의 기준은 **수축기혈압 90mmHg 미만**이고 심장지수는 ==2.2 미만==이다.',
+    '',
+    '치료는 *기계적 순환 보조*가 핵심이다.',
+    '',
+    '여기는 강조가 전혀 없는 문단이라 카드가 나오면 안 된다.',
+  ].join('\n'));
+
+  const meta = { notePath: 'n.md', noteTitle: '노트', heading: '1. 쇼크' };
+  const all = body.getBoundingClientRect();
+  const wide = { l: all.left, t: all.top, r: all.right, b: all.bottom };
+  const cards = cardsFromBox(body, wide, meta);
+
+  out.push({ name: '강조된 말마다 카드가 나온다', ok: cards.length === 3, detail: `${cards.length}장` });
+  out.push({ name: '굵게를 잡는다', ok: cards.some((c) => c.answer === '수축기혈압 90mmHg 미만') });
+  out.push({ name: '하이라이트를 잡는다', ok: cards.some((c) => c.answer === '2.2 미만') });
+  out.push({ name: '기울임도 잡는다', ok: cards.some((c) => c.answer === '기계적 순환 보조') });
+  const c1 = cards.find((c) => c.answer === '수축기혈압 90mmHg 미만');
+  out.push({ name: '답이 있던 자리는 빈칸', ok: c1.context.includes('____'), detail: c1.context });
+  out.push({ name: '빈칸에 답이 그대로 남아있지 않다', ok: !c1.context.includes('수축기혈압 90mmHg 미만') });
+  out.push({ name: '같은 문장의 다른 강조는 남긴다(문맥)',
+    ok: c1.context.includes('2.2 미만'), detail: c1.context });
+  out.push({ name: '하이라이트는 별표로 표시', ok: cards.find((c) => c.answer === '2.2 미만').starred === true });
+  out.push({ name: '카드마다 다른 id', ok: new Set(cards.map((c) => c.id)).size === cards.length });
+  out.push({ name: '노트·섹션 정보를 달고 나온다',
+    ok: cards.every((c) => c.notePath === 'n.md' && c.heading === '1. 쇼크') });
+
+  // 범위를 좁히면 그 안의 것만
+  const strong = body.querySelector('strong').getBoundingClientRect();
+  const narrow = { l: strong.left, t: strong.top, r: strong.right, b: strong.bottom };
+  const few = cardsFromBox(body, narrow, meta);
+  out.push({ name: '네모 범위 밖은 안 들어온다', ok: few.length === 1 && few[0].answer === '수축기혈압 90mmHg 미만',
+    detail: `${few.length}장` });
+
+  // 강조가 없는 곳
+  const ps = [...body.querySelectorAll('p')];
+  const plain = ps[ps.length - 1].getBoundingClientRect();
+  out.push({ name: '강조 없는 문단은 0장',
+    ok: cardsFromBox(body, { l: plain.left, t: plain.top, r: plain.right, b: plain.bottom }, meta).length === 0 });
+
+  // 중첩 강조(**==x==**)는 한 번만
+  body.innerHTML = renderMarkdown('이것은 **==중첩 강조==** 이다. 뒤에 설명이 더 붙는다.');
+  const nested = cardsFromBox(body, {
+    l: body.getBoundingClientRect().left, t: body.getBoundingClientRect().top,
+    r: body.getBoundingClientRect().right, b: body.getBoundingClientRect().bottom }, meta);
+  out.push({ name: '중첩 강조는 카드 한 장만', ok: nested.length === 1, detail: `${nested.length}장` });
+
+  // 문맥이 답뿐이면 카드로 안 만든다(풀 수 없으니까)
+  body.innerHTML = renderMarkdown('**단독강조**');
+  const lone = cardsFromBox(body, {
+    l: body.getBoundingClientRect().left - 5, t: body.getBoundingClientRect().top - 5,
+    r: body.getBoundingClientRect().right + 5, b: body.getBoundingClientRect().bottom + 5 }, meta);
+  out.push({ name: '문맥 없는 강조는 카드로 안 만든다', ok: lone.length === 0, detail: `${lone.length}장` });
+
+  // 펜 카드 모드
+  const { PenLayer } = await import('/js/pen.js');
+  let gotBox = null;
+  const pen = new PenLayer(document.getElementById('readCard'), { onCard: (b) => { gotBox = b; } });
+  out.push({ name: '펜이 카드 모드를 안다', ok: typeof pen.setCarding === 'function' });
+  pen.setCarding(true);
+  out.push({ name: '카드 모드를 켜면 다른 모드는 꺼진다',
+    ok: pen.carding && !pen.erasing && !pen.capturing });
+  pen.setErasing(true);
+  out.push({ name: '지우개를 켜면 카드 모드가 꺼진다', ok: pen.erasing && !pen.carding });
+  pen.destroy();
+
+  out.push({ name: '읽기 화면에 카드 버튼이 있다', ok: !!document.getElementById('readMakeCard') });
+  out.push({ name: '본문 카드 div와 id가 겹치지 않는다',
+    ok: document.getElementById('readMakeCard').tagName === 'BUTTON'
+      && document.getElementById('readCard').tagName === 'DIV' });
+  return out;
+});
+
 // ══════════ 6. 좁은 화면(아이패드 세로) ══════════
 await page.setViewport({ width: 820, height: 1180 });
 await new Promise((r) => setTimeout(r, 120));
