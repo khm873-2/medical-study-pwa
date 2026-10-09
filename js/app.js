@@ -4,7 +4,8 @@ import { hasToken, setToken, clearToken, verifyToken, getRepo, setRepo } from '.
 import { listDir, getText, getBlobUrl, createFile } from './github.js';
 import { parseExamHtml, prettyExamName, examDate } from './parser.js';
 import { Quiz } from './quiz.js';
-import { PenLayer } from './pen.js';
+import { PenLayer, tokenizeTree } from './pen.js';
+import * as gem from './gemini.js';
 import { wikiFor } from './wiki.js';
 import { renderMarkdown, hydrateEmbeds } from './markdown.js';
 import { buildPrompt, appList, sendTo, share, buildQaMarkdown } from './ask.js';
@@ -117,6 +118,23 @@ document.getElementById('saveTokenBtn').onclick = async () => {
   msg.textContent = `연결됨 — ${r.name}${r.private ? ' (비공개)' : ''}`;
   document.getElementById('setupCloseBtn').classList.remove('hidden');
   setTimeout(() => loadList(true), 700);
+};
+
+document.getElementById('saveGeminiBtn').onclick = async () => {
+  const msg = document.getElementById('geminiMsg');
+  const key = document.getElementById('geminiKeyInput').value.trim();
+  if (!key) {
+    await gem.clearKey();
+    msg.style.color = 'var(--sub)';
+    msg.textContent = '키를 비웠습니다 — 질문은 앱으로 넘기는 방식으로 동작합니다.';
+    return;
+  }
+  msg.style.color = ''; msg.textContent = '확인 중…';
+  const r = await gem.verifyKey(key);
+  if (!r.ok) { msg.style.color = 'var(--wrong)'; msg.textContent = r.error; return; }
+  await gem.setKey(key);
+  msg.style.color = 'var(--correct)';
+  msg.textContent = '연결됐습니다. 이제 밑줄을 그으면 옆에 바로 답변이 뜹니다.';
 };
 
 document.getElementById('clearCacheBtn').onclick = async () => {
@@ -276,32 +294,46 @@ let askCtx = null;        // 현재 질문 시트의 맥락
 
 function ensurePen() {
   if (pen) return;
-  const card = document.getElementById('qcard');
-  pen = new PenLayer(card, {
-    onLasso: handleLasso,
+  // 문제 카드 + 사이드(노트·AI)를 한꺼번에 덮는다 — 위키/해설에서도 밑줄을 그을 수 있게.
+  const host = document.querySelector('#quizScreen .split') || document.getElementById('qcard');
+  pen = new PenLayer(host, {
+    onSelect: handleSelect,
+    onTap: handlePenTap,
     onChange: () => { if (quiz) penStrokes[quiz.qIndex] = pen.serialize(); },
   });
-  setPenMode('touch');
 }
 function destroyPen() {
   if (pen) { pen.destroy(); pen = null; }
   penStrokes = {};
   closeWiki();
+  closeAi();
 }
 
-function setPenMode(m) {
-  if (!pen) return;
-  pen.setMode(m);
-  document.querySelectorAll('#penBar .tool[data-mode]').forEach((b) => {
-    b.classList.toggle('active', b.dataset.mode === m);
-  });
+/** 펜으로 탭 — 선지 번호를 누르면 답 선택(모드 전환 없이). */
+function handlePenTap(el) {
+  if (!el || !quiz) return false;
+  const row = el.closest && el.closest('.opt-row');
+  if (row && !row.classList.contains('locked')) {
+    const rows = [...document.getElementById('optsContainer').children];
+    const i = rows.indexOf(row);
+    if (i >= 0) { quiz.select(i); return true; }
+  }
+  const ox = el.closest && el.closest('.ox-btn');
+  if (ox && !ox.disabled) { quiz.select(Number(ox.dataset.ox)); return true; }
+  // 접힌 콜아웃 등은 그대로 열리게
+  const sum = el.closest && el.closest('summary');
+  if (sum) { sum.click(); return true; }
+  return false;
 }
 
-document.querySelectorAll('#penBar .tool[data-mode]').forEach((b) => {
-  b.onclick = () => setPenMode(b.dataset.mode);
-});
 document.getElementById('toolUndo').onclick = () => pen && pen.undo();
 document.getElementById('toolClear').onclick = () => pen && pen.clear();
+document.getElementById('toolErase').onclick = () => {
+  if (!pen) return;
+  const on = !pen.erasing;
+  pen.setErasing(on);
+  document.getElementById('toolErase').classList.toggle('active', on);
+};
 document.getElementById('toolWiki').onclick = () => toggleWiki();
 
 /** 문항이 바뀔 때마다 — 필기 복원 + 위키 갱신 */
@@ -320,20 +352,17 @@ function toggleWiki() {
   const panel = document.getElementById('wikiPanel');
   if (panel.classList.contains('hidden')) {
     panel.classList.remove('hidden');
-    // 가로·넓은 화면에서는 문제와 노트를 나란히 놓는다(CSS .with-wiki .split)
-    document.getElementById('quizScreen').classList.add('with-wiki');
     document.getElementById('toolWiki').classList.add('active');
+    syncSideCol();
     loadWiki(quiz.q, quiz.answers[quiz.qIndex] !== null);
-    requestAnimationFrame(() => pen && pen.resize()); // 폭이 바뀌었으니 캔버스 재계산
   } else {
     closeWiki();
   }
 }
 function closeWiki() {
   document.getElementById('wikiPanel').classList.add('hidden');
-  document.getElementById('quizScreen').classList.remove('with-wiki');
   document.getElementById('toolWiki').classList.remove('active');
-  requestAnimationFrame(() => pen && pen.resize());
+  syncSideCol();
 }
 document.getElementById('wikiClose').onclick = closeWiki;
 
@@ -380,6 +409,8 @@ function renderWikiSection() {
   }
   lock.classList.add('hidden');
   body.innerHTML = renderMarkdown(sec.text);
+  // 노트 본문도 밑줄로 긁어서 질문할 수 있게 토큰화한다
+  tokenizeTree(body);
   hydrateEmbeds(body, (name) => getBlobUrl(`attachments/${name}`)).catch(() => {});
 }
 
@@ -397,22 +428,83 @@ document.getElementById('wikiNextSec').onclick = () => {
   renderWikiSection();
 };
 
-// ---------- 동그라미 → 질문 ----------
-function handleLasso(text, box) {
-  if (!text && !(box && box.image)) { toast('글자를 동그라미 안에 넣어주세요.'); return; }
-  openAsk(text, box && box.image ? '(이미지 영역)' : null);
+// ---------- 밑줄/올가미로 긁기 → 질문 ----------
+function handleSelect(text) {
+  if (!text) { toast('글자 위에 밑줄을 그어보세요.'); return; }
+  const q = quiz ? quiz.q : null;
+  askCtx = {
+    term: text,
+    qnum: q ? q.num : '—',
+    qtext: q ? q.q : '',
+    question: q,
+  };
+  askCtx.prompt = buildPrompt({
+    term: text,
+    question: q,
+    subject: currentExam ? currentExam.subject : '',
+    lecture: currentExam ? prettyExamName(currentExam.file) : '',
+  });
+  askNow(text);
 }
 
-function openAsk(term, imageNote) {
-  const q = quiz.q;
-  askCtx = { term, qnum: q.num, qtext: q.q, question: q };
-  askCtx.prompt = buildPrompt({
-    term,
-    question: q,
-    subject: currentExam.subject,
-    lecture: prettyExamName(currentExam.file),
-  });
-  fillAskSheet(term || imageNote);
+/**
+ * 질문한다 — Gemini 키가 있으면 사이드 패널에 바로 답을, 없으면 기존 앱 전달 시트를 연다.
+ */
+async function askNow(term) {
+  if (!(await gem.hasKey())) { fillAskSheet(term); return; }
+  openAi(term);
+  const body = document.getElementById('aiBody');
+  const status = document.getElementById('aiStatus');
+  body.innerHTML = '<div class="ai-loading">묻는 중…</div>';
+  status.textContent = '';
+  try {
+    const answer = await gem.ask({
+      term,
+      question: askCtx.question,
+      noteText: wikiState ? wikiState.refs.sections[wikiState.secIdx].text : '',
+      subject: currentExam ? currentExam.subject : '',
+      lecture: currentExam ? prettyExamName(currentExam.file) : '',
+    });
+    askCtx.answer = answer;
+    body.innerHTML = renderMarkdown(answer);
+    status.textContent = '저장하지 않으면 사라집니다';
+  } catch (e) {
+    if (e.message === 'NO_KEY') { closeAi(); fillAskSheet(term); return; }
+    body.innerHTML = `<div class="warn-box">${escapeText(e.message)}</div>`;
+    status.textContent = '앱에서 이어보기를 눌러 직접 물어볼 수 있습니다';
+  }
+}
+
+function openAi(term) {
+  document.getElementById('aiTerm').textContent = term;
+  document.getElementById('aiPanel').classList.remove('hidden');
+  document.getElementById('quizScreen').classList.add('with-side');
+  requestAnimationFrame(() => pen && pen.resize());
+}
+function closeAi() {
+  document.getElementById('aiPanel').classList.add('hidden');
+  syncSideCol();
+}
+document.getElementById('aiClose').onclick = closeAi;
+document.getElementById('aiRetry').onclick = () => askCtx && askNow(askCtx.term);
+document.getElementById('aiSave').onclick = () => {
+  if (!askCtx || !askCtx.answer) { toast('저장할 답변이 없습니다.'); return; }
+  askItems.push({ ...askCtx });
+  toast(`기록했습니다 (${askItems.length}건) — 결과 화면에서 vault에 저장됩니다.`);
+};
+document.getElementById('aiOpenApp').onclick = () => { if (askCtx) fillAskSheet(askCtx.term); };
+
+/** 사이드 칼럼에 보이는 게 하나도 없으면 2단 레이아웃을 푼다. */
+function syncSideCol() {
+  const anyOpen =
+    !document.getElementById('aiPanel').classList.contains('hidden') ||
+    !document.getElementById('wikiPanel').classList.contains('hidden');
+  document.getElementById('quizScreen').classList.toggle('with-side', anyOpen);
+  requestAnimationFrame(() => pen && pen.resize());
+}
+
+function escapeText(s) {
+  return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 }
 
 /** 질문 시트 채우기 — 모의고사(올가미)와 읽기 모드(텍스트 선택) 둘 다 여기로 온다. */
@@ -545,7 +637,9 @@ function renderReader() {
   document.getElementById('readTitle').textContent = note.title;
   document.getElementById('readHeading').textContent = sec.heading;
   document.getElementById('readPos').textContent = `${secIdx + 1}/${note.sections.length}`;
-  renderSection(document.getElementById('readBody'), sec);
+  const rb = document.getElementById('readBody');
+  renderSection(rb, sec);
+  tokenizeTree(rb);   // 노트 본문도 밑줄로 긁을 수 있게
   document.getElementById('readPrev').disabled = secIdx === 0;
   document.getElementById('readNext').disabled = secIdx === note.sections.length - 1;
   window.scrollTo(0, 0);
@@ -555,9 +649,8 @@ function renderReader() {
 function ensureReaderPen() {
   if (readerPen) return;
   readerPen = new PenLayer(document.getElementById('readCard'), {
-    onLasso: (text) => { if (text) openAskFromReader(text); },
+    onSelect: (text) => { if (text) openAskFromReader(text); },
   });
-  readerPen.setMode('touch');
 }
 
 document.getElementById('readBack').onclick = () => {
@@ -573,11 +666,13 @@ document.getElementById('readPrev').onclick = () => {
 document.getElementById('readNext').onclick = () => {
   if (reader && reader.secIdx < reader.note.sections.length - 1) { reader.secIdx++; renderReader(); }
 };
+// 읽기 모드에선 펜이 항상 살아 있다 — 이 버튼은 지우개 토글로만 쓴다.
 document.getElementById('readPen').onclick = () => {
   if (!readerPen) return;
-  const on = readerPen.mode === 'touch';
-  readerPen.setMode(on ? 'pen' : 'touch');
+  const on = !readerPen.erasing;
+  readerPen.setErasing(on);
   document.getElementById('readPen').classList.toggle('active', on);
+  toast(on ? '지우개 켜짐' : '펜으로 돌아왔습니다');
 };
 document.getElementById('readAwake').onclick = async () => {
   const btn = document.getElementById('readAwake');
@@ -594,11 +689,28 @@ document.getElementById('readAsk').onclick = () => {
   openAskFromReader(sel);
 };
 
-function openAskFromReader(term) {
+async function openAskFromReader(term) {
   const { note, secIdx } = reader;
-  askCtx = { term, qnum: '—', qtext: `${note.title} · ${note.sections[secIdx].heading}`, question: null };
-  askCtx.prompt = buildPrompt({ term, question: null, subject: note.title, lecture: note.sections[secIdx].heading });
+  const sec = note.sections[secIdx];
+  askCtx = { term, qnum: '—', qtext: `${note.title} · ${sec.heading}`, question: null };
+  askCtx.prompt = buildPrompt({ term, question: null, subject: note.title, lecture: sec.heading });
+
+  if (!(await gem.hasKey())) { fillAskSheet(term); return; }
+  // 읽기 모드에선 전용 패널이 없으니 시트 안에 답변을 띄운다(화면은 그대로).
   fillAskSheet(term);
+  const ta = document.getElementById('askAnswer');
+  const msg = document.getElementById('askMsg');
+  msg.textContent = '묻는 중…';
+  try {
+    const answer = await gem.ask({
+      term, question: null, noteText: sec.text, subject: note.title, lecture: sec.heading,
+    });
+    askCtx.answer = answer;
+    ta.value = answer;
+    msg.textContent = '답변을 받았습니다. "답변 저장"을 누르면 vault에 기록됩니다.';
+  } catch (e) {
+    msg.textContent = e.message === 'NO_KEY' ? '' : `오류: ${e.message}`;
+  }
 }
 
 // ---- TTS ----

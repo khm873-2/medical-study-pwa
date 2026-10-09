@@ -72,6 +72,30 @@
     </div>
 
     <div class="card">
+      <h2>AI 질문 (Gemini)</h2>
+      <p class="muted">
+        키를 넣으면 밑줄 친 내용에 대한 답변이 <b>화면을 떠나지 않고 옆에</b> 뜹니다.
+        비워두면 ChatGPT·Claude 앱으로 넘기는 기존 방식으로 동작합니다.
+      </p>
+      <details style="margin:12px 0">
+        <summary class="muted" style="cursor:pointer;font-weight:600">키 발급 방법 (무료, 1분)</summary>
+        <ol>
+          <li><code>aistudio.google.com/apikey</code> 접속</li>
+          <li><b>Create API key</b> → 프로젝트 선택(없으면 자동 생성)</li>
+          <li>나오는 <code>AIza...</code> 문자열을 아래에 붙여넣기</li>
+        </ol>
+        <p class="muted">개인 학습 사용량이면 무료 한도 안에서 충분합니다.</p>
+      </details>
+      <div class="field">
+        <label for="geminiKeyInput">Gemini API 키</label>
+        <input id="geminiKeyInput" type="password" autocapitalize="off" autocorrect="off"
+               spellcheck="false" placeholder="AIza...">
+      </div>
+      <button class="btn primary full" id="saveGeminiBtn">연결 테스트 후 저장</button>
+      <div id="geminiMsg" style="margin-top:10px;font-size:14px"></div>
+    </div>
+
+    <div class="card">
       <h2>표시</h2>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn" data-theme-set="auto">자동</button>
@@ -149,15 +173,13 @@
       <span class="badge-pill" id="scoreBadge">0/0</span>
     </header>
 
-    <!-- 펜/터치 도구막대 -->
+    <!-- 도구막대 — 모드 전환은 없다. 펜은 항상 쓸 수 있고 손가락은 항상 스크롤. -->
     <div id="penBar">
-      <button class="tool" id="toolTouch" data-mode="touch" title="터치">👆</button>
-      <button class="tool" id="toolPen" data-mode="pen" title="펜">🖊</button>
-      <button class="tool" id="toolLasso" data-mode="lasso" title="동그라미 쳐서 질문">🔍</button>
-      <button class="tool" id="toolErase" data-mode="erase" title="지우개">🧽</button>
+      <span class="pen-hint">🖊 밑줄 = 질문 · 번호 탭 = 답 선택</span>
       <span class="tool-sep"></span>
+      <button class="tool" id="toolErase" title="지우개">🧽</button>
       <button class="tool" id="toolUndo" title="되돌리기">↶</button>
-      <button class="tool" id="toolClear" title="전부 지우기">🗑</button>
+      <button class="tool" id="toolClear" title="필기 지우기">🗑</button>
       <span class="tool-sep"></span>
       <button class="tool" id="toolWiki" title="관련 노트">📖</button>
     </div>
@@ -177,6 +199,24 @@
       <div id="memoBox"><textarea id="memoInput" placeholder="메모 (애플펜슬로 바로 쓸 수 있습니다)"></textarea></div>
     </div>
 
+    <div class="side-col">
+    <!-- AI 답변 사이드 패널 — 화면을 떠나지 않는다 -->
+    <div id="aiPanel" class="hidden">
+      <div class="wiki-head">
+        <div class="wiki-title">
+          <div id="aiTerm">—</div>
+          <div class="wiki-sub" id="aiStatus"></div>
+        </div>
+        <button class="icon-btn" id="aiRetry" title="다시 묻기">↻</button>
+        <button class="icon-btn" id="aiClose" title="닫기">✕</button>
+      </div>
+      <div id="aiBody" class="wiki-body"></div>
+      <div class="ai-foot">
+        <button class="btn" id="aiSave">이 답변 저장</button>
+        <button class="btn" id="aiOpenApp">앱에서 이어보기</button>
+      </div>
+    </div>
+
     <!-- 관련 노트(위키) 패널 -->
     <div id="wikiPanel" class="hidden">
       <div class="wiki-head">
@@ -194,6 +234,7 @@
       </div>
       <div id="wikiBody" class="wiki-body"></div>
     </div>
+    </div><!-- /.side-col -->
     </div><!-- /.split -->
 
     <div class="navbar">

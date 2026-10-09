@@ -4,7 +4,7 @@
 import { getBlobUrl } from './github.js';
 import { imagePaths } from './parser.js';
 import { saveSession, loadSession, clearSession } from './db.js';
-import { tokenize } from './pen.js';
+import { tokenize, tokenizeTree } from './pen.js';
 
 const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
 
@@ -289,6 +289,8 @@ export class Quiz {
     if (Array.isArray(q.opt) && q.opt.some(Boolean) && q.type !== 'mc') {
       this.el.expText.appendChild(mk('오답노트:\n' + q.opt.map((t, i) => (t ? `${CIRCLED[i]} ${t}` : '')).filter(Boolean).join('\n')));
     }
+    // 해설도 밑줄로 긁어서 질문할 수 있게 토큰화한다(2026-10-09 요청)
+    tokenizeTree(this.el.expText);
     this.el.explain.style.display = 'block';
   }
 

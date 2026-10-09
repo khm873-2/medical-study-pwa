@@ -47,8 +47,11 @@ global.document = {
   // quiz.js가 pen.js의 tokenize()를 쓰면서 필요해졌다(지문을 단어 span으로 감싼다)
   createDocumentFragment: () => { const f = makeEl('frag'); f.isFrag = true; return f; },
   createTextNode: (t) => ({ nodeType: 3, textContent: t }),
+  // tokenizeTree()가 해설·노트 본문을 토큰화할 때 쓴다. 스텁에선 순회할 게 없으므로 빈 워커.
+  createTreeWalker: () => ({ nextNode: () => null }),
   addEventListener() {},
 };
+global.NodeFilter = { SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2 };
 global.window = { scrollTo() {}, addEventListener() {} };
 global.indexedDB = undefined; // db.js의 saveSession 등은 try/catch로 삼켜짐
 global.URL = { createObjectURL: () => 'blob:x', revokeObjectURL() {} };

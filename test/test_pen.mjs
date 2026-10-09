@@ -1,5 +1,5 @@
-// pen.js 테스트 — 캔버스/DOM을 스텁으로 두고 팜 리젝션·올가미 판정·스트로크 관리를 검증.
-import { readFileSync, writeFileSync, rmSync } from 'fs';
+// pen.js 테스트 — 모드 전환 없는 새 상호작용(탭/밑줄/올가미 자동 판별)을 검증.
+import { readFileSync } from 'fs';
 import { pathToFileURL } from 'url';
 
 const PWA = '/Users/hyunminkang/Documents/medical-study-pwa';
@@ -7,136 +7,135 @@ let pass = 0; const fail = [];
 const ok = (n, c, d) => { if (c) pass++; else fail.push(`${n}${d ? ' — ' + d : ''}`); };
 
 // ---- DOM/Canvas 스텁 ----
-function rect(l, t, w, h) { return { left: l, top: t, width: w, height: h, right: l + w, bottom: t + h }; }
-function mkEl(cls = '', text = '', box = rect(0, 0, 10, 10)) {
+const R = (l, t, w, h) => ({ left: l, top: t, width: w, height: h, right: l + w, bottom: t + h });
+function mkEl(cls = '', text = '', box = R(0, 0, 10, 10)) {
   const el = {
-    className: cls, textContent: text, style: {}, dataset: {}, _children: [], _cls: new Set(cls.split(' ').filter(Boolean)),
-    classList: { add: (...c) => c.forEach(x => el._cls.add(x)), remove: (...c) => c.forEach(x => el._cls.delete(x)),
-                 toggle: (c, f) => { f === undefined ? (el._cls.has(c) ? el._cls.delete(c) : el._cls.add(c)) : (f ? el._cls.add(c) : el._cls.delete(c)); },
-                 contains: c => el._cls.has(c) },
+    className: cls, textContent: text, style: {}, dataset: {}, _children: [],
+    _cls: new Set(cls.split(' ').filter(Boolean)), _ev: {},
+    classList: {
+      add: (...c) => c.forEach((x) => el._cls.add(x)),
+      remove: (...c) => c.forEach((x) => el._cls.delete(x)),
+      toggle: (c, f) => { f === undefined ? (el._cls.has(c) ? el._cls.delete(c) : el._cls.add(c)) : (f ? el._cls.add(c) : el._cls.delete(c)); },
+      contains: (c) => el._cls.has(c),
+    },
     appendChild(c) { el._children.push(c); return c; },
-    remove() {}, addEventListener(t, fn) { (el._ev ||= {})[t] = fn; },
-    setPointerCapture() {}, getBoundingClientRect: () => box,
-    querySelectorAll: (sel) => el._query ? el._query(sel) : [],
+    remove() {}, focus() {},
+    addEventListener(t, fn) { el._ev[t] = fn; },
+    setPointerCapture() {},
+    getBoundingClientRect: () => box,
+    querySelectorAll: (sel) => (el._query ? el._query(sel) : []),
     querySelector: (sel) => (el._query ? el._query(sel)[0] : undefined),
-    getContext: () => ctxStub(),
+    getContext: () => ({
+      setTransform() {}, clearRect() {}, save() {}, restore() {}, beginPath() {},
+      moveTo() {}, lineTo() {}, stroke() {}, setLineDash() {},
+    }),
     toDataURL: () => 'data:image/png;base64,FAKE',
     set innerHTML(v) { el._html = v; el._children = []; }, get innerHTML() { return el._html || ''; },
   };
   return el;
 }
-function ctxStub() {
-  return { setTransform() {}, clearRect() {}, save() {}, restore() {}, beginPath() {}, moveTo() {},
-           lineTo() {}, stroke() {}, setLineDash() {}, strokeStyle: '', lineWidth: 0, lineCap: '', lineJoin: '' };
-}
 global.ResizeObserver = class { observe() {} disconnect() {} };
 global.window = { devicePixelRatio: 2 };
-global.requestAnimationFrame = (f) => f();
-const createdEls = [];
+let elementAt = null;
 global.document = {
-  createElement: (t) => { const e = mkEl(); e.tag = t; createdEls.push(e); return e; },
+  createElement: () => mkEl(),
   createDocumentFragment: () => { const f = mkEl(); f.isFrag = true; return f; },
-  createTextNode: (t) => ({ text: t }),
+  createTextNode: (t) => ({ nodeType: 3, textContent: t }),
+  elementFromPoint: () => elementAt,
 };
 
-const { PenLayer, tokenize } = await import(pathToFileURL(`${PWA}/js/pen.js`).href);
+const { PenLayer, tokenize, classify } = await import(pathToFileURL(`${PWA}/js/pen.js`).href);
+
+// ---- classify: 획 모양 판별 ----
+const line = (x1, y1, x2, y2, n = 10) =>
+  Array.from({ length: n }, (_, i) => ({ x: x1 + (x2 - x1) * i / (n - 1), y: y1 + (y2 - y1) * i / (n - 1), p: .5 }));
+ok('짧은 점 → tap', classify([{ x: 10, y: 10, p: .5 }, { x: 13, y: 12, p: .5 }]) === 'tap');
+ok('가로로 긴 획 → underline', classify(line(10, 50, 200, 52)) === 'underline', classify(line(10, 50, 200, 52)));
+ok('완만한 밑줄도 underline', classify(line(10, 50, 160, 60)) === 'underline');
+// 닫힌 원
+const circle = Array.from({ length: 24 }, (_, i) => {
+  const a = (i / 23) * Math.PI * 2;
+  return { x: 100 + Math.cos(a) * 40, y: 100 + Math.sin(a) * 40, p: .5 };
+});
+ok('닫힌 원 → lasso', classify(circle) === 'lasso', classify(circle));
+ok('세로로 긴 획 → underline(기본값)', classify(line(50, 10, 55, 160)) === 'underline');
 
 // ---- tokenize ----
-const el = mkEl();
-tokenize(el, '급성 심근경색 환자');
-const toks = el._children[0]._children.filter((c) => c.className === 'tok');
-ok('tokenize: 단어 수', toks.length === 3, `${toks.length}`);
-ok('tokenize: 내용 보존', toks.map((t) => t.textContent).join(' ') === '급성 심근경색 환자');
+const te = mkEl();
+tokenize(te, '급성 심근경색 환자');
+const toks = te._children[0]._children.filter((c) => c.className === 'tok');
+ok('tokenize 단어 수', toks.length === 3);
 
-// ---- PenLayer 기본 ----
-const host = mkEl('card', '', rect(0, 0, 400, 300));
-let lassoResult = 'NONE';
-const pen = new PenLayer(host, { onLasso: (t) => { lassoResult = t; }, onChange: () => {} });
-
-ok('기본 모드는 터치', pen.mode === 'touch');
-ok('터치 모드: 캔버스가 이벤트 안 받음', pen.canvas.style.pointerEvents === 'none');
-pen.setMode('pen');
-ok('펜 모드: 캔버스가 이벤트 받음', pen.canvas.style.pointerEvents === 'auto');
-ok('펜 모드: touch-action none', pen.canvas.style.touchAction === 'none');
-
-// ---- 팜 리젝션 ----
-const ev = (type, x, y, pointerType) => ({
-  pointerType, clientX: x, clientY: y, pressure: 0.5, pointerId: 1,
+// ---- PenLayer: 손가락은 통과, 펜만 처리 ----
+const host = mkEl('split', '', R(0, 0, 400, 300));
+let selected = null, tapped = null;
+const pen = new PenLayer(host, {
+  onSelect: (t) => { selected = t; },
+  onTap: (el) => { tapped = el; return true; },
+});
+const ev = (x, y, type = 'pen') => ({
+  pointerType: type, clientX: x, clientY: y, pressure: .5, pointerId: 1,
   preventDefault() {}, getCoalescedEvents: null,
 });
-pen.setMode('pen');
-pen._down(ev('down', 10, 10, 'touch'));    // 손바닥
-pen._move(ev('move', 50, 50, 'touch'));
-pen._up(ev('up', 50, 50, 'touch'));
-ok('팜 리젝션: 손가락은 안 그려짐', pen.strokes.length === 0, `${pen.strokes.length}획`);
 
-pen._down(ev('down', 10, 10, 'pen'));      // 애플펜슬
-pen._move(ev('move', 50, 50, 'pen'));
-pen._up(ev('up', 50, 50, 'pen'));
-ok('펜은 그려짐', pen.strokes.length === 1, `${pen.strokes.length}획`);
+pen._down(ev(10, 10, 'touch')); pen._move(ev(80, 12, 'touch')); pen._up(ev(80, 12, 'touch'));
+ok('손가락은 획을 안 남김(통과)', pen.strokes.length === 0);
+ok('손가락은 선택도 안 함', selected === null);
 
-pen.setMode('touch');
-pen._down(ev('down', 10, 10, 'pen'));
-pen._up(ev('up', 10, 10, 'pen'));
-ok('터치 모드에선 펜도 안 그려짐', pen.strokes.length === 1);
+// ---- 밑줄 → 줄 통째로 ----
+// 1줄: "65세 남자가 쓰러졌다" (y 50~70), 2줄: "맥박이 없다" (y 80~100)
+function word(text, l, t, w = 40, h = 20) {
+  const e = mkEl('tok', text, R(l, t, w, h));
+  e._cls = new Set(['tok']);
+  return e;
+}
+const L1 = [word('65세', 10, 50), word('남자가', 55, 50), word('쓰러졌다', 100, 50)];
+const L2 = [word('맥박이', 10, 80), word('없다', 55, 80)];
+host._query = (sel) => (sel === '.tok' ? [...L1, ...L2] : []);
 
-// ---- undo / clear / 직렬화 ----
-pen.setMode('pen');
-pen._down(ev('d', 0, 0, 'pen')); pen._move(ev('m', 20, 20, 'pen')); pen._up(ev('u', 20, 20, 'pen'));
-ok('획 추가됨', pen.strokes.length === 2);
+selected = null;
+pen._down(ev(20, 72)); line(20, 72, 130, 73, 8).slice(1).forEach((p) => pen._move(ev(p.x, p.y))); pen._up(ev(130, 73));
+ok('밑줄: 그 줄 전체를 가져옴', selected === '65세 남자가 쓰러졌다', `"${selected}"`);
+ok('밑줄 궤적은 획으로 안 남음', pen.strokes.length === 0, `${pen.strokes.length}`);
+
+// 일부만 그으면 가로로 걸친 단어만 (65세 x10~50, 남자가 x55~95, 쓰러졌다 x100~140)
+selected = null;
+pen._down(ev(12, 72)); line(12, 72, 50, 72, 6).slice(1).forEach((p) => pen._move(ev(p.x, p.y))); pen._up(ev(50, 72));
+ok('밑줄 일부: 첫 단어만', selected === '65세', `"${selected}"`);
+
+selected = null;
+pen._down(ev(12, 72)); line(12, 72, 92, 72, 8).slice(1).forEach((p) => pen._move(ev(p.x, p.y))); pen._up(ev(92, 72));
+ok('밑줄 일부: 걸친 두 단어', selected === '65세 남자가', `"${selected}"`);
+
+// 두 줄에 걸친 올가미
+selected = null;
+const box2 = [[5,45],[150,45],[150,105],[5,105],[5,45]];
+pen._down(ev(box2[0][0], box2[0][1]));
+box2.slice(1).forEach(([x, y]) => pen._move(ev(x, y)));
+pen._up(ev(5, 45));
+ok('올가미: 두 줄 모두', selected === '65세 남자가 쓰러졌다 맥박이 없다', `"${selected}"`);
+
+// ---- 펜 탭 → 선지 선택 ----
+tapped = null;
+elementAt = mkEl('badge');
+pen._down(ev(200, 200)); pen._up(ev(202, 201));
+ok('펜 탭 → onTap 호출', tapped === elementAt);
+ok('탭은 획으로 안 남음', pen.strokes.length === 0);
+
+// ---- 필기는 남는다 ----
+host._query = () => [];     // 글자 없는 영역
+pen._down(ev(300, 250)); line(300, 250, 330, 256, 6).slice(1).forEach((p) => pen._move(ev(p.x, p.y))); pen._up(ev(330, 256));
+ok('글자 없는 곳의 획은 필기로 남음', pen.strokes.length === 1, `${pen.strokes.length}`);
 pen.undo();
-ok('undo', pen.strokes.length === 1);
-const ser = pen.serialize();
-ok('serialize', Array.isArray(ser.strokes) && ser.strokes.length === 1);
-ok('toPNG(획 있을 때)', typeof pen.toPNG() === 'string');
-pen.clear();
-ok('clear', pen.strokes.length === 0 && pen.isEmpty);
-ok('toPNG(획 없을 때 null)', pen.toPNG() === null);
-pen.load(ser);
-ok('load 복원', pen.strokes.length === 1);
-
-// ---- 올가미 hit-test ----
-// 단어 3개를 가로로 배치: A(10~40), B(60~90), C(110~140), 모두 y=50~70
-const words = [
-  { ...mkEl('tok', 'Torsade', rect(10, 50, 30, 20)), _cls: new Set(['tok']) },
-  { ...mkEl('tok', 'de', rect(60, 50, 30, 20)), _cls: new Set(['tok']) },
-  { ...mkEl('tok', 'Pointes', rect(110, 50, 30, 20)), _cls: new Set(['tok']) },
-];
-words.forEach((w) => { w.getBoundingClientRect = ((b) => () => b)(w.getBoundingClientRect()); });
-host._query = (sel) => (sel === '.tok' ? words : []);
-
-// 앞 두 단어만 감싸는 사각 궤적 (x 0~100, y 40~80)
-pen.setMode('lasso');
-const loop = [[0,40],[100,40],[100,80],[0,80],[0,40]];
-pen._down(ev('d', loop[0][0], loop[0][1], 'pen'));
-loop.slice(1).forEach(([x,y]) => pen._move(ev('m', x, y, 'pen')));
-pen._up(ev('u', 0, 40, 'pen'));
-ok('올가미: 안쪽 단어만 추출', lassoResult === 'Torsade de', `"${lassoResult}"`);
-ok('올가미 궤적은 획으로 안 남음', pen.strokes.length === 1, `${pen.strokes.length}`);
-
-// 전부 감싸기
-lassoResult = 'NONE';
-pen._down(ev('d', 0, 40, 'pen'));
-[[200,40],[200,80],[0,80],[0,40]].forEach(([x,y]) => pen._move(ev('m', x, y, 'pen')));
-pen._up(ev('u', 0, 40, 'pen'));
-ok('올가미: 전체 추출', lassoResult === 'Torsade de Pointes', `"${lassoResult}"`);
-
-// 아무것도 안 걸림
-lassoResult = 'NONE';
-pen._down(ev('d', 300, 200, 'pen'));
-[[340,200],[340,240],[300,240],[300,200]].forEach(([x,y]) => pen._move(ev('m', x, y, 'pen')));
-pen._up(ev('u', 300, 200, 'pen'));
-ok('올가미: 빈 영역이면 빈 문자열', lassoResult === '', `"${lassoResult}"`);
+ok('undo', pen.strokes.length === 0);
 
 // ---- 지우개 ----
-pen.setMode('pen');
-pen.clear();
-pen._down(ev('d', 100, 100, 'pen')); pen._move(ev('m', 120, 100, 'pen')); pen._up(ev('u', 120, 100, 'pen'));
+pen._down(ev(100, 200)); line(100, 200, 140, 200, 5).slice(1).forEach((p) => pen._move(ev(p.x, p.y))); pen._up(ev(140, 200));
 ok('지우개 전 1획', pen.strokes.length === 1);
-pen.setMode('erase');
-pen._down(ev('d', 105, 100, 'pen'));
-pen._up(ev('u', 105, 100, 'pen'));
-ok('지우개: 근처 획 삭제', pen.strokes.length === 0, `${pen.strokes.length}`);
+pen.setErasing(true);
+pen._down(ev(110, 200)); pen._up(ev(110, 200));
+ok('지우개로 삭제', pen.strokes.length === 0);
+pen.setErasing(false);
 
 console.log(`\n통과 ${pass}건`);
 if (fail.length) { console.log(`실패 ${fail.length}건:`); fail.forEach((f) => console.log('  ✗ ' + f)); process.exit(1); }

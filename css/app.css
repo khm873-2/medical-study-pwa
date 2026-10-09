@@ -329,3 +329,43 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 .cache-row .cr-meta { font-size: 12px; color: var(--sub); }
 .cache-row button { padding: 9px 14px; font-size: 13px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-family: inherit; font-weight: 600; }
 .cache-row button:disabled { opacity: .5; }
+
+/* ═══════════ 펜 상호작용 개편 · AI 사이드 패널 (2026-10-09) ═══════════ */
+
+/* 캔버스는 보이기만 하고 이벤트는 host가 받는다 — 손가락이 아래 UI로 그대로 통과하도록 */
+.penlayer { position: absolute; inset: 0; z-index: 10; pointer-events: none; }
+/* 펜으로 그리는 중에도 손가락 스크롤이 살아 있어야 하므로 touch-action은 건드리지 않는다 */
+
+.pen-hint { flex: 1; font-size: 12px; color: var(--sub); padding-left: 4px; }
+
+/* 선지 번호를 펜으로 탭하기 쉽게 — 타깃을 키운다 */
+.opt-row .badge { position: relative; }
+.opt-row .badge::after {
+  content: ''; position: absolute; inset: -10px; border-radius: 50%;
+}
+
+/* AI 답변 패널 */
+#aiPanel {
+  margin-top: 14px; background: var(--card); border: 1px solid var(--accent);
+  border-radius: 14px; overflow: hidden;
+}
+#aiTerm { font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#aiBody { padding: 14px 16px; max-height: 46vh; overflow-y: auto; font-size: 15px; line-height: 1.7; }
+#aiBody .ai-loading { color: var(--sub); font-size: 14px; }
+#aiBody strong { color: var(--accent); }
+.ai-foot { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--badge-bg); }
+.ai-foot .btn { flex: 1; min-height: 40px; padding: 9px 12px; font-size: 13px; }
+
+/* 가로 넓은 화면: 문제 | (노트 + AI) 2단 */
+@media (orientation: landscape) and (min-width: 1000px) {
+  #quizScreen.with-side .split { display: flex; gap: 16px; align-items: flex-start; }
+  #quizScreen.with-side .split > #qcard { flex: 1 1 54%; min-width: 0; }
+  #quizScreen.with-side .side-col { flex: 1 1 46%; min-width: 0; position: sticky; top: 58px; }
+  #quizScreen.with-side #aiPanel, #quizScreen.with-side #wikiPanel { margin-top: 0; }
+  #quizScreen.with-side #wikiPanel { margin-top: 12px; }
+  #quizScreen.with-side #aiBody { max-height: 40vh; }
+  #quizScreen.with-side .wiki-body { max-height: 34vh; }
+}
+
+/* 선택 피드백 — 긁은 줄을 잠깐 하이라이트 */
+.tok.picked { background: rgba(37,99,235,.18); border-radius: 3px; }
