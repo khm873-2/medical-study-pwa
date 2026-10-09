@@ -105,23 +105,30 @@ await settle();
 ok('밑줄: 그 줄 전체', selected === '65세 남자가 쓰러졌다', `"${selected}"`);
 ok('선택 궤적은 획으로 안 남음', pen.strokes.length === 0, `${pen.strokes.length}`);
 
-// 일부만 (65세 x10~50, 남자가 x55~95, 쓰러졌다 x100~140)
+// ★ 줄 중간까지만 그어도 **그 줄 전체**를 가져온다(2026-10-09 변경)
+//   — 줄을 중간까지만 긋는 일은 실제로 거의 없고, 잘리면 다시 그어야 해서 불편했다
 selected = null;
-draw(12, 72, 44, 72, 6);     // '남자가'(x55~)에 닿지 않게
+draw(12, 72, 44, 72, 6);     // '65세'에만 닿게 짧게
 await settle();
-ok('일부만 걸치면 그 단어만', selected === '65세', `"${selected}"`);
+ok('짧게 그어도 줄 전체', selected === '65세 남자가 쓰러졌다', `"${selected}"`);
 
 selected = null;
-draw(12, 72, 92, 72);
+draw(100, 72, 130, 72, 5);   // 줄 뒷부분만
 await settle();
-ok('두 단어에 걸치면 둘 다', selected === '65세 남자가', `"${selected}"`);
+ok('줄 뒤쪽만 그어도 줄 전체', selected === '65세 남자가 쓰러졌다', `"${selected}"`);
+
+// 다른 줄은 안 딸려온다
+selected = null;
+draw(12, 102, 40, 102, 5);   // 둘째 줄만
+await settle();
+ok('걸린 줄만 가져옴', selected === '맥박이 없다', `"${selected}"`);
 
 // ★ 끊어 그어도 하나로 묶인다 — 이게 이번 변경의 핵심(밑줄이 잘 끊기던 문제)
 selected = null;
 draw(12, 72, 48, 72, 4);    // 첫 조각
 draw(52, 72, 92, 73, 4);    // 끊겼다가 이어서
 await settle();
-ok('끊어 그어도 한 번의 선택으로', selected === '65세 남자가', `"${selected}"`);
+ok('끊어 그어도 한 번의 선택으로', selected === '65세 남자가 쓰러졌다', `"${selected}"`);
 
 // 네모로 두 줄 감싸기(캡처하듯)
 selected = null;

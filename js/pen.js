@@ -188,10 +188,17 @@ export class PenLayer {
     this._settle = setTimeout(() => this._commit(), SETTLE_MS);
   }
 
-  /** 지금까지 그은 획들을 감싸는 네모를 미리 보여준다(무엇이 잡힐지 알 수 있게). */
+  /**
+   * 무엇이 잡힐지 미리 보여준다.
+   * 그은 궤적이 아니라 **실제로 가져갈 줄 전체**를 네모로 그린다 — 줄 끝까지 가져가므로
+   * 궤적만 보여주면 "어디까지 복사되는지" 알 수 없다.
+   */
   _showPendingBox() {
-    const box = boundsOf(this._pending);
-    this._previewBox = box && (box.r - box.l) * (box.b - box.t) > 0 ? box : null;
+    const raw = boundsOf(this._pending);
+    if (!raw) { this._previewBox = null; this.redraw(); return; }
+    this._textInBox(raw);                       // _coveredBox 를 갱신한다
+    const box = this._coveredBox || raw;
+    this._previewBox = (box.r - box.l) * (box.b - box.t) > 0 ? box : null;
     this.redraw();
   }
 
@@ -230,8 +237,9 @@ export class PenLayer {
    * 그래서 "획들을 감싸는 사각형"으로 바꿨다 — 대충 네모를 그리든, 밑줄을 긋든,
    * 몇 번에 나눠 긋든 결국 그 바운딩 박스에 걸린 글자를 가져온다.
    *
-   * 줄 단위로 확장하는 건 유지한다: 박스에 **절반 이상 걸친 줄**은 그 줄에서
-   * 가로로 걸친 부분을 통째로(거의 다 걸쳤으면 줄 전체) 가져온다.
+   * **걸린 줄은 무조건 끝까지** 가져온다(2026-10-09 변경).
+   * 줄을 중간까지만 긋는 일은 실제로 거의 없고, 가로 범위까지 따지면 문장이 잘려서
+   * 오히려 다시 긋게 된다. 세로로 어느 줄에 걸쳤는지만 보고 그 줄 전체를 준다.
    */
   _textInBox(box) {
     const r = this.canvas.getBoundingClientRect();
@@ -253,14 +261,28 @@ export class PenLayer {
     const yBot = box.b + 8;
 
     const picked = [];
+    const covered = [];                 // 실제로 잡힌 줄의 화면 범위(미리보기용)
     for (const line of groupLines(toks)) {
       if (line.cy < yTop || line.cy > yBot) continue;
-      const inRange = line.toks.filter((t) => t.r >= box.l - 6 && t.l <= box.r + 6);
-      if (!inRange.length) continue;
-      // 그 줄을 거의 다 덮었으면 줄 전체를 준다(의도가 "이 줄"일 가능성이 높다)
-      const use = inRange.length >= Math.max(1, line.toks.length * 0.8) ? line.toks : inRange;
-      picked.push(use);
+      // 가로로 조금이라도 걸쳤으면 그 줄 전체를 가져간다
+      const touches = line.toks.some((t) => t.r >= box.l - 6 && t.l <= box.r + 6);
+      if (!touches) continue;
+      picked.push(line.toks);
+      covered.push({
+        l: Math.min(...line.toks.map((t) => t.l)),
+        r: Math.max(...line.toks.map((t) => t.r)),
+        t: Math.min(...line.toks.map((t) => t.t)),
+        b: Math.max(...line.toks.map((t) => t.b)),
+      });
     }
+    this._coveredBox = covered.length
+      ? {
+          l: Math.min(...covered.map((c) => c.l)),
+          r: Math.max(...covered.map((c) => c.r)),
+          t: Math.min(...covered.map((c) => c.t)),
+          b: Math.max(...covered.map((c) => c.b)),
+        }
+      : null;
     if (!picked.length) return '';
     return picked
       .map((line) => line.map((t) => t.el.textContent).join(' '))
