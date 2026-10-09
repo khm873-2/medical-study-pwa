@@ -175,6 +175,27 @@ q2.finish();
 check('전부 오답: correct 0', finished.correct === 0, `${finished.correct}`);
 check('전부 오답: wrong = 전체', finished.wrong.length === questions.length);
 
+// ★ 한 문항만 다시 풀기 — 선지를 잘못 눌렀을 때(2026-10-09 추가)
+{
+  const q4 = new Quiz({ examKey: 't4', questions, title: 'T', onFinish: () => {}, onExit: () => {} });
+  q4.start();
+  const wrongPick = (questions[0].ans + 1) % questions[0].opts.length;
+  q4.select(wrongPick);
+  check('잘못 고른 뒤 답이 기록됨', q4.answers[0] === wrongPick);
+  check('오답으로 잠김', !q4.isCorrect(0));
+  q4.resetOne();
+  check('resetOne: 답이 비워짐', q4.answers[0] === null);
+  check('resetOne: 제거선지도 초기화', q4.eliminated[0].size === 0);
+  q4.select(questions[0].ans);
+  check('resetOne 후 다시 고를 수 있음', q4.isCorrect(0));
+  // 다른 문항은 건드리지 않는다
+  q4.cur = 1; q4.render();
+  q4.select(questions[1].ans);
+  q4.cur = 0; q4.render();
+  q4.resetOne();
+  check('resetOne은 현재 문항만', q4.answers[1] !== null && q4.answers[0] === null);
+}
+
 // 틀린 문제 재시도
 const ok = q2.retryWrong();
 check('retryWrong 동작', ok === true);

@@ -38,27 +38,37 @@ export function buildPrompt({ term, question, subject, lecture }) {
 
 export function appList() { return APPS; }
 
-/** 클립보드에 넣고 해당 앱을 연다. 실패해도 클립보드엔 들어가 있게 한다. */
-export async function sendTo(appId, prompt) {
-  let copied = false;
-  try { await navigator.clipboard.writeText(prompt); copied = true; } catch {}
+/**
+ * 클립보드에 넣고 해당 앱을 연다.
+ *
+ * 2026-10-09 수정 — "앱에서 질문이 바로 안 되고 느리다"는 피드백:
+ *   클립보드 복사를 await 한 뒤에야 앱을 열어서, 그 사이 사용자 제스처 컨텍스트가
+ *   끊기고 스킴 실행이 지연·차단됐다. iOS는 탭 직후 몇 ms 안에 이동해야 바로 열린다.
+ *   → **앱부터 열고** 클립보드는 뒤에서 처리한다.
+ */
+export function sendTo(appId, prompt) {
   const app = APPS.find((a) => a.id === appId);
+  // 1) 클립보드 — await 하지 않는다(제스처 컨텍스트 유지)
+  const copying = navigator.clipboard
+    ? navigator.clipboard.writeText(prompt).then(() => true).catch(() => false)
+    : Promise.resolve(false);
+
+  // 2) 곧바로 앱 실행
   if (app) {
-    // 스킴으로 앱을 시도하고, 안 열리면 웹으로.
-    const t = setTimeout(() => { window.open(app.web, '_blank'); }, 700);
     try {
       window.location.href = app.scheme;
-      // 앱이 실제로 열리면 페이지가 백그라운드로 가면서 타이머가 늦게 돈다.
-      document.addEventListener('visibilitychange', function once() {
-        if (document.hidden) clearTimeout(t);
-        document.removeEventListener('visibilitychange', once);
-      });
     } catch {
-      clearTimeout(t);
       window.open(app.web, '_blank');
     }
+    // 앱이 안 열리면(= 화면이 그대로면) 웹으로 폴백
+    const t = setTimeout(() => { window.open(app.web, '_blank'); }, 1200);
+    const once = () => {
+      if (document.hidden) clearTimeout(t);   // 앱이 열려 백그라운드로 감
+      document.removeEventListener('visibilitychange', once);
+    };
+    document.addEventListener('visibilitychange', once);
   }
-  return copied;
+  return copying;
 }
 
 /** 공유 시트(설치된 아무 앱으로나) — iOS에서 가장 범용적인 경로. */

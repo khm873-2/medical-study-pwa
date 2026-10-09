@@ -275,6 +275,15 @@ export class Quiz {
     this.render();
   }
 
+  /** 이 문항만 답을 비운다 — 선지를 잘못 눌렀을 때. */
+  resetOne() {
+    const idx = this.qIndex;
+    this.answers[idx] = null;
+    this.eliminated[idx] = new Set();
+    this.persist();
+    this.render();
+  }
+
   _showExplain(q) {
     const idx = this.qIndex;
     this.el.expText.innerHTML = '';
@@ -282,9 +291,14 @@ export class Quiz {
 
     const correct = this.answers[idx] === q.ans;
     const ansLabel = q.type === 'ox' ? (q.ans === 0 ? 'O' : 'X') : (CIRCLED[q.ans] || q.ans + 1);
-    this.el.expText.appendChild(
-      mk(`${correct ? '✅ 정답' : '❌ 오답'} — 정답 <b class="opt-num">${ansLabel}</b>`)
-    );
+    const head = mk(`${correct ? '✅ 정답' : '❌ 오답'} — 정답 <b class="opt-num">${ansLabel}</b>`);
+    // 선지를 잘못 눌렀을 때 되돌릴 수 있게(실수로 탭하는 경우가 잦다)
+    const retry = document.createElement('button');
+    retry.className = 'retry-one';
+    retry.textContent = '↺ 다시 풀기';
+    retry.onclick = () => this.resetOne();
+    head.appendChild(retry);
+    this.el.expText.appendChild(head);
     if (q.explain) this.el.expText.appendChild(mk(`📌 ${escapeHtml(q.explain)}`));
     if (Array.isArray(q.opt) && q.opt.some(Boolean) && q.type !== 'mc') {
       this.el.expText.appendChild(mk('오답노트:\n' + q.opt.map((t, i) => (t ? `${CIRCLED[i]} ${t}` : '')).filter(Boolean).join('\n')));

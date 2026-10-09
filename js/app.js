@@ -248,11 +248,24 @@ function renderList(index, sessions) {
     body.innerHTML = '<p class="muted">모의고사를 찾지 못했습니다.</p>';
     return;
   }
-  index.forEach((group) => {
-    const h = document.createElement('div');
-    h.className = 'subject-head';
-    h.textContent = group.subject.replace(/_/g, ' ');
-    body.appendChild(h);
+  // 과목을 접을 수 있게 한다 — 전부 펼쳐져 있으면 찾는 데 오래 걸린다(2026-10-09 피드백).
+  // 마지막으로 연 과목만 펼친 채로 기억한다.
+  const lastOpen = localStorage.getItem('open_subject');
+  index.forEach((group, gi) => {
+    const det = document.createElement('details');
+    det.className = 'subject-group';
+    det.open = lastOpen ? group.subject === lastOpen : gi === 0;
+    det.ontoggle = () => { if (det.open) localStorage.setItem('open_subject', group.subject); };
+
+    const sum = document.createElement('summary');
+    sum.className = 'subject-head';
+    const inProgress = group.exams.filter((e) => sessions[e.path]).length;
+    sum.innerHTML =
+      `<span>${escapeText(group.subject.replace(/_/g, ' '))}</span>` +
+      `<span class="subject-count">${group.exams.length}개` +
+      (inProgress ? ` · 풀던 중 ${inProgress}` : '') + `</span>`;
+    det.appendChild(sum);
+    body.appendChild(det);
 
     group.exams.forEach((ex) => {
       const btn = document.createElement('button');
@@ -283,7 +296,7 @@ function renderList(index, sessions) {
       btn.appendChild(nameWrap);
       btn.appendChild(prog);
       btn.onclick = () => openExam(group.subject, ex);
-      body.appendChild(btn);
+      det.appendChild(btn);
     });
   });
 }
@@ -734,10 +747,15 @@ async function loadNotesTab(force) {
     body.innerHTML = '';
     if (!groups.length) { body.innerHTML = '<p class="muted">노트를 찾지 못했습니다.</p>'; return; }
     for (const g of groups) {
-      const h = document.createElement('div');
-      h.className = 'subject-head';
-      h.textContent = `${g.subject.replace(/_/g, ' ')}  ·  ${g.root.replace(/^\d+_/, '')}`;
-      body.appendChild(h);
+      const det = document.createElement('details');
+      det.className = 'subject-group';
+      const sum = document.createElement('summary');
+      sum.className = 'subject-head';
+      sum.innerHTML =
+        `<span>${escapeText(g.subject.replace(/_/g, ' '))}</span>` +
+        `<span class="subject-count">${g.notes.length}개 · ${escapeText(g.root.replace(/^\d+_/, ''))}</span>`;
+      det.appendChild(sum);
+      body.appendChild(det);
       for (const n of g.notes) {
         const b = document.createElement('button');
         b.className = 'exam-item';
@@ -749,7 +767,7 @@ async function loadNotesTab(force) {
         arrow.textContent = '›';
         b.appendChild(name); b.appendChild(arrow);
         b.onclick = () => openNote(n.path);
-        body.appendChild(b);
+        det.appendChild(b);
       }
     }
   } catch (e) {
@@ -900,10 +918,14 @@ async function loadCardsTab() {
     body.appendChild(hint);
 
     for (const g of groups) {
-      const h = document.createElement('div');
-      h.className = 'subject-head';
-      h.textContent = g.subject.replace(/_/g, ' ');
-      body.appendChild(h);
+      const det = document.createElement('details');
+      det.className = 'subject-group';
+      const sum = document.createElement('summary');
+      sum.className = 'subject-head';
+      sum.innerHTML = `<span>${escapeText(g.subject.replace(/_/g, ' '))}</span>` +
+                      `<span class="subject-count">${g.notes.length}개</span>`;
+      det.appendChild(sum);
+      body.appendChild(det);
       for (const n of g.notes) {
         const b = document.createElement('button');
         b.className = 'exam-item';
@@ -915,7 +937,7 @@ async function loadCardsTab() {
         meta.textContent = '›';
         b.appendChild(name); b.appendChild(meta);
         b.onclick = () => startCards(n.path, srs);
-        body.appendChild(b);
+        det.appendChild(b);
       }
     }
   } catch (e) {

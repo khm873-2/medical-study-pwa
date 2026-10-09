@@ -182,6 +182,7 @@
     </header>
 
     <div class="split">
+    <div class="main-col">
     <div class="card" id="qcard">
       <div id="qnum"></div>
       <div id="qsource"></div>
@@ -195,6 +196,17 @@
       <div id="explainBox"><div id="expExplain"></div></div>
       <div id="memoBox"><textarea id="memoInput" placeholder="메모 (애플펜슬로 바로 쓸 수 있습니다)"></textarea></div>
     </div>
+    <div class="navbar quiz-nav">
+      <button class="icon-btn nav-arrow" id="prevBtn">‹</button>
+      <div class="center">
+        <button class="icon-btn" id="bookmarkBtn" title="북마크">☆</button>
+        <span id="posLabel">0/0</span>
+        <button class="icon-btn" id="memoBtn" title="메모">✎</button>
+      </div>
+      <button id="resultBtn">결과 보기</button>
+      <button class="icon-btn nav-arrow" id="nextBtn">›</button>
+    </div>
+    </div><!-- /.main-col -->
 
     <div class="side-col">
     <!-- AI 답변 사이드 패널 — 화면을 떠나지 않는다 -->
@@ -230,16 +242,6 @@
         <button class="btn" id="wikiUnlock">그래도 지금 보기</button>
       </div>
       <div id="wikiBody" class="wiki-body"></div>
-    </div>
-    <div class="navbar quiz-nav">
-      <button class="icon-btn nav-arrow" id="prevBtn">‹</button>
-      <div class="center">
-        <button class="icon-btn" id="bookmarkBtn" title="북마크">☆</button>
-        <span id="posLabel">0/0</span>
-        <button class="icon-btn" id="memoBtn" title="메모">✎</button>
-      </div>
-      <button id="resultBtn">결과 보기</button>
-      <button class="icon-btn nav-arrow" id="nextBtn">›</button>
     </div>
     </div><!-- /.side-col -->
     </div><!-- /.split -->
