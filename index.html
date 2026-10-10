@@ -171,12 +171,14 @@
       <button class="icon-btn" id="settingsBtn" title="설정"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 14a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V20a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 8.9 18a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H2a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 3.7 7.3 1.7 1.7 0 0 0 3.4 5.4l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H8a1.7 1.7 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V8a1.7 1.7 0 0 0 1.5 1H22a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" transform="translate(0 1.6) scale(.92)"/></svg></button>
     </header>
     <div class="tabs">
-      <button class="tab active" data-tab="quizzes">퀴즈</button>
+      <button class="tab active" data-tab="today">오늘</button>
+      <button class="tab" data-tab="quizzes">퀴즈</button>
       <button class="tab" data-tab="exams">모의고사</button>
       <button class="tab" data-tab="notes">노트 읽기</button>
       <button class="tab" data-tab="cards">카드</button>
     </div>
-    <div id="quizBody"></div>
+    <div id="todayBody"></div>
+    <div id="quizBody" class="hidden"></div>
     <div id="listBody" class="hidden"></div>
     <div id="notesBody" class="hidden"></div>
     <div id="cardsBody" class="hidden"></div>

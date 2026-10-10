@@ -1422,3 +1422,61 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
 .speed-ms { font-size: 13px; font-weight: 700; color: var(--correct); font-variant-numeric: tabular-nums; }
 .speed-ms.slow { color: var(--warn); }
 .speed-n { font-size: 11px; color: var(--sub); font-variant-numeric: tabular-nums; }
+
+/* ---- 오늘 할 것 (2026-10-10) ----
+   강의가 매일 2~3개씩 몰리는 구간이라, 앱을 열면 찾아 들어가지 않고 바로 보이게 한다. */
+.today-h {
+  font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  color: var(--sub); margin: 18px 2px 8px; text-transform: none;
+}
+.today-h:first-child { margin-top: 4px; }
+.today-sec { margin-bottom: 2px; }
+
+.today-exam {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 15px; border-radius: var(--r-2);
+  background: var(--badge-bg); border: 1px solid var(--border);
+  box-shadow: var(--sh-1); font-size: 13.5px;
+}
+.today-d {
+  font-size: 15px; font-weight: 800; color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.today-lec {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r-2); padding: 12px 15px; margin-bottom: 8px;
+  box-shadow: var(--sh-1);
+}
+.today-lec-head { font-size: 14.5px; line-height: 1.5; }
+.today-period {
+  display: inline-block; min-width: 42px; margin-right: 8px;
+  font-size: 11.5px; font-weight: 700; color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.today-lec .chip { margin-top: 9px; }
+.today-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 4px; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 7px 13px; border-radius: 999px;
+  background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); font-family: inherit; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; transition: background .14s var(--ease), border-color .14s;
+}
+.chip:active { background: var(--badge-bg); border-color: var(--accent); }
+
+.exam-item:disabled { opacity: .55; cursor: default; }
+.exam-item:disabled:active { background: var(--card); }
+
+/* 찍어서 맞춘 문항 표시 — 점수만 맞고 모르는 채로 넘어가지 않게 (2026-10-10) */
+.unsure-btn {
+  margin-left: 7px; padding: 4px 10px; border-radius: 999px;
+  background: var(--bg); border: 1px solid var(--border);
+  color: var(--sub); font-family: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer;
+}
+.unsure-btn.on {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  border-color: var(--warn); color: var(--warn);
+}

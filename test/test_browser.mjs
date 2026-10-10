@@ -902,13 +902,31 @@ await run('탭 분리', () => {
   document.getElementById('listScreen').classList.remove('hidden');
 
   const tabs = [...document.querySelectorAll('.tab')];
-  out.push({ name: '탭이 4개', ok: tabs.length === 4, detail: tabs.map((t) => t.textContent).join('·') });
-  out.push({ name: '순서가 퀴즈 → 모의고사 → 노트 읽기',
-    ok: tabs[0].textContent === '퀴즈' && tabs[1].textContent === '모의고사' && tabs[2].textContent === '노트 읽기',
+  const WANT = ['오늘', '퀴즈', '모의고사', '노트 읽기', '카드'];
+  out.push({ name: `탭이 ${WANT.length}개`, ok: tabs.length === WANT.length, detail: tabs.map((t) => t.textContent).join('·') });
+  out.push({ name: `순서가 ${WANT.join(' → ')}`,
+    ok: WANT.every((w, i) => tabs[i] && tabs[i].textContent === w),
     detail: tabs.map((t) => t.textContent).join(' ') });
-  out.push({ name: '퀴즈 탭이 기본', ok: tabs[0].classList.contains('active') });
+  out.push({ name: '오늘 탭이 기본', ok: tabs[0].classList.contains('active') });
   out.push({ name: '탭마다 담을 자리가 있다',
-    ok: ['quizBody', 'listBody', 'notesBody', 'cardsBody'].every((id) => !!document.getElementById(id)) });
+    ok: ['todayBody', 'quizBody', 'listBody', 'notesBody', 'cardsBody'].every((id) => !!document.getElementById(id)) });
+  // 어느 탭을 눌러도 그 탭 하나만 보여야 한다 — 탭을 추가하며 hidden 처리를 빼먹으면 겹친다.
+  // (앞선 검사들이 탭을 옮겨놨을 수 있으므로 눌러서 상태를 만들고 본다.)
+  const BODY = { today: 'todayBody', quizzes: 'quizBody', exams: 'listBody', notes: 'notesBody', cards: 'cardsBody' };
+  for (const t of tabs) {
+    const key = t.dataset.tab;
+    t.click();
+    const mine = BODY[key];
+    const others = Object.values(BODY).filter((id) => id !== mine);
+    out.push({ name: `${t.textContent} 탭을 누르면 그 탭만 보인다`,
+      ok: !!mine && !document.getElementById(mine).classList.contains('hidden')
+        && others.every((id) => document.getElementById(id).classList.contains('hidden')),
+      detail: Object.values(BODY).map((id) => `${id}:${document.getElementById(id).classList.contains('hidden') ? 'h' : 'V'}`).join(' ') });
+  }
+  // 카드 탭은 일부러 카드 화면으로 넘어간다 — 목록 화면으로 되돌려놓고 이어서 본다
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('listScreen').classList.remove('hidden');
+  document.querySelector('.tab[data-tab="today"]').click();
   out.push({ name: '탭이 눌릴 만큼 크다', ok: tabs.every((t) => t.getBoundingClientRect().height >= 40),
     detail: `${Math.round(tabs[0].getBoundingClientRect().height)}px` });
   out.push({ name: '탭 글자가 안 눌린다(줄바꿈 없음)',
@@ -932,7 +950,7 @@ await run('탭 분리', () => {
   // 탭 전환이 화면을 바꾸는가
   const show = (which) => {
     document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x.dataset.tab === which));
-    const map = { quizzes: 'quizBody', exams: 'listBody', notes: 'notesBody', cards: 'cardsBody' };
+    const map = { today: 'todayBody', quizzes: 'quizBody', exams: 'listBody', notes: 'notesBody', cards: 'cardsBody' };
     for (const [k, id] of Object.entries(map)) document.getElementById(id).classList.toggle('hidden', k !== which);
   };
   document.getElementById('quizBody').innerHTML = '<div class="exam-item">퀴즈 항목</div>';
@@ -1694,6 +1712,153 @@ await run('좁은 화면', async () => {
     ok: getComputedStyle(document.querySelector('#quizScreen .quiz-nav')).position === 'fixed' });
   out.push({ name: '좁은 화면: 리사이저는 숨는다',
     ok: getComputedStyle(document.getElementById('colResizer')).display === 'none' });
+  return out;
+});
+
+// ══════════ 오늘 탭 · 찍었음 버튼 (2026-10-10) ══════════
+// 배선은 소스로 확인하고, 생김새·탭 크기는 실제 Chrome에서 px로 재어본다.
+await run('오늘 탭 배선', async () => {
+  const out = [];
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  const quiz = await fetch('/js/quiz.js').then((r) => r.text());
+  const att = await fetch('/js/attempts.js').then((r) => r.text());
+  const sw = await fetch('/sw.js').then((r) => r.text());
+
+  out.push({ name: '오늘 탭을 그리는 함수가 있다', ok: /async function loadTodayTab/.test(app) });
+  out.push({ name: '탭을 누르면 오늘 탭을 그린다', ok: /which === 'today'\) loadTodayTab\(\)/.test(app) });
+  out.push({ name: '기본 탭이 오늘', ok: /last_tab'\) \|\| 'today'/.test(app) });
+  out.push({ name: '시간표를 읽어 강의를 뽑는다',
+    ok: /parseSchedule/.test(app) && /lecturesFor/.test(app) });
+  out.push({ name: '오프라인이면 기억해둔 시간표를 쓴다', ok: /schedule_cache/.test(app) });
+  out.push({ name: '약한 문항을 과목별로 모은다', ok: /weakBySubject/.test(app) && /weakQueue/.test(app) });
+  out.push({ name: '모아 풀기가 있다', ok: /async function openWeakQueue/.test(app) });
+  out.push({ name: '모아 풀기는 문항마다 원본 시험을 달아둔다',
+    ok: /__exam: path/.test(app), detail: '이력이 원본 시험에 쌓여야 다음에도 판단이 선다' });
+  out.push({ name: '이력은 원본 시험에 기록된다', ok: /q\.__exam \|\| this\.examKey/.test(quiz) });
+
+  out.push({ name: '답을 고르면 이력을 남긴다', ok: /this\._record\(idx\)/.test(quiz) });
+  out.push({ name: '찍었음 토글이 있다', ok: /toggleUnsure\(\)/.test(quiz) && /unsure-btn/.test(quiz) });
+  out.push({ name: '찍어서 맞춘 것도 다시 풀기에 포함',
+    ok: /!this\.isCorrect\(i\) \|\| this\.unsure\[i\]/.test(quiz),
+    detail: '점수만 맞고 모르는 채로 넘어가지 않게' });
+  out.push({ name: '찍었음이 이어풀기에 저장된다', ok: /unsure: this\.unsure/.test(quiz) });
+
+  out.push({ name: '오답이 찍은 것보다 먼저 나오게 점수를 매긴다',
+    ok: /wrong \? 400 : 200/.test(att) });
+  out.push({ name: '하루 지난 문항을 먼저 꺼낸다', ok: /aged\) s \+= 100/.test(att) });
+  out.push({ name: 'attempts.js가 서비스워커 목록에 있다', ok: /attempts\.js/.test(sw) });
+  return out;
+});
+
+await run('오늘 탭 생김새', () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('listScreen').classList.remove('hidden');
+  document.querySelector('.tab[data-tab="today"]').click();
+
+  // loadTodayTab이 만드는 것과 같은 모양을 세운다
+  const body = document.getElementById('todayBody');
+  body.classList.remove('hidden');
+  body.innerHTML = `
+    <div class="today-exam"><span class="today-d">D-13</span><span>종합 시험(90분) · 2026-10-23</span></div>
+    <div class="today-h">다시 볼 문항</div>
+    <div class="today-sec">
+      <button class="exam-item"><span class="exam-name"><b>응급_중환자</b><span class="exam-meta">틀림 6 · 찍음 3 · 푼 문항 42개</span></span><span class="exam-progress">9개 ›</span></button>
+      <button class="exam-item" disabled><span class="exam-name"><b>근골격계</b><span class="exam-meta">없음 · 푼 문항 20개</span></span><span class="exam-progress">✓</span></button>
+    </div>
+    <div class="today-h">오늘 수업 · 10/13</div>
+    <div class="today-sec">
+      <div class="today-lec"><div class="today-lec-head"><span class="today-period">2~3</span><b>소아기본소생술(PBLS), 이물질 기도폐쇄</b><span class="muted"> 응급의학과 차민수</span></div><button class="chip">📖 예습노트</button></div>
+      <div class="today-chips"><button class="chip">🧪 소아기본소생술PBLS (4/8 · 약함 4)</button><button class="chip">🧪 임상독성학</button></div>
+    </div>`;
+
+  const r = (el) => el.getBoundingClientRect();
+  const dd = document.querySelector('.today-d');
+  out.push({ name: 'D-day가 보인다', ok: r(dd).height > 8 && dd.textContent === 'D-13' });
+  out.push({ name: 'D-day에 강조색이 쓰인다',
+    ok: getComputedStyle(dd).color !== getComputedStyle(document.body).color,
+    detail: getComputedStyle(dd).color });
+
+  const rows = [...document.querySelectorAll('#todayBody .exam-item')];
+  out.push({ name: '과목 줄이 눌릴 만큼 크다', ok: rows.every((x) => r(x).height >= 44),
+    detail: `${Math.round(r(rows[0]).height)}px` });
+  out.push({ name: '약한 문항 없는 과목은 눌리지 않는다', ok: rows[1].disabled });
+  out.push({ name: '꺼진 줄은 흐리게 보인다',
+    ok: Number(getComputedStyle(rows[1]).opacity) < 0.9, detail: getComputedStyle(rows[1]).opacity });
+
+  const chips = [...document.querySelectorAll('#todayBody .chip')];
+  out.push({ name: '칩이 손가락으로 눌릴 만큼 크다', ok: chips.every((c) => r(c).height >= 28),
+    detail: `${Math.round(r(chips[0]).height)}px` });
+  out.push({ name: '칩이 둥글다', ok: getComputedStyle(chips[0]).borderRadius.startsWith('999') });
+
+  // 긴 강의명이 가로로 넘치지 않아야 한다 — 아이패드 세로에서 제일 먼저 깨지는 곳
+  out.push({ name: '오늘 탭이 가로로 넘치지 않는다',
+    ok: body.scrollWidth <= body.clientWidth + 1,
+    detail: `${body.scrollWidth} vs ${body.clientWidth}` });
+  const lec = document.querySelector('.today-lec');
+  out.push({ name: '강의 칸이 본문 폭 안에 들어온다',
+    ok: r(lec).width <= r(body).width + 1 && r(lec).width > 100 });
+  out.push({ name: '교시가 제목과 같은 줄에 붙는다',
+    ok: Math.abs(r(document.querySelector('.today-period')).top
+      - r(document.querySelector('.today-lec-head b')).top) < 10 });
+  return out;
+});
+
+await run('찍었음 버튼 생김새', () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  const qs = document.getElementById('quizScreen');
+  qs.classList.remove('hidden');
+  const exp = document.getElementById('expExplain');
+  document.getElementById('explainBox').style.display = 'block';
+  exp.innerHTML = `<div class="line">✅ 정답 — 정답 <b class="opt-num">③</b>`
+    + `<button class="retry-one">↺ 다시 풀기</button>`
+    + `<button class="unsure-btn">🎲 찍었음</button></div>`;
+  const b = exp.querySelector('.unsure-btn');
+  const r = (el) => el.getBoundingClientRect();
+  out.push({ name: '찍었음 버튼이 보인다', ok: r(b).height > 14 && r(b).width > 40,
+    detail: `${Math.round(r(b).width)}×${Math.round(r(b).height)}` });
+  out.push({ name: '다시 풀기와 같은 줄에 있다',
+    ok: Math.abs(r(b).top - r(exp.querySelector('.retry-one')).top) < 12 });
+  const off = getComputedStyle(b).borderColor;
+  b.classList.add('on');
+  const on = getComputedStyle(b).borderColor;
+  out.push({ name: '켜지면 색이 바뀐다', ok: off !== on, detail: `${off} → ${on}` });
+  out.push({ name: '켜진 상태가 글자색으로도 보인다',
+    ok: getComputedStyle(b).color !== getComputedStyle(document.body).color });
+  out.push({ name: '설명 줄을 가로로 넘치게 하지 않는다',
+    ok: exp.scrollWidth <= exp.clientWidth + 1, detail: `${exp.scrollWidth} vs ${exp.clientWidth}` });
+  return out;
+});
+
+// 아주 좁은 폭 — 긴 강의명·긴 시험 이름이 가로 스크롤을 만드는지 본다
+await page.setViewport({ width: 390, height: 844 });
+await run('오늘 탭 — 좁은 폭', () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('listScreen').classList.remove('hidden');
+  const body = document.getElementById('todayBody');
+  body.classList.remove('hidden');
+  body.innerHTML = `
+    <div class="today-h">오늘 수업 · 10/14</div>
+    <div class="today-sec">
+      <div class="today-lec"><div class="today-lec-head"><span class="today-period">5</span><b>중환자실의 구조와 운영 &amp; 중환자 중증도 분류 및 평가</b><span class="muted"> 응급의학과 박종수</span></div><button class="chip">📖 예습노트</button></div>
+      <div class="today-chips">
+        <button class="chip">🧪 전문외상소생술ATLS (12/20 · 약함 8)</button>
+        <button class="chip">🧪 중환자실구조와운영_중증도분류 (0/1)</button>
+      </div>
+    </div>`;
+  out.push({ name: '좁은 폭에서도 가로로 넘치지 않는다',
+    ok: body.scrollWidth <= body.clientWidth + 1, detail: `${body.scrollWidth} vs ${body.clientWidth}` });
+  out.push({ name: '본문 전체가 가로 스크롤을 만들지 않는다',
+    ok: document.documentElement.scrollWidth <= window.innerWidth + 1,
+    detail: `${document.documentElement.scrollWidth} vs ${window.innerWidth}` });
+  const chips = [...document.querySelectorAll('.today-chips .chip')];
+  out.push({ name: '칩이 두 줄로 접힌다',
+    ok: chips[1].getBoundingClientRect().top > chips[0].getBoundingClientRect().top + 5,
+    detail: `${Math.round(chips[0].getBoundingClientRect().top)} / ${Math.round(chips[1].getBoundingClientRect().top)}` });
+  out.push({ name: '긴 강의명이 여러 줄로 흐른다',
+    ok: document.querySelector('.today-lec-head').getBoundingClientRect().height > 30 });
   return out;
 });
 

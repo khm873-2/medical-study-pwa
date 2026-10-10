@@ -3,7 +3,7 @@
 
 import { getBlobUrl } from './github.js';
 import { imagePaths } from './parser.js';
-import { saveSession, loadSession, clearSession } from './db.js';
+import { saveSession, loadSession, clearSession, recordAttempt, markUnsure } from './db.js';
 import { scheduleBackup } from './backup.js';
 import { tokenize, tokenizeTree } from './pen.js';
 
@@ -17,9 +17,11 @@ export class Quiz {
    * @param {string} opts.title     화면 제목
    * @param {Function} opts.onFinish 결과 보기 눌렀을 때
    * @param {Function} opts.onExit   목록으로 나갈 때
+   * @param {object} [opts.meta]     {subject, kind} — 풀이 이력을 과목 단위로 모으기 위해
    */
-  constructor({ examKey, questions, title, onFinish, onExit, onRender }) {
+  constructor({ examKey, questions, title, onFinish, onExit, onRender, meta }) {
     this.examKey = examKey;
+    this.meta = meta || {};
     this.all = questions;
     this.order = questions.map((_, i) => i); // 재시도 모드에서 부분집합이 된다
     this.title = title;
@@ -33,6 +35,8 @@ export class Quiz {
     this.eliminated = questions.map(() => new Set());
     this.bookmarks = new Array(questions.length).fill(false);
     this.memos = new Array(questions.length).fill('');
+    // "찍어서 맞췄다" 표시 — 맞은 문항도 다시 볼 큐에 넣기 위한 것(2026-10-10)
+    this.unsure = new Array(questions.length).fill(false);
     this._imgCache = new Map();
 
     this.el = {
@@ -95,6 +99,7 @@ export class Quiz {
     this.answers = s.answers;
     this.bookmarks = s.bookmarks || this.bookmarks;
     this.memos = s.memos || this.memos;
+    if (Array.isArray(s.unsure) && s.unsure.length === this.all.length) this.unsure = s.unsure;
     this.cur = Math.min(s.cur || 0, this.order.length - 1);
     return s.answers.some((a) => a !== null);
   }
@@ -104,6 +109,7 @@ export class Quiz {
       answers: this.answers,
       bookmarks: this.bookmarks,
       memos: this.memos,
+      unsure: this.unsure,
       cur: this.cur,
       title: this.title,
       total: this.all.length,
@@ -304,7 +310,40 @@ export class Quiz {
     const idx = this.qIndex;
     if (this.answers[idx] !== null) return;
     this.answers[idx] = i;
+    this.unsure[idx] = false;
     this.persist();
+    this._record(idx);
+    this.render();
+  }
+
+  /**
+   * 이 문항의 풀이 결과를 이력에 남긴다 — 과목 전체에서 약한 문항을 모으기 위해.
+   * 실패해도 풀이를 막지 않는다(저장소 문제로 시험을 못 보면 안 된다).
+   */
+  _record(idx) {
+    const q = this.all[idx];
+    if (!q) return;
+    recordAttempt({
+      // 모아 풀기에서는 문항마다 원래 시험이 다르다 — 이력은 원본 시험에 쌓아야 한다
+      exam: q.__exam || this.examKey,
+      num: q.num != null ? q.num : idx + 1,
+      subject: q.__subject || this.meta.subject || '',
+      kind: q.__kind || this.meta.kind || '',
+      title: q.__title || this.title,
+      picked: this.answers[idx],
+      correct: this.isCorrect(idx),
+      unsure: !!this.unsure[idx],
+    }).catch(() => {});
+  }
+
+  /** "찍었음" 토글 — 맞았어도 다시 볼 큐에 넣는다. */
+  toggleUnsure() {
+    const idx = this.qIndex;
+    if (this.answers[idx] === null) return;
+    const q = this.all[idx];
+    this.unsure[idx] = !this.unsure[idx];
+    this.persist();
+    markUnsure(q.__exam || this.examKey, q.num != null ? q.num : idx + 1, this.unsure[idx]).catch(() => {});
     this.render();
   }
 
@@ -331,7 +370,18 @@ export class Quiz {
     retry.textContent = '↺ 다시 풀기';
     retry.onclick = () => this.resetOne();
     head.appendChild(retry);
+
+    // 찍어서 맞춘 문항이 "정답"으로만 남으면 약점이 숨는다 — 눌러서 다시 볼 큐에 넣는다.
+    const unsure = document.createElement('button');
+    unsure.className = 'unsure-btn' + (this.unsure[idx] ? ' on' : '');
+    unsure.textContent = this.unsure[idx] ? '🎲 찍었음 ✓' : '🎲 찍었음';
+    unsure.title = '확신 없이 골랐다면 눌러두세요 — 맞았어도 다시 볼 목록에 들어갑니다';
+    unsure.onclick = () => this.toggleUnsure();
+    head.appendChild(unsure);
     this.el.expText.appendChild(head);
+    if (correct && this.unsure[idx]) {
+      this.el.expText.appendChild(mk('<span class="muted">맞았지만 <b>다시 볼 목록</b>에 넣었습니다.</span>'));
+    }
     if (q.explain) this.el.expText.appendChild(mk(`📌 ${escapeHtml(q.explain)}`));
     if (Array.isArray(q.opt) && q.opt.some(Boolean) && q.type !== 'mc') {
       this.el.expText.appendChild(mk('오답노트:\n' + q.opt.map((t, i) => (t ? `${CIRCLED[i]} ${t}` : '')).filter(Boolean).join('\n')));
@@ -366,6 +416,7 @@ export class Quiz {
       correct: this.isCorrect(i),
       memo: this.memos[i] || '',
       bookmarked: !!this.bookmarks[i],
+      unsure: !!this.unsure[i],
     }));
     const answered = items.filter((x) => x.picked !== null);
     const correct = answered.filter((x) => x.correct);
@@ -374,6 +425,8 @@ export class Quiz {
       answered: answered.length,
       correct: correct.length,
       wrong: answered.filter((x) => !x.correct),
+      // 맞았지만 찍은 것 — 점수에는 안 들어가지만 다시 봐야 한다
+      lucky: answered.filter((x) => x.correct && x.unsure),
       unanswered: items.filter((x) => x.picked === null),
       items,
     };
@@ -381,11 +434,15 @@ export class Quiz {
 
   finish() { this.persist(); this.onFinish(this.results()); }
 
-  /** 틀린 문제만 다시 풀기 — 답안을 비우고 그 문항들만 순회한다. */
+  /**
+   * 틀린 문제만 다시 풀기 — 답안을 비우고 그 문항들만 순회한다.
+   * 찍어서 맞춘 문항도 같이 꺼낸다(점수만 맞고 모르는 채로 넘어가지 않게).
+   */
   retryWrong() {
-    const wrongIdx = this.order.filter((i) => this.answers[i] !== null && !this.isCorrect(i));
+    const wrongIdx = this.order.filter(
+      (i) => this.answers[i] !== null && (!this.isCorrect(i) || this.unsure[i]));
     if (!wrongIdx.length) return false;
-    wrongIdx.forEach((i) => { this.answers[i] = null; this.eliminated[i] = new Set(); });
+    wrongIdx.forEach((i) => { this.answers[i] = null; this.unsure[i] = false; this.eliminated[i] = new Set(); });
     this.order = wrongIdx;
     this.cur = 0;
     this.persist();
@@ -395,6 +452,7 @@ export class Quiz {
   restart() {
     this.order = this.all.map((_, i) => i);
     this.answers.fill(null);
+    this.unsure.fill(false);
     this.eliminated = this.all.map(() => new Set());
     this.cur = 0;
     clearSession(this.examKey).catch(() => {});

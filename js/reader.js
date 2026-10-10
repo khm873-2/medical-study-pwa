@@ -701,3 +701,108 @@ export function nextExam(exams, now = Date.now()) {
   const future = (exams || []).filter((e) => e.at > now).sort((a, b) => a.at - b.at);
   return future[0] || null;
 }
+
+// ---------- 시간표 → 날짜별 강의 ----------
+//
+// 왜 열 이름으로 찾나: 시간표 세 개의 열 구조가 서로 다르다. 응급중환자·근골격은
+// `날짜 | 요일 | 교시 | 강의명 | 담당`, 두경부는 `날짜(요일) | 교시 | 강의명 | 담당`이고
+// 날짜에 연도가 없다(`09-28(월)`). 위치로 자르면 과목마다 틀어진다(2026-10-10).
+
+const CELLS = (line) => line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
+const BLANK = (s) => !s || /^[—\-–]+$/.test(s);
+
+// 공부 대상이 아닌 칸 — 시험·피드백·휴강·자습은 "오늘 할 것"에 올리지 않는다.
+// ⚠️ 그냥 `평가`로 거르면 안 된다: "중환자실의 구조와 운영 & 중환자 중증도 분류 및 평가"는
+// 실제 강의다. 그래서 `형성평가`처럼 좁게 잡는다(2026-10-10).
+const NOT_LECTURE = /자기주도학습|시험|피드백|휴강|형성평가|기념일|공휴일/;
+
+/**
+ * 시간표 표에서 강의를 날짜별로 뽑는다.
+ *
+ * @param {string} md
+ * @param {object} [opts]
+ * @param {number} [opts.year]  날짜에 연도가 없는 표(두경부)에서 쓸 연도
+ * @returns {Array<{date:string, at:number, period:string, name:string, teacher:string, note:string}>}
+ */
+export function parseSchedule(md, { year } = {}) {
+  const lines = String(md).split('\n');
+  // 연도 없는 표를 위해, 파일 안에서 보이는 완전한 날짜의 연도를 먼저 빌린다
+  const seen = String(md).match(/\b(20\d{2})-\d{2}-\d{2}\b/);
+  const baseYear = seen ? Number(seen[1]) : (year || new Date().getFullYear());
+
+  const out = [];
+  let cols = null;
+
+  for (const line of lines) {
+    if (!/^\s*\|/.test(line)) { cols = null; continue; }
+    if (/^[\s:|-]+$/.test(line.replace(/\|/g, ''))) continue;   // ---- 구분선
+    const cells = CELLS(line);
+
+    // 머리글 줄이면 열 위치를 기억한다
+    if (cells.some((c) => /강의명/.test(c))) {
+      cols = {
+        date: cells.findIndex((c) => /날짜/.test(c)),
+        period: cells.findIndex((c) => /^교시/.test(c)),
+        name: cells.findIndex((c) => /강의명/.test(c)),
+        teacher: cells.findIndex((c) => /^담당/.test(c)),
+        note: cells.findIndex((c) => /예습노트/.test(c)),
+      };
+      continue;
+    }
+    if (!cols || cols.date < 0 || cols.name < 0) continue;
+
+    const rawDate = cells[cols.date] || '';
+    const name = (cells[cols.name] || '').replace(/\\\|/g, '|').trim();
+    if (BLANK(name) || NOT_LECTURE.test(name)) continue;
+
+    let date = null;
+    let m = rawDate.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
+    if (m) date = `${m[1]}-${m[2]}-${m[3]}`;
+    else if ((m = rawDate.match(/\b(\d{1,2})-(\d{1,2})\b/))) {
+      date = `${baseYear}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+    }
+    if (!date) continue;
+    const at = Date.parse(`${date}T09:00:00`);
+    if (Number.isNaN(at)) continue;
+
+    const noteCell = cols.note >= 0 ? (cells[cols.note] || '') : '';
+    const link = noteCell.match(/\[\[([^\]|]+)/);
+    out.push({
+      date,
+      at,
+      period: cols.period >= 0 ? (cells[cols.period] || '') : '',
+      name,
+      teacher: cols.teacher >= 0 ? (cells[cols.teacher] || '').replace(/^[-—]$/, '') : '',
+      note: link ? link[1].trim() : '',
+    });
+  }
+  return out;
+}
+
+/** 로컬 시각을 YYYY-MM-DD로 — Date.toISOString()은 UTC라 한국에서 하루가 밀린다. */
+export function dayKey(now = Date.now()) {
+  const d = new Date(now);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * "오늘 할 것"에 올릴 강의 — 오늘 것이 없으면 가장 가까운 지난 수업일로 물러난다.
+ *
+ * 왜 물러나나: 강의가 없는 주말에 앱을 열어도 화면이 비면 쓸모가 없다. 직전 수업일을
+ * 보여주면 그게 바로 복습 대상이다(2026-10-10).
+ */
+export function lecturesFor(schedule, now = Date.now()) {
+  const key = dayKey(now);
+  const pick = (list, when) => ({ date: list[0].date, when, lectures: list.filter((l) => l.date === list[0].date) });
+
+  const today = (schedule || []).filter((l) => l.date === key);
+  if (today.length) return { date: key, when: 'today', lectures: today };
+
+  const past = (schedule || []).filter((l) => l.date < key).sort((a, b) => b.date.localeCompare(a.date));
+  if (past.length) return pick(past, 'past');
+
+  const future = (schedule || []).filter((l) => l.date > key).sort((a, b) => a.date.localeCompare(b.date));
+  if (future.length) return pick(future, 'future');
+
+  return { date: key, when: 'none', lectures: [] };
+}

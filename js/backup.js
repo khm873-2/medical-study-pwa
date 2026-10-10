@@ -12,7 +12,10 @@
 // 복원 화면에서 "이 둘은 다시 넣어야 한다"고 분명히 알린다.
 
 import { putFile, getTextIfExists } from './github.js';
-import { kvGet, kvSet, allSessions, saveSession, listOutbox, enqueue } from './db.js';
+import {
+  kvGet, kvSet, allSessions, saveSession, listOutbox, enqueue,
+  allAttempts, mergeAttempts,
+} from './db.js';
 
 export const BACKUP_PATH = '.medstudy/state.json';
 
@@ -36,6 +39,8 @@ export async function collectState() {
     kv,
     sessions: await allSessions(),
     outbox,
+    // 문항별 풀이 이력 — 2주에 걸쳐 쌓이는 것이라 재설치로 날아가면 가장 아프다
+    attempts: await allAttempts(),
   };
 }
 
@@ -45,9 +50,11 @@ export function describe(state) {
   const srs = state.kv && state.kv.srs ? Object.keys(state.kv.srs).length : 0;
   const sessions = state.sessions ? Object.keys(state.sessions).length : 0;
   const outbox = Array.isArray(state.outbox) ? state.outbox.length : 0;
+  const attempts = Array.isArray(state.attempts) ? state.attempts.length : 0;
   const when = state.savedAt ? new Date(state.savedAt).toLocaleString('ko-KR') : '시각 미상';
   const parts = [];
   if (srs) parts.push(`플래시카드 ${srs}장`);
+  if (attempts) parts.push(`푼 문항 ${attempts}개`);
   if (sessions) parts.push(`풀던 시험 ${sessions}개`);
   if (outbox) parts.push(`저장 대기 ${outbox}건`);
   return `${when} · ${parts.length ? parts.join(' · ') : '내용 없음'}`;
@@ -80,7 +87,7 @@ export async function fetchBackup() {
  */
 export async function restore(state) {
   if (!state || state.v !== 1) throw new Error('백업 형식을 알 수 없습니다.');
-  const applied = { srs: 0, sessions: 0, outbox: 0 };
+  const applied = { srs: 0, sessions: 0, outbox: 0, attempts: 0 };
 
   for (const [k, v] of Object.entries(state.kv || {})) {
     if (!BACKUP_KEYS.includes(k)) continue;        // 모르는 키는 무시(앞으로의 포맷 변화 대비)
@@ -111,6 +118,7 @@ export async function restore(state) {
     await enqueue(item);
     applied.outbox++;
   }
+  applied.attempts = await mergeAttempts(state.attempts || []);
   await kvSet('backup_at', state.savedAt);
   return applied;
 }

@@ -13,22 +13,40 @@ let pass = 0; const fail = [];
 const ok = (n, c, d) => { if (c) pass++; else fail.push(`${n}${d ? ' — ' + d : ''}`); };
 
 // github.js / db.js 를 가짜로 바꿔 끼운 사본을 만든다(네트워크·IndexedDB 없이 돌리려고)
-const store = { kv: {}, sessions: {}, outbox: [] };
+const store = { kv: {}, sessions: {}, outbox: [], attempts: [] };
 let putCalls = [];
 let remoteFile = null;
 
-const shimSrc = readFileSync(`${PWA}/js/backup.js`, 'utf8')
-  .replace("import { putFile, getTextIfExists } from './github.js';", `
+// import 줄을 **정규식**으로 집는다 — 전에 문자열을 그대로 맞춰보다가, backup.js에서
+// import가 여러 줄로 바뀌자 스텁이 빗나가 진짜 db.js를 불러왔다(2026-10-10).
+const raw = readFileSync(`${PWA}/js/backup.js`, 'utf8');
+for (const [name, re] of [['github.js', /^import\s*\{[^}]*\}\s*from\s*'\.\/github\.js';$/m],
+                          ['db.js', /^import\s*\{[\s\S]*?\}\s*from\s*'\.\/db\.js';$/m]]) {
+  ok(`스텁이 ${name} import를 찾는다`, re.test(raw),
+    '못 찾으면 실제 모듈이 로드돼 테스트가 무의미해진다');
+}
+
+const shimSrc = raw
+  .replace(/^import\s*\{[^}]*\}\s*from\s*'\.\/github\.js';$/m, `
 const putFile = async (path, content) => { globalThis.__put.push({ path, content }); globalThis.__remote = content; };
 const getTextIfExists = async () => globalThis.__remote;`)
-  .replace("import { kvGet, kvSet, allSessions, saveSession, listOutbox, enqueue } from './db.js';", `
+  .replace(/^import\s*\{[\s\S]*?\}\s*from\s*'\.\/db\.js';$/m, `
 const S = globalThis.__store;
 const kvGet = async (k) => S.kv[k];
 const kvSet = async (k, v) => { S.kv[k] = v; };
 const allSessions = async () => ({ ...S.sessions });
 const saveSession = async (k, v) => { S.sessions[k] = v; };
 const listOutbox = async () => S.outbox.map((o, i) => ({ id: i + 1, ...o }));
-const enqueue = async (it) => { S.outbox.push(it); };`)
+const enqueue = async (it) => { S.outbox.push(it); };
+const allAttempts = async () => S.attempts.map((a) => ({ ...a }));
+const mergeAttempts = async (list) => {
+  for (const inc of list || []) {
+    const i = S.attempts.findIndex((a) => a.id === inc.id);
+    if (i < 0) S.attempts.push(inc);
+    else if ((inc.last?.at || 0) > (S.attempts[i].last?.at || 0)) S.attempts[i] = inc;
+  }
+  return (list || []).length;
+};`)
   .replace("const mine = await (await import('./db.js')).loadSession(key);",
            "const mine = S.sessions[key];");
 
@@ -134,6 +152,39 @@ B.scheduleBackup({ delay: 100000 });
 await B.flushBackup();
 ok('flush하면 기다리지 않고 올린다', putCalls.length === 1, `${putCalls.length}회`);
 ok('올릴 게 없으면 flush는 아무것도 안 한다', (await B.flushBackup()) === null);
+
+// ── 8.5 문항 풀이 이력이 재설치를 넘어간다 ──
+// 2주에 걸쳐 쌓이는 데이터라 날아가면 "다시 볼 문항"이 통째로 빈다.
+{
+  store.attempts = [
+    { id: '06_모의고사/응급_중환자/1015_Shock_모의고사.html#3', exam: '06_모의고사/응급_중환자/1015_Shock_모의고사.html',
+      num: 3, subject: '응급_중환자', kind: '모의고사', n: 2, wrongN: 2, unsureN: 0,
+      last: { at: 1000, picked: 1, correct: false, unsure: false } },
+    { id: 'E#1', exam: 'E', num: 1, subject: '응급_중환자', n: 1, wrongN: 0, unsureN: 1,
+      last: { at: 2000, picked: 0, correct: true, unsure: true } },
+  ];
+  const state = await B.collectState();
+  ok('백업에 풀이 이력이 담긴다', Array.isArray(state.attempts) && state.attempts.length === 2,
+    JSON.stringify(state.attempts && state.attempts.length));
+  ok('찍어서 맞춘 표시도 담긴다', state.attempts.some((a) => a.last.unsure === true));
+  ok('요약에 푼 문항 수가 보인다', /푼 문항 2개/.test(B.describe(state)), B.describe(state));
+
+  // 재설치 — 저장소가 비었다고 가정하고 복원
+  store.attempts = [];
+  const applied = await B.restore(JSON.parse(JSON.stringify(state)));
+  ok('복원이 이력 개수를 보고한다', applied.attempts === 2, JSON.stringify(applied));
+  ok('이력이 되살아난다', store.attempts.length === 2);
+  ok('오답 누적 횟수가 보존된다', store.attempts.find((a) => a.num === 3).wrongN === 2);
+
+  // 두 기기에서 따로 풀었을 때 — 더 최근에 푼 쪽이 남아야 한다
+  store.attempts = [{ id: 'E#1', exam: 'E', num: 1, subject: '응급_중환자', n: 5, wrongN: 0, unsureN: 0,
+    last: { at: 9000, picked: 2, correct: true, unsure: false } }];
+  await B.restore(JSON.parse(JSON.stringify(state)));
+  const merged = store.attempts.find((a) => a.id === 'E#1');
+  ok('더 최근에 푼 기록이 이긴다', merged.last.at === 9000 && merged.last.unsure === false,
+    JSON.stringify(merged.last));
+  store.attempts = [];
+}
 
 // ── 9. 앱이 실제로 이 모듈을 쓰고 있나(배선 확인) ──
 const appSrc = readFileSync(`${PWA}/js/app.js`, 'utf8');

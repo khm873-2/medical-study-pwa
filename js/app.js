@@ -16,13 +16,15 @@ import {
   loadSrs, saveSrs, dueCards, gradeCard, srsStats, keepAwake, cardsFromBox,
   studyQueue, groupCards, suspendCard, unsuspendCard, buryCard, toggleStar,
   isStarred, isSuspended, isLeech, LEECH_AT, retrievability, parseExamDates, nextExam,
+  parseSchedule, lecturesFor, dayKey,
 } from './reader.js';
 import { search, cacheSubject, storageInfo } from './search.js';
 import {
   kvGet, kvSet, cacheClear, enqueue, listOutbox, dequeue, bumpTries,
   saveCards, allCards, deleteCard,
-  allSessions, clearSession,
+  allSessions, clearSession, allAttempts,
 } from './db.js';
+import { weakQueue, weakBySubject, examProgress } from './attempts.js';
 
 // 모의고사와 퀴즈를 둘 다 읽는다 — vault에서 내가 만든 퀴즈도 앱에서 풀 수 있어야 한다.
 // 두 폴더의 HTML이 같은 QUESTIONS 스키마를 쓰므로 파서는 그대로 재사용한다(2026-10-10).
@@ -31,6 +33,13 @@ const EXAM_ROOTS = [
   { root: '05_퀴즈', kind: '퀴즈' },
 ];
 const LOG_DIR = '00_Raw_Text/AI대화로그';
+// 여러 시험에서 끌어모아 푸는 "다시 볼 문항"의 이어풀기 키 — 실제 파일 경로와 겹치지 않게 한다
+const WEAK_KEY = '__weak__';
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
 const screens = ['setupScreen', 'listScreen', 'quizScreen', 'resultScreen', 'readScreen', 'cardScreen', 'deckScreen'];
 let quiz = null;
@@ -358,45 +367,16 @@ async function loadList(force) {
   show('listScreen');
   restoreTab();
   // 로딩·오류 문구는 **지금 보고 있는 탭**에 띄운다
-  const body = document.getElementById(
-    document.querySelector('.tab.active')?.dataset.tab === 'exams' ? 'listBody' : 'quizBody');
-  body.innerHTML = '<p class="muted">불러오는 중…</p>';
+  const active = document.querySelector('.tab.active')?.dataset.tab;
+  const body = document.getElementById(TAB_BODY[active] || 'todayBody');
+  if (active !== 'today') body.innerHTML = '<p class="muted">불러오는 중…</p>';
 
   try {
-    const cacheKey = 'exam_index_v2';     // 퀴즈가 들어오면서 구조가 바뀌어 키를 올린다
-    let index = force ? null : await kvGet(cacheKey);
-    if (!index) {
-      const byKey = new Map();            // "과목 · 종류" 단위로 묶는다
-      for (const { root, kind } of EXAM_ROOTS) {
-        let subjects;
-        try { subjects = (await listDir(root)).filter((e) => e.type === 'dir'); }
-        catch { continue; }               // 폴더가 없는 과목도 있다 — 조용히 넘어간다
-        for (const sub of subjects) {
-          let files;
-          try { files = await listDir(sub.path); } catch { continue; }
-          const items = files
-            .filter((f) => f.type === 'file' && f.name.endsWith('.html') && !f.name.startsWith('_'))
-            .map((f) => ({ file: f.name, path: f.path, kind }));
-          if (!items.length) continue;
-          const k = `${sub.name}|${kind}`;
-          if (!byKey.has(k)) byKey.set(k, { subject: sub.name, kind, exams: [] });
-          byKey.get(k).exams.push(...items);
-        }
-      }
-      index = [...byKey.values()];
-      for (const g of index) {
-        // 날짜 **내림차순** — 최근에 배운 것부터 복습한다(2026-10-10 요청)
-        g.exams.sort((a, b) => examSortKey(b.file).localeCompare(examSortKey(a.file))
-          || a.file.localeCompare(b.file, 'ko'));
-      }
-      // 모의고사를 먼저, 그 다음 퀴즈. 같은 종류 안에서는 과목 이름순.
-      index.sort((a, b) => (a.kind === b.kind ? a.subject.localeCompare(b.subject, 'ko')
-        : a.kind === '모의고사' ? -1 : 1));
-      await kvSet(cacheKey, index);
-    }
+    const index = await buildExamIndex(force);
     const sessions = await allSessions();
     renderList(index, sessions, '퀴즈');
     renderList(index, sessions, '모의고사');
+    if (active === 'today') loadTodayTab(force);
   } catch (e) {
     body.innerHTML = '';
     const box = document.createElement('div');
@@ -413,6 +393,47 @@ async function loadList(force) {
     btn.onclick = openSetup;
     body.appendChild(btn);
   }
+}
+
+/**
+ * 06_모의고사 · 05_퀴즈를 뒤져 "과목 · 종류"별 목록을 만든다.
+ *
+ * 캐시해두기 때문에 **수업 후에 새 퀴즈가 올라오면 새로고침을 눌러야** 보인다.
+ * (05_퀴즈/응급_중환자/ 처럼 폴더가 나중에 생기는 경우도 force로 집어온다.)
+ */
+async function buildExamIndex(force) {
+  const cacheKey = 'exam_index_v2';     // 퀴즈가 들어오면서 구조가 바뀌어 키를 올린다
+  let index = force ? null : await kvGet(cacheKey);
+  if (!index) {
+    const byKey = new Map();            // "과목 · 종류" 단위로 묶는다
+    for (const { root, kind } of EXAM_ROOTS) {
+      let subjects;
+      try { subjects = (await listDir(root)).filter((e) => e.type === 'dir'); }
+      catch { continue; }               // 폴더가 없는 과목도 있다 — 조용히 넘어간다
+      for (const sub of subjects) {
+        let files;
+        try { files = await listDir(sub.path); } catch { continue; }
+        const items = files
+          .filter((f) => f.type === 'file' && f.name.endsWith('.html') && !f.name.startsWith('_'))
+          .map((f) => ({ file: f.name, path: f.path, kind }));
+        if (!items.length) continue;
+        const k = `${sub.name}|${kind}`;
+        if (!byKey.has(k)) byKey.set(k, { subject: sub.name, kind, exams: [] });
+        byKey.get(k).exams.push(...items);
+      }
+    }
+    index = [...byKey.values()];
+    for (const g of index) {
+      // 날짜 **내림차순** — 최근에 배운 것부터 복습한다(2026-10-10 요청)
+      g.exams.sort((a, b) => examSortKey(b.file).localeCompare(examSortKey(a.file))
+        || a.file.localeCompare(b.file, 'ko'));
+    }
+    // 모의고사를 먼저, 그 다음 퀴즈. 같은 종류 안에서는 과목 이름순.
+    index.sort((a, b) => (a.kind === b.kind ? a.subject.localeCompare(b.subject, 'ko')
+      : a.kind === '모의고사' ? -1 : 1));
+    await kvSet(cacheKey, index);
+  }
+  return index;
 }
 
 /**
@@ -508,6 +529,7 @@ async function openExam(subject, ex) {
       onFinish: showResult,
       onExit: () => { quiz.destroy(); destroyPen(); loadList(false); },
       onRender: onQuestionRender,
+      meta: { subject, kind: ex.kind || '' },
     });
     const had = await quiz.restore();
     show('quizScreen');
@@ -1400,7 +1422,10 @@ let readerPen = null;
 let cardDeck = null;    // {cards, idx, srs, title}
 
 // ---- 탭 ----
-const TAB_BODY = { quizzes: 'quizBody', exams: 'listBody', notes: 'notesBody', cards: 'cardsBody' };
+const TAB_BODY = {
+  today: 'todayBody', quizzes: 'quizBody', exams: 'listBody',
+  notes: 'notesBody', cards: 'cardsBody',
+};
 
 function showTab(which, { remember = true } = {}) {
   if (!TAB_BODY[which]) which = 'quizzes';
@@ -1411,16 +1436,273 @@ function showTab(which, { remember = true } = {}) {
   if (remember) localStorage.setItem('last_tab', which);
   if (which === 'notes') loadNotesTab();
   if (which === 'cards') loadCardsTab();
+  if (which === 'today') loadTodayTab();
 }
 
 /** 마지막으로 보던 탭으로 돌아간다 — 매번 퀴즈 탭부터 찾아 들어가지 않게. */
 function restoreTab() {
-  showTab(localStorage.getItem('last_tab') || 'quizzes', { remember: false });
+  showTab(localStorage.getItem('last_tab') || 'today', { remember: false });
 }
 
 document.querySelectorAll('.tab').forEach((t) => {
   t.onclick = () => showTab(t.dataset.tab);
 });
+
+// ---- 오늘 할 것 ----
+//
+// 왜 필요한가: 강의가 10/12~10/21에 매일 2~3개씩 몰려 있다. 앱을 열 때마다 과목 →
+// 날짜를 더듬어 찾아 들어가는 건 그 자체로 마찰이다. 시간표를 읽어 "오늘 배운 것"과
+// "다시 볼 문항"을 첫 화면에 올린다(2026-10-10).
+
+let todayCache = null;   // {schedule, exams}
+
+async function todayData(force) {
+  if (todayCache && !force) return todayCache;
+  const schedule = [];
+  const exams = [];
+  try {
+    for (const f of (await listDir('00_Raw_Text/시간표')).filter((x) => x.type === 'file' && x.name.endsWith('.md'))) {
+      const md = await getText(f.path);
+      const subject = f.name.replace(/_?시간표\.md$/, '');
+      schedule.push(...parseSchedule(md).map((l) => ({ ...l, src: subject })));
+      exams.push(...parseExamDates(md).map((e) => ({ ...e, src: subject })));
+    }
+    await kvSet('schedule_cache', { schedule, exams });
+  } catch {
+    const c = await kvGet('schedule_cache');
+    if (c) { schedule.push(...c.schedule); exams.push(...c.exams); }
+  }
+  todayCache = { schedule, exams };
+  return todayCache;
+}
+
+async function loadTodayTab(force) {
+  const body = document.getElementById('todayBody');
+  body.innerHTML = '<p class="muted">불러오는 중…</p>';
+  try {
+    const [{ schedule, exams }, index, attempts, srs, cards] = await Promise.all([
+      todayData(force), buildExamIndex(false), allAttempts(), loadSrs(), allCards(),
+    ]);
+    body.innerHTML = '';
+
+    // ── 다음 시험 D-day ──
+    const next = nextExam(exams);
+    if (next) {
+      const days = Math.ceil((next.at - Date.now()) / 86400000);
+      const bar = document.createElement('div');
+      bar.className = 'today-exam';
+      bar.innerHTML = `<span class="today-d">D-${days}</span>`
+        + `<span>${escapeHtml(next.name)} · ${next.date}</span>`;
+      body.appendChild(bar);
+    }
+
+    // ── 다시 볼 문항 ──
+    // 시험이 임박한 과목을 먼저 보여준다 — 시간표 이름(응급중환자)과 폴더 이름(응급_중환자)이
+    // 다르므로 '_' 를 떼고 견준다.
+    const norm = (s) => String(s || '').replace(/[_\s]/g, '');
+    const hotSubject = next ? norm(next.src) : '';
+    const groups = weakBySubject(attempts);
+    groups.sort((a, b) => (norm(b.subject) === hotSubject) - (norm(a.subject) === hotSubject));
+
+    const weakSec = section(body, '다시 볼 문항');
+    if (!groups.length) {
+      weakSec.appendChild(muted('아직 푼 문항이 없습니다. 모의고사를 하나 풀면 여기에 쌓입니다.'));
+    } else {
+      groups.forEach((g) => {
+        const row = document.createElement('button');
+        row.className = 'exam-item';
+        const name = document.createElement('span');
+        name.className = 'exam-name';
+        const bits = [];
+        if (g.wrong) bits.push(`틀림 ${g.wrong}`);
+        if (g.unsure) bits.push(`찍음 ${g.unsure}`);
+        name.innerHTML = `<b>${escapeHtml(g.subject)}</b>`
+          + `<span class="exam-meta">${bits.join(' · ') || '없음'} · 푼 문항 ${g.total}개</span>`;
+        const tail = document.createElement('span');
+        tail.className = 'exam-progress';
+        tail.textContent = g.weak ? `${g.weak}개 ›` : '✓';
+        row.append(name, tail);
+        row.disabled = !g.weak;
+        row.onclick = () => openWeakQueue(g.subject);
+        weakSec.appendChild(row);
+      });
+    }
+
+    // ── 오늘(또는 직전·다음) 수업 ──
+    // 시험이 다가온 과목의 시간표를 먼저 본다. 10/10처럼 강의 시작 전이라도
+    // 두경부 지난 수업이 아니라 응급중환자 다음 수업이 뜨는 게 맞다.
+    let pool = schedule;
+    if (hotSubject) {
+      const hot = schedule.filter((l) => norm(l.src) === hotSubject);
+      if (hot.length) pool = hot;
+    }
+    const day = lecturesFor(pool);
+    const WHEN = { today: '오늘 수업', past: '직전 수업', future: '다음 수업', none: '수업' };
+    const sec = section(body, `${WHEN[day.when]} · ${day.date.slice(5).replace('-', '/')}`);
+    if (!day.lectures.length) {
+      sec.appendChild(muted('시간표에서 강의를 찾지 못했습니다.'));
+    } else {
+      const want = `26${day.date.slice(5, 7)}${day.date.slice(8, 10)}`;   // YYMMDD
+      const sameDay = [];
+      for (const g of index) {
+        for (const ex of g.exams) {
+          if (examSortKey(ex.file) === want) sameDay.push({ g, ex });
+        }
+      }
+      day.lectures.forEach((l) => {
+        const row = document.createElement('div');
+        row.className = 'today-lec';
+        const head = document.createElement('div');
+        head.className = 'today-lec-head';
+        head.innerHTML = `<span class="today-period">${escapeHtml(l.period || '')}</span>`
+          + `<b>${escapeHtml(l.name)}</b>`
+          + (l.teacher ? `<span class="muted"> ${escapeHtml(l.teacher)}</span>` : '');
+        row.appendChild(head);
+        if (l.note) {
+          const b = document.createElement('button');
+          b.className = 'chip';
+          b.textContent = '📖 예습노트';
+          b.onclick = () => openNoteByName(l.note);
+          row.appendChild(b);
+        }
+        sec.appendChild(row);
+      });
+      // 같은 날짜의 모의고사·퀴즈 — 파일명 앞 MMDD가 강의일과 같은 것들
+      if (sameDay.length) {
+        const wrap = document.createElement('div');
+        wrap.className = 'today-chips';
+        sameDay.forEach(({ g, ex }) => {
+          const b = document.createElement('button');
+          b.className = 'chip';
+          const p = examProgress(attempts, ex.path);
+          b.textContent = `${g.kind === '퀴즈' ? '📝' : '🧪'} ${prettyExamName(ex.file)}`
+            + (p.seen ? ` (${p.solid}/${p.seen}${p.weak ? ` · 약함 ${p.weak}` : ''})` : '');
+          b.onclick = () => openExam(g.subject, ex);
+          wrap.appendChild(b);
+        });
+        sec.appendChild(wrap);
+      } else {
+        sec.appendChild(muted('이 날짜의 모의고사·퀴즈는 아직 없습니다. 올라오면 새로고침(↻)을 눌러주세요.'));
+      }
+    }
+
+    // ── 카드 ──
+    const due = studyQueue(cards, srs, { limit: 0 });
+    const cardSec = section(body, '카드');
+    const cb = document.createElement('button');
+    cb.className = 'exam-item';
+    const cn = document.createElement('span');
+    cn.className = 'exam-name';
+    cn.innerHTML = `<b>복습할 카드</b><span class="exam-meta">전체 ${cards.length}장</span>`;
+    const ct = document.createElement('span');
+    ct.className = 'exam-progress';
+    ct.textContent = due.length ? `${due.length}장 ›` : '✓';
+    cb.append(cn, ct);
+    cb.onclick = () => showTab('cards');
+    cardSec.appendChild(cb);
+  } catch (e) {
+    body.innerHTML = '';
+    const box = document.createElement('div');
+    box.className = 'warn-box';
+    box.textContent = e.message === 'NO_TOKEN'
+      ? '토큰이 없습니다. 설정에서 먼저 연결해 주세요.'
+      : `오늘 할 것을 불러오지 못했습니다: ${e.message}`;
+    body.appendChild(box);
+  }
+}
+
+function section(parent, label) {
+  const h = document.createElement('div');
+  h.className = 'today-h';
+  h.textContent = label;
+  const box = document.createElement('div');
+  box.className = 'today-sec';
+  parent.append(h, box);
+  return box;
+}
+function muted(text) {
+  const p = document.createElement('p');
+  p.className = 'muted';
+  p.textContent = text;
+  return p;
+}
+
+/** 위키링크 이름(1013_응급중환자_임상독성학)으로 노트를 찾아 연다. */
+async function openNoteByName(name) {
+  try {
+    const groups = await noteList(false);
+    const want = String(name).normalize('NFC');
+    for (const g of groups) {
+      for (const n of g.notes) {
+        if (n.name.normalize('NFC') === want) return openNote(n.path);
+      }
+    }
+    toast(`노트를 찾지 못했습니다: ${name}`);
+  } catch (e) {
+    toast(`노트를 열지 못했습니다: ${e.message}`);
+  }
+}
+
+/**
+ * 과목 전체에서 약한 문항만 모아 푼다.
+ *
+ * 여러 시험에서 문항을 끌어오므로 문항마다 원래 시험을 `__exam`에 달아둔다 —
+ * 풀이 이력이 원본 시험에 쌓여야 다음에도 같은 판단이 선다.
+ */
+async function openWeakQueue(subject) {
+  const body = document.getElementById('todayBody');
+  const keep = body.innerHTML;
+  body.innerHTML = '<p class="muted">약한 문항을 모으는 중…</p>';
+  try {
+    const attempts = await allAttempts();
+    const want = weakQueue(attempts, { subject, limit: 40 });
+    if (!want.length) { body.innerHTML = keep; toast('다시 볼 문항이 없습니다.'); return; }
+
+    const byExam = new Map();
+    want.forEach((a) => {
+      if (!byExam.has(a.exam)) byExam.set(a.exam, []);
+      byExam.get(a.exam).push(a);
+    });
+
+    const picked = [];
+    for (const [path, list] of byExam) {
+      let parsed;
+      try { parsed = parseExamHtml(await getText(path)); }
+      catch { continue; }                 // 파일이 사라졌거나 못 읽으면 건너뛴다
+      const meta = list[0];
+      for (const a of list) {
+        const q = parsed.questions.find((x) => String(x.num) === String(a.num));
+        if (!q) continue;
+        picked.push({ ...q, __exam: path, __subject: meta.subject, __kind: meta.kind,
+          __title: meta.title || prettyExamName(path.split('/').pop()) });
+      }
+    }
+    if (!picked.length) { body.innerHTML = keep; toast('문항을 불러오지 못했습니다.'); return; }
+
+    // 모아 풀기는 순서 자체가 섞여 있어야 "무슨 유형인지 고르는" 연습이 된다
+    picked.sort(() => Math.random() - 0.5);
+
+    currentExam = { subject, file: '', path: WEAK_KEY, title: `다시 볼 문항 — ${subject}` };
+    if (quiz) quiz.destroy();
+    destroyPen();
+    await clearSession(WEAK_KEY);         // 이전 모아풀기 상태가 남아 섞이지 않게
+    quiz = new Quiz({
+      examKey: WEAK_KEY,
+      questions: picked,
+      title: `다시 볼 문항 — ${subject} (${picked.length})`,
+      onFinish: showResult,
+      onExit: () => { quiz.destroy(); destroyPen(); loadList(false); },
+      onRender: onQuestionRender,
+      meta: { subject, kind: '모아풀기' },
+    });
+    show('quizScreen');
+    quiz.start();
+    ensurePen();
+  } catch (e) {
+    body.innerHTML = keep;
+    toast(`모아 풀기에 실패했습니다: ${e.message}`);
+  }
+}
 
 // ---- 노트 목록 ----
 async function loadNotesTab(force) {
@@ -2191,7 +2473,23 @@ function showResult(res) {
     wl.innerHTML = '<div style="font-weight:700">전부 맞혔습니다 🎉</div>';
   }
 
-  document.getElementById('retryWrongBtn').style.display = res.wrong.length ? '' : 'none';
+  // 찍어서 맞춘 문항 — 점수에는 안 보이지만 제일 위험한 칸이라 따로 보여준다
+  if (res.lucky && res.lucky.length) {
+    const head = document.createElement('div');
+    head.style.cssText = 'font-weight:700;margin-top:10px';
+    head.textContent = `🎲 찍어서 맞춘 문제 ${res.lucky.length}개`;
+    wl.appendChild(head);
+    res.lucky.forEach((x) => {
+      const d = document.createElement('div');
+      d.textContent = `${x.q.num}. ${x.q.q.slice(0, 60)}…`;
+      wl.appendChild(d);
+    });
+  }
+
+  const again = res.wrong.length + (res.lucky ? res.lucky.length : 0);
+  const rb = document.getElementById('retryWrongBtn');
+  rb.style.display = again ? '' : 'none';
+  rb.textContent = res.lucky && res.lucky.length ? `틀린 것 + 찍은 것 ${again}개 다시` : '틀린 문제만 다시';
   quiz.destroy();
   show('resultScreen');
 }
