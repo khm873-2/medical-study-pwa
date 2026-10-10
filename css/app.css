@@ -2,21 +2,40 @@
    아이패드용(큰 터치 타깃 · 가로모드 · 다크모드 · safe-area)으로 확장했다. */
 
 :root {
-  --bg: #f7f7f9; --card: #ffffff; --text: #1f2430; --sub: #6b7280;
-  --accent: #2563eb; --correct: #16a34a; --wrong: #dc2626; --border: #e5e7eb;
-  --badge-bg: #eef1f6; --warn: #b45309; --warn-bg: #fffbeb;
+  --bg: #f4f5f9; --card: #ffffff; --text: #1b2130; --sub: #6b7484;
+  --accent: #3159e6; --correct: #11a06a; --wrong: #e03b3b; --border: #e6e8ef;
+  --badge-bg: #eef1f7; --warn: #b45309; --warn-bg: #fffbeb;
+
+  /* 그림자는 한 겹이면 평평해 보인다 — 가까운 그림자와 먼 그림자를 겹친다 */
+  --sh-1: 0 1px 2px rgba(20, 26, 44, .05), 0 1px 1px rgba(20, 26, 44, .03);
+  --sh-2: 0 2px 4px rgba(20, 26, 44, .05), 0 6px 16px rgba(20, 26, 44, .06);
+  --sh-3: 0 4px 10px rgba(20, 26, 44, .07), 0 18px 38px rgba(20, 26, 44, .09);
+  --sh-accent: 0 2px 6px rgba(49, 89, 230, .22), 0 8px 20px rgba(49, 89, 230, .18);
+
+  /* 모서리 — 작은 것부터 큰 것까지 한 계단씩 */
+  --r-1: 8px; --r-2: 11px; --r-3: 15px; --r-4: 20px;
+  --ease: cubic-bezier(.2, .8, .3, 1);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #11141a; --card: #1a1f29; --text: #e8eaed; --sub: #9aa3b2;
-    --accent: #5b8cff; --correct: #22c55e; --wrong: #ef4444; --border: #2b3140;
-    --badge-bg: #232a36; --warn: #fbbf24; --warn-bg: #2a2416;
+    --bg: #0f1218; --card: #181d27; --text: #e9ebf0; --sub: #98a2b3;
+    --accent: #6d93ff; --correct: #2bc98a; --wrong: #f2635f; --border: #272e3c;
+    --badge-bg: #212836; --warn: #fbbf24; --warn-bg: #2a2416;
+    /* 어두운 배경에선 그림자가 안 보인다 — 더 깊게 깔고 테두리가 윤곽을 맡는다 */
+    --sh-1: 0 1px 2px rgba(0, 0, 0, .34);
+    --sh-2: 0 2px 6px rgba(0, 0, 0, .4), 0 8px 20px rgba(0, 0, 0, .3);
+    --sh-3: 0 6px 16px rgba(0, 0, 0, .46), 0 22px 44px rgba(0, 0, 0, .38);
+    --sh-accent: 0 3px 12px rgba(109, 147, 255, .3);
   }
 }
 :root[data-theme="dark"] {
-  --bg: #11141a; --card: #1a1f29; --text: #e8eaed; --sub: #9aa3b2;
-  --accent: #5b8cff; --correct: #22c55e; --wrong: #ef4444; --border: #2b3140;
-  --badge-bg: #232a36; --warn: #fbbf24; --warn-bg: #2a2416;
+  --bg: #0f1218; --card: #181d27; --text: #e9ebf0; --sub: #98a2b3;
+  --accent: #6d93ff; --correct: #2bc98a; --wrong: #f2635f; --border: #272e3c;
+  --badge-bg: #212836; --warn: #fbbf24; --warn-bg: #2a2416;
+  --sh-1: 0 1px 2px rgba(0, 0, 0, .34);
+  --sh-2: 0 2px 6px rgba(0, 0, 0, .4), 0 8px 20px rgba(0, 0, 0, .3);
+  --sh-3: 0 6px 16px rgba(0, 0, 0, .46), 0 22px 44px rgba(0, 0, 0, .38);
+  --sh-accent: 0 3px 12px rgba(109, 147, 255, .3);
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -452,8 +471,12 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
   border-radius: 11px; font-size: 14px; color: var(--text);
 }
 summary.subject-head > .head-row, summary.root-head > .head-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  /* ▸ 화살표가 ::before로 들어와 항목이 셋이 된다 — space-between을 쓰면 제목이
+     가운데로 밀린다. 왼쪽부터 붙이고 개수만 오른쪽 끝으로 보낸다(2026-10-10). */
+  display: flex; align-items: center; gap: 9px;
 }
+summary.subject-head > .head-row > .subject-count,
+summary.root-head > .head-row > .subject-count { margin-left: auto; }
 .subject-group > summary.subject-head::-webkit-details-marker { display: none; }
 .subject-group > summary.subject-head > .head-row::before {
   content: '▸'; color: var(--sub); font-size: 12px; transition: transform .15s;
@@ -1252,3 +1275,138 @@ summary.subject-head > .head-row, summary.root-head > .head-row {
   .splash-speed i, .splash-train, .splash-check { animation: none; }
   .splash-check { stroke-dashoffset: 0; }
 }
+
+
+/* ═══════════ 마감 손질 (2026-10-10) ═══════════
+   레이아웃은 건드리지 않고 **표면과 반응**만 다듬는다.
+   한 겹 그림자·평평한 배지·넓기만 한 선지 간격이 화면을 딱딱하게 만들고 있었다. */
+
+/* ── 카드 ── */
+.card {
+  border-radius: var(--r-3);
+  box-shadow: var(--sh-2);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+/* ── 버튼: 눌리는 느낌 ── */
+.btn {
+  border-radius: var(--r-2);
+  box-shadow: var(--sh-1);
+  transition: transform .12s var(--ease), box-shadow .16s var(--ease), background .14s;
+}
+.btn:active { transform: translateY(1px) scale(.992); box-shadow: none; }
+.btn.primary {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 92%, #fff) 0%, var(--accent) 100%);
+  box-shadow: var(--sh-accent);
+}
+.btn.primary:active { box-shadow: 0 1px 3px rgba(49, 89, 230, .3); }
+.icon-btn { transition: background .14s, color .14s, transform .12s var(--ease); }
+.icon-btn:active { transform: scale(.92); }
+.icon-btn.active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* ── 목록 항목: 살짝 떠오른다 ── */
+.exam-item {
+  border-radius: var(--r-2);
+  box-shadow: var(--sh-1);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  transition: transform .14s var(--ease), box-shadow .16s var(--ease), border-color .16s;
+}
+@media (hover: hover) {
+  .exam-item:hover { transform: translateY(-1px); box-shadow: var(--sh-2); border-color: var(--accent); }
+}
+.exam-item:active { transform: translateY(1px) scale(.995); box-shadow: none; }
+.exam-date {
+  font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+}
+
+/* ── 과목 헤더 ── */
+.subject-group > summary.subject-head,
+.root-group > summary.root-head {
+  border-radius: var(--r-2);
+  box-shadow: var(--sh-1);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  transition: background .14s, border-color .14s;
+}
+
+/* ── 선지: 간격을 줄이고 상태를 면으로 보여준다 ── */
+.opt-row {
+  padding: 11px 12px; margin-bottom: 5px; min-height: 48px;
+  border-radius: var(--r-2);
+  transition: background .14s, border-color .14s, transform .12s var(--ease);
+}
+.opt-row:not(.locked):active { transform: scale(.995); }
+.badge {
+  border-width: 1.5px;
+  font-variant-numeric: tabular-nums;
+  transition: background .16s, border-color .16s, color .16s, transform .16s var(--ease);
+}
+.opt-row.correct {
+  background: color-mix(in srgb, var(--correct) 9%, transparent);
+  border-color: color-mix(in srgb, var(--correct) 32%, transparent);
+}
+.opt-row.wrong {
+  background: color-mix(in srgb, var(--wrong) 8%, transparent);
+  border-color: color-mix(in srgb, var(--wrong) 28%, transparent);
+}
+.opt-row.correct .badge, .opt-row.wrong .badge { transform: scale(1.06); }
+.opt-text { line-height: 1.5; }
+.opt-explain { margin-top: 4px; }
+
+/* ── 출처·해설 ── */
+#qsource {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  color: color-mix(in srgb, var(--accent) 88%, var(--text));
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
+  border-radius: 999px; font-weight: 600;
+}
+#explainBox {
+  border-radius: var(--r-2);
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--badge-bg));
+}
+
+/* ── 알약·배너 ── */
+.badge-pill {
+  box-shadow: var(--sh-1);
+  font-variant-numeric: tabular-nums;
+}
+.warn-box { border-radius: var(--r-2); border-left-width: 3px; }
+
+/* ── 사이드 패널 ── */
+#wikiPanel, #aiPanel {
+  border-radius: var(--r-3);
+  box-shadow: var(--sh-2);
+}
+
+/* ── 하단 바 ── */
+.navbar { box-shadow: 0 -1px 0 color-mix(in srgb, var(--border) 80%, transparent); }
+@media (min-width: 900px) {
+  #quizScreen .quiz-nav { border-radius: var(--r-3); box-shadow: var(--sh-2); }
+}
+
+/* ── 탭 ── */
+.tabs { border-radius: var(--r-3); }
+.tab { transition: background .16s var(--ease), color .16s, box-shadow .16s; }
+.tab.active { box-shadow: var(--sh-1); }
+
+/* ── 화면 전환: 톡 떠오르게 ── */
+#app > section:not(.hidden) { animation: screenIn .22s var(--ease); }
+@keyframes screenIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+
+/* ── 숫자는 폭이 흔들리지 않게 ── */
+#posLabel, #scoreBadge, #cardProgress, .exam-progress, .deck-n, .dt-n { font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  #app > section:not(.hidden) { animation: none; }
+  .btn, .icon-btn, .exam-item, .opt-row, .badge { transition: none; }
+}
+
+/* 아이콘 — 선 굵기를 통일한 SVG. 이모지는 기기마다 모양·무게가 달라 줄이 안 맞았다. */
+.ic { width: 20px; height: 20px; display: block; }
+.icon-btn, .tool { display: inline-flex; align-items: center; justify-content: center; }
+.tool .ic { width: 19px; height: 19px; }
+.nav-arrow .ic { width: 22px; height: 22px; }
+.icon-btn.active .ic, .tool.active .ic { stroke-width: 2.1; }
+/* 별·북마크는 켜지면 채워진다 */
+#cardStar.active .ic, #bookmarkBtn.active .ic { fill: currentColor; }

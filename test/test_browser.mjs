@@ -738,8 +738,14 @@ await run('캡처 토스트', () => {
     out.push({ name: '캡처 경로에 window.open이 없다(주석 제외)', ok: !/window\.open\s*\(/.test(code),
       detail: (code.match(/window\.open[^\n]*/) || [''])[0].slice(0, 50) });
     out.push({ name: '캡처 결과를 토스트로 알린다', ok: /function capToast/.test(src) });
-    out.push({ name: '캡처 아이콘이 복사 느낌(⧉)', ok: document.getElementById('toolCapture').textContent.trim() === '⧉',
-      detail: document.getElementById('toolCapture').textContent });
+    // 이모지는 기기마다 모양·무게가 달라 줄이 안 맞는다 → 선 굵기를 통일한 SVG로 바꿨다(2026-10-10)
+    const capIc = document.querySelector('#toolCapture .ic');
+    out.push({ name: '캡처 버튼이 SVG 아이콘', ok: !!capIc && capIc.tagName.toLowerCase() === 'svg' });
+    out.push({ name: '도구 아이콘이 전부 SVG로 통일',
+      ok: ['toolErase', 'toolCapture', 'toolUndo', 'toolClear', 'toolWiki', 'toolAi', 'toolBreak']
+        .every((id) => !!document.querySelector(`#${id} .ic`)) });
+    out.push({ name: '아이콘이 현재 색을 따른다(활성·다크모드 대응)',
+      ok: getComputedStyle(capIc).stroke === getComputedStyle(document.getElementById('toolCapture')).color });
     // 토스트가 실제로 떴다 사라지는가
     const t = document.createElement('div');
     t.id = 'capToast'; t.textContent = '📋 복사했습니다';
@@ -1233,7 +1239,8 @@ await run('카드 만들기', async () => {
   window.scrollTo(0, 3000);
   await new Promise((r) => setTimeout(r, 100));
   out.push({ name: '스크롤해도 도구모음이 화면에 남는다',
-    ok: Math.round(head.getBoundingClientRect().top) === 0, detail: `top=${Math.round(head.getBoundingClientRect().top)}` });
+    ok: Math.abs(head.getBoundingClientRect().top) <= 2,     // 테두리·반올림으로 1px은 흔들린다
+    detail: `top=${Math.round(head.getBoundingClientRect().top)}` });
   const mk = document.getElementById('readMakeCard').getBoundingClientRect();
   out.push({ name: '카드 버튼이 계속 눌린다',
     ok: mk.top >= 0 && mk.bottom <= window.innerHeight && mk.width > 10 });
