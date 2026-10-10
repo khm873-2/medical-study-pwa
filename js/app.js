@@ -922,8 +922,11 @@ function capToast(msg, ms = 1400) {
   return el;
 }
 
-async function handleCapture(box) {
-  const r = pen.canvas.getBoundingClientRect();
+async function handleCapture(box) { return captureFromPen(pen, box); }
+
+/** 펜으로 친 네모를 이미지로 떠서 클립보드에. 문제 화면·읽기 화면이 함께 쓴다. */
+async function captureFromPen(penLayer, box) {
+  const r = penLayer.canvas.getBoundingClientRect();
   const rect = {
     left: r.left + box.l, top: r.top + box.t,
     width: box.r - box.l, height: box.b - box.t,
@@ -1460,6 +1463,7 @@ function ensureReaderPen() {
   readerPen = new PenLayer(document.getElementById('readCard'), {
     onSelect: (text, info) => { if (text) openAskFromReader(text, info); },
     onCard: (box) => makeCardsFromBox(box),
+    onCapture: (box) => captureFromPen(readerPen, box),
   });
 }
 
@@ -1470,6 +1474,7 @@ function readerCardMode(on) {
   if (!readerPen) return;
   readerPen.setCarding(on);
   document.getElementById('readMakeCard').classList.toggle('active', on);
+  document.getElementById('readCapture').classList.remove('active');
   document.getElementById('readPen').classList.remove('active');
   capToast(on ? '펜으로 네모를 치면 그 범위로 카드를 만듭니다' : '카드 만들기 끔');
 }
@@ -1477,6 +1482,15 @@ function readerCardMode(on) {
 document.getElementById('readMakeCard').onclick = () => {
   if (!readerPen) return;
   readerCardMode(!readerPen.carding);
+};
+
+document.getElementById('readCapture').onclick = () => {
+  if (!readerPen) return;
+  const on = !readerPen.capturing;
+  readerPen.setCapturing(on);
+  document.getElementById('readCapture').classList.toggle('active', on);
+  document.getElementById('readMakeCard').classList.remove('active');
+  capToast(on ? '펜으로 네모를 치면 이미지로 복사됩니다' : '캡처 모드 끔');
 };
 
 function makeCardsFromBox(box) {
@@ -1672,8 +1686,9 @@ function renderCard() {
   document.getElementById('cardTitle').textContent = cardDeck.title;
   document.getElementById('cardProgress').textContent = `${cardDeck.idx + 1}/${cardDeck.cards.length}`;
   // 어느 대목인지 보여야 "무엇에 대한 질문인지" 생각할 수 있다(2026-10-10 요청)
+  // 무엇에 대한 질문인지 — 노트 › 섹션 › 소제목까지 보여야 맞힐 수 있다(2026-10-10)
   document.getElementById('cardSource').textContent =
-    [cardDeck.noteTitle || cardDeck.title, c.heading].filter(Boolean).join('  ·  ');
+    [cardDeck.noteTitle || cardDeck.title, c.topic || c.heading].filter(Boolean).join('  ·  ');
 
   const ctx = document.getElementById('cardContext');
   if (c.contextHtml) ctx.innerHTML = c.contextHtml;    // 표·서식을 그대로 살린다

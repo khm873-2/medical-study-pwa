@@ -855,3 +855,28 @@ summary.subject-head > .head-row, summary.root-head > .head-row {
   min-width: 18px; height: 18px; background: var(--correct); color: #fff;
   font-size: 11px; font-weight: 800; border-radius: 9px;
 }
+
+/* ═══════════ 읽기 화면 도구모음 고정 (2026-10-10) ═══════════
+   노트가 길면 헤더가 위로 스크롤돼 사라져서 카드·캡처 버튼을 누를 수가 없었다.
+   읽는 중에 언제든 손이 닿아야 하는 버튼들이라 화면 위에 붙여둔다. */
+#readScreen > header {
+  position: sticky; top: 0; z-index: 60;
+  background: var(--bg);
+  padding-top: calc(env(safe-area-inset-top) + 4px);
+  margin: calc(-1 * (env(safe-area-inset-top) + 10px)) -10px 0;
+  padding-left: 10px; padding-right: 10px;
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: saturate(1.4) blur(6px); -webkit-backdrop-filter: saturate(1.4) blur(6px);
+}
+@media (min-width: 700px) {
+  #readScreen > header { margin-left: -14px; margin-right: -14px; padding-left: 14px; padding-right: 14px; }
+}
+/* 목차도 헤더 아래로 내려 붙는다 */
+@media (min-width: 900px) { .read-toc { top: 64px; max-height: calc(100vh - 150px); } }
+@media (max-width: 899px) { .read-toc { top: calc(env(safe-area-inset-top) + 62px); } }
+
+/* 카드 주제줄 — 노트 › 섹션 › 소제목. 길어지므로 두 줄까지 보여준다. */
+#cardSource {
+  font-size: 12px; font-weight: 600; margin-bottom: 14px; line-height: 1.55;
+  color: var(--accent); text-align: left;
+}

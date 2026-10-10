@@ -1106,6 +1106,69 @@ await run('카드 만들기', async () => {
   pen.destroy();
   out.push({ name: '읽기 화면에 카드 버튼이 있다', ok: !!document.getElementById('readMakeCard') });
 
+  // ── 문맥 — 무슨 이야기인지 알아야 맞힌다 (2026-10-10) ──
+  // "주로 ____에 호발하는 얕은 화농성 감염"만 떼어 놓으면 무슨 병인지 몰라 못 맞혔다.
+  // 앞에서 카드 화면을 띄웠으므로 읽기 화면으로 되돌린다(숨겨진 요소는 크기가 0이다)
+  document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  body.innerHTML = renderMarkdown([
+    '### 1. 세균성 피부질환', '',
+    '**① 농가진(고름딱지증, Impetigo)**', '',
+    '- 주로 **여름철 소아·영유아**에 호발하는 얕은 화농성 감염.', '',
+    '**② 연조직염(Cellulitis)**', '',
+    '- **진피 깊은 층**을 침범한다.',
+  ].join('\n'));
+  const li = [...body.querySelectorAll('li')].find((e) => e.textContent.includes('화농성'));
+  const lr = li.getBoundingClientRect();
+  const ctxCards = cardsFromBox(body, { l: lr.left, t: lr.top, r: lr.right, b: lr.bottom },
+    { heading: '핵심개념 요약', noteTitle: '감염성질환' });
+  out.push({ name: '카드가 하나 나온다', ok: ctxCards.length === 1, detail: `${ctxCards.length}장` });
+  const t0 = ctxCards[0] ? ctxCards[0].topic : '';
+  out.push({ name: '주제에 소제목(농가진)이 들어간다', ok: /농가진/.test(t0), detail: t0 });
+  out.push({ name: '주제에 상위 제목(세균성 피부질환)도 들어간다', ok: /세균성 피부질환/.test(t0) });
+  out.push({ name: '주제에 섹션 이름도 들어간다', ok: /핵심개념 요약/.test(t0) });
+  out.push({ name: '바깥 → 안쪽 순서로 쌓인다',
+    ok: t0.indexOf('핵심개념') < t0.indexOf('세균성') && t0.indexOf('세균성') < t0.indexOf('농가진'), detail: t0 });
+  out.push({ name: '다른 소제목(연조직염)은 안 섞인다', ok: !/연조직염/.test(t0) });
+
+  // 아래쪽 항목은 자기 소제목을 받는다
+  const li2 = [...body.querySelectorAll('li')].find((e) => e.textContent.includes('진피'));
+  const lr2 = li2.getBoundingClientRect();
+  const c2 = cardsFromBox(body, { l: lr2.left, t: lr2.top, r: lr2.right, b: lr2.bottom },
+    { heading: '핵심개념 요약', noteTitle: '감염성질환' });
+  out.push({ name: '다음 항목은 자기 소제목(연조직염)을 받는다',
+    ok: c2.length === 1 && /연조직염/.test(c2[0].topic) && !/농가진/.test(c2[0].topic),
+    detail: c2[0] ? c2[0].topic : '' });
+
+  // 번호 매김은 카드가 안 된다
+  body.innerHTML = renderMarkdown('**A1.** [옴] 50세 여자가 가렵다고 왔다. 진단은?');
+  out.push({ name: '"A1." 같은 번호는 카드가 안 된다', ok: cardsFromBox(body, whole(), meta).length === 0 });
+
+  // ── 긴 노트에서도 도구모음이 손에 닿는다 (2026-10-10) ──
+  document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  body.innerHTML = '<p>긴 노트 본문</p>'.repeat(300);
+  const head = document.querySelector('#readScreen > header');
+  out.push({ name: '읽기 도구모음이 sticky', ok: getComputedStyle(head).position === 'sticky' });
+  window.scrollTo(0, 3000);
+  await new Promise((r) => setTimeout(r, 100));
+  out.push({ name: '스크롤해도 도구모음이 화면에 남는다',
+    ok: Math.round(head.getBoundingClientRect().top) === 0, detail: `top=${Math.round(head.getBoundingClientRect().top)}` });
+  const mk = document.getElementById('readMakeCard').getBoundingClientRect();
+  out.push({ name: '카드 버튼이 계속 눌린다',
+    ok: mk.top >= 0 && mk.bottom <= window.innerHeight && mk.width > 10 });
+  out.push({ name: '읽기 화면에 캡처 버튼이 있다', ok: !!document.getElementById('readCapture') });
+  const capb = document.getElementById('readCapture').getBoundingClientRect();
+  out.push({ name: '캡처 버튼도 계속 눌린다', ok: capb.top >= 0 && capb.width > 10 });
+  out.push({ name: '도구모음이 본문을 가리지 않는다(불투명 배경)',
+    ok: getComputedStyle(head).backgroundColor !== 'rgba(0, 0, 0, 0)',
+    detail: getComputedStyle(head).backgroundColor });
+  window.scrollTo(0, 0);
+
+  const appSrc = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '읽기 캡처가 같은 캡처 경로를 쓴다', ok: /onCapture:[\s\S]{0,60}captureFromPen\(readerPen/.test(appSrc) });
+  out.push({ name: '카드 화면이 주제(topic)를 띄운다', ok: /c\.topic \|\| c\.heading/.test(appSrc) });
+
   // ── 카드를 다 풀면 읽던 자리로 (2026-10-10 버그) ──
   const app = await fetch('/js/app.js').then((r) => r.text());
   out.push({ name: '덱을 다 풀면 읽던 화면으로 돌아간다',

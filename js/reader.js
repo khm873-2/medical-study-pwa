@@ -203,7 +203,12 @@ export function cardsFromBox(root, box, meta = {}) {
     const card = block.tagName === 'TR'
       ? tableCard(block, els, meta, n)
       : blockCard(block, els, meta, n);
-    if (card) { cards.push(card); n++; }
+    if (!card) continue;
+    // 무슨 이야기인지 위로 거슬러 붙인다 — 이게 없으면 맞힐 수가 없다
+    card.trail = contextTrail(block.tagName === 'TR' ? (block.closest('table') || block) : block, root);
+    card.topic = [meta.heading, ...card.trail].filter(Boolean).join('  ›  ');
+    cards.push(card);
+    n++;
   }
   return cards;
 }
@@ -262,7 +267,9 @@ export function isLabel(el, text) {
   if (VAGUE_ANSWERS.has(t)) return true;
   // ④ "백화점 AED asystole 케이스" 같은 **별명** — 외울 건 케이스 이름이 아니라 내용이다
   if (/(케이스|사례|증례|문항|문제)$/.test(t)) return true;
-  // ⑤ 족보 문제·해설 블록 안은 통째로 제외
+  // ⑤ "A1.", "Q3", "①" 같은 번호 매김 — 지식이 아니다
+  if (/^[A-Za-z]?\s*\d+\s*[.)]?$/.test(t) || /^[①-⑳]+$/.test(t)) return true;
+  // ⑥ 족보 문제·해설 블록 안은 통째로 제외
   if (isQuizBlock(blockOf(el))) return true;
   // ③ 줄(블록) 맨 앞에 있고 바로 뒤가 콜론 — vault에서 가장 흔한 라벨 형태
   const block = blockOf(el);
@@ -276,6 +283,56 @@ export function isLabel(el, text) {
     if (txt.trim() === text) return true;
   }
   return false;
+}
+
+/**
+ * 이 블록이 **무엇에 대한 이야기인지** 위로 거슬러 모은다.
+ *
+ * 왜 필요한가: "주로 ____에 호발하는 얕은 화농성 감염"만 떼어 놓으면 무슨 병인지 몰라
+ * 맞힐 수가 없다(2026-10-10). 노트는 보통 이렇게 생겼다:
+ *     ### 1. 세균성 피부질환
+ *     **① 농가진(고름딱지증, Impetigo)**     ← 줄 전체가 굵은 글씨 = 소제목 노릇
+ *     - 주로 **여름철 소아·영유아**에 호발하는 …
+ * 그래서 제목(h1~h6)뿐 아니라 **줄 전체가 강조인 문단**도 제목으로 쳐서 함께 보여준다.
+ *
+ * @returns {string[]} 바깥 → 안쪽 순서의 문맥 조각(최대 3개)
+ */
+export function contextTrail(block, root) {
+  const trail = [];
+  const seenLevel = [];
+  let node = block;
+  let guard = 0;
+
+  const headingLevel = (el) => {
+    const m = /^H([1-6])$/.exec(el.tagName);
+    if (m) return Number(m[1]);
+    // 줄 전체가 굵은 글씨인 문단 = 소제목. 제목보다 안쪽(7)으로 친다.
+    if (/^(P|DIV)$/.test(el.tagName)) {
+      const t = el.textContent.trim();
+      if (!t || t.length > 60) return 0;
+      const em = el.querySelector('strong, b, mark');
+      if (em && em.textContent.trim() === t) return 7;
+    }
+    return 0;
+  };
+
+  while (node && node !== root && guard++ < 400) {
+    let prev = node.previousElementSibling;
+    while (prev && guard++ < 400) {
+      const lv = headingLevel(prev);
+      // 더 바깥(작은 번호) 제목만 새로 받는다 — 같은 층을 여러 개 주우면 어지럽다
+      if (lv && (!seenLevel.length || lv < seenLevel[seenLevel.length - 1])) {
+        seenLevel.push(lv);
+        trail.push(prev.textContent.trim().replace(/\s+/g, ' '));
+        if (trail.length >= 3) return trail.reverse();
+      }
+      prev = prev.previousElementSibling;
+    }
+    // 목록 안이면 상위 항목도 문맥이다
+    const li = node.parentElement && node.parentElement.closest ? node.parentElement.closest('li') : null;
+    node = li || node.parentElement;
+  }
+  return trail.reverse();
 }
 
 /** 이 강조가 속한 블록. 표 안이면 **행(TR)** 을 돌려준다(표 모양을 지키려고). */
