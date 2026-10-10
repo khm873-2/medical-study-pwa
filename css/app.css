@@ -965,6 +965,220 @@ summary.subject-head > .head-row, summary.root-head > .head-row {
 
 /* ═══════════ 첫 화면(스플래시) — 2026-10-10 ═══════════
    아이콘과 같은 그림을 CSS로 그린다(이미지를 또 받지 않아 즉시 뜬다).
+   자주 보이면 성가시므로 짧게 보여주고 스르르 사라진다. */
+#splash {
+  position: fixed; inset: 0; z-index: 9999; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  /* 한 가지 파랑에서 보라로 가는 밋밋한 그라데이션 대신, 바탕을 깊게 깔고
+     그 위에 빛무리를 겹쳐 색이 살아 있게 한다 */
+  background: #4c5fd7;
+  color: #fff;
+  transition: opacity .5s ease, visibility .5s;
+}
+#splash.gone { opacity: 0; visibility: hidden; pointer-events: none; }
+
+/* 빛무리 — 서로 다른 색이 천천히 흐른다 */
+.splash-glow {
+  position: absolute; border-radius: 50%; filter: blur(60px); opacity: .78;
+  animation: drift 7s ease-in-out infinite alternate;
+}
+.splash-glow.g1 { width: 62vmin; height: 62vmin; left: -14vmin; top: -10vmin; background: #6f8bff; }
+.splash-glow.g2 { width: 54vmin; height: 54vmin; right: -12vmin; top: 6vmin; background: #a46cff; animation-delay: -2.4s; }
+.splash-glow.g3 { width: 48vmin; height: 48vmin; left: 24vmin; bottom: -16vmin; background: #4ad7c8; opacity: .5; animation-delay: -4.8s; }
+@keyframes drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(3vmin, -4vmin, 0) scale(1.12); }
+}
+
+.splash-inner {
+  position: relative; z-index: 1;
+  display: flex; flex-direction: column; align-items: center;
+  animation: rise .7s cubic-bezier(.2, .9, .3, 1) both;
+}
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+.splash-art { position: relative; width: 238px; height: 118px; }
+
+/* 속도선 */
+.splash-speed { position: absolute; left: -4px; top: 26px; }
+.splash-speed i {
+  display: block; height: 5px; border-radius: 3px; background: #ffd66b;
+  box-shadow: 0 0 14px rgba(255, 214, 107, .6);
+  margin-bottom: 13px; animation: dash 1.15s ease-in-out infinite;
+}
+.splash-speed i:nth-child(1) { width: 28px; }
+.splash-speed i:nth-child(2) { width: 46px; animation-delay: .12s; }
+.splash-speed i:nth-child(3) { width: 22px; animation-delay: .24s; }
+@keyframes dash {
+  0%, 100% { transform: translateX(0); opacity: .95; }
+  50%      { transform: translateX(-11px); opacity: .5; }
+}
+
+.splash-train {
+  position: absolute; left: 58px; top: 8px; width: 176px; height: 86px;
+  background: #fff; border-radius: 30px 22px 22px 30px;
+  box-shadow: 0 14px 34px rgba(24, 20, 70, .28);
+  animation: bob 1.15s ease-in-out infinite;
+}
+@keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+
+.splash-win {
+  position: absolute; left: 34px; top: 13px; right: 14px; height: 47px;
+  background: #222c4e; border-radius: 11px; padding: 9px 11px;
+}
+.sl { display: block; height: 6px; border-radius: 3px; margin-bottom: 7px; background: #9fb0da; }
+.sl1 { width: 78%; }
+.sl2 { width: 54%; }
+.sl3 { width: 66%; background: #4ad7c8; }
+.splash-check {
+  position: absolute; right: 10px; bottom: 7px; width: 17px; height: 17px;
+  fill: none; stroke: #4ad7c8; stroke-width: 3.4; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 30; stroke-dashoffset: 30;
+  animation: tick .55s ease-out .4s forwards;
+}
+@keyframes tick { to { stroke-dashoffset: 0; } }
+
+.splash-lamp {
+  position: absolute; left: 10px; bottom: 16px; width: 17px; height: 17px;
+  border-radius: 50%; background: #ffd66b;
+  box-shadow: 0 0 18px rgba(255, 214, 107, .85);
+}
+.splash-wheel { position: absolute; bottom: -9px; width: 21px; height: 21px; border-radius: 50%; background: #222c4e; }
+.splash-wheel.w1 { left: 48px; }
+.splash-wheel.w2 { left: 110px; }
+.splash-rail {
+  position: absolute; left: 0; right: -8px; bottom: -4px; height: 6px;
+  background: linear-gradient(90deg, rgba(255,255,255,.25), #fff 22%, #fff 80%, rgba(255,255,255,.2));
+  border-radius: 3px;
+}
+
+/* ── 글자 ──
+   900 굵기에 자간을 벌리면 한글은 덩어리처럼 보여 딱딱해진다.
+   굵기를 한 단계 낮추고 자간을 **좁혀** 두 글자가 한 덩어리로 읽히게 하고,
+   아래로 옅어지는 그라데이션을 입혀 평평함을 덜어낸다. */
+.splash-name {
+  margin: 26px 0 0; display: flex; gap: .01em;
+  font-size: clamp(52px, 16vmin, 76px);
+  font-weight: 800; letter-spacing: -.045em; line-height: 1;
+  /* 아래쪽을 너무 흐리면 글자가 날아가 보인다 — 흰색 구간을 넉넉히 둔다 */
+  background: linear-gradient(176deg, #fff 58%, #cfd8ff 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 8px 22px rgba(14, 10, 58, .38));
+}
+.splash-name span { animation: pop .55s cubic-bezier(.2, 1.2, .35, 1) both; }
+.splash-name span:nth-child(2) { animation-delay: .09s; }
+@keyframes pop { from { opacity: 0; transform: translateY(10px) scale(.94); } to { opacity: 1; transform: none; } }
+
+/* 글자와 설명 사이를 잇는 가는 선 — 여백만 두면 둘이 따로 논다 */
+.splash-rule {
+  width: 64px; height: 4px; border-radius: 3px; margin: 16px 0 14px;
+  background: linear-gradient(90deg, #ffd66b, #4ad7c8);
+  box-shadow: 0 2px 12px rgba(74, 215, 200, .5);
+  animation: grow .55s cubic-bezier(.2, .9, .3, 1) .32s both;
+}
+@keyframes grow { from { width: 0; opacity: 0; } to { width: 64px; opacity: 1; } }
+
+/* 설명은 알약 모양으로 감싸 글자 덩어리와 분리하되 한 덩어리로 보이게 한다 */
+.splash-tag {
+  margin: 0; padding: 8px 18px; border-radius: 999px;
+  font-size: 14.5px; font-weight: 600; letter-spacing: .02em;
+  color: rgba(255, 255, 255, .95);
+  background: rgba(255, 255, 255, .14);
+  border: 1px solid rgba(255, 255, 255, .22);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  animation: rise .6s ease-out .22s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash-glow, .splash-speed i, .splash-train, .splash-check,
+  .splash-inner, .splash-name span, .splash-rule, .splash-tag { animation: none; }
+  .splash-check { stroke-dashoffset: 0; }
+}
+
+/* ═══════════ 카드 관리 (2026-10-10 재작성) ═══════════
+   왼쪽에 성격별 탭, 오른쪽에 카드 미리보기. 카드가 수백 장이라 한 줄 목록으로는
+   무엇이 들었는지 알 수가 없다 — 작은 카드로 보여주고 거기서 바로 골라낸다. */
+.deck-exam {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; margin-bottom: 14px;
+  background: var(--warn-bg); border: 1px solid var(--warn); border-radius: 11px;
+  font-size: 13px; color: var(--warn); font-weight: 600;
+}
+.deck-exam-d {
+  background: var(--warn); color: #fff; padding: 3px 10px;
+  border-radius: 7px; font-weight: 800; font-size: 13px;
+}
+
+.deck-split { display: block; }
+.deck-side { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 10px; margin-bottom: 12px; }
+.deck-tab {
+  display: flex; align-items: center; gap: 7px; flex: 0 0 auto;
+  padding: 10px 13px; border-radius: 10px; min-height: 42px;
+  background: var(--card); border: 1px solid var(--border);
+  font-family: inherit; font-size: 13.5px; color: var(--text); cursor: pointer; white-space: nowrap;
+}
+.deck-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.dt-ico { font-size: 13px; }
+.dt-n { font-weight: 800; opacity: .8; font-size: 12px; }
+.deck-tab.active .dt-n { opacity: 1; }
+
+@media (min-width: 900px) {
+  .deck-split { display: flex; gap: 16px; align-items: flex-start; }
+  .deck-side {
+    flex: 0 0 188px; display: block; overflow: visible;
+    position: sticky; top: 8px; padding: 0; margin: 0;
+  }
+  .deck-tab { width: 100%; margin-bottom: 6px; justify-content: flex-start; }
+  .dt-l { flex: 1; text-align: left; }
+  .deck-main-col { flex: 1; min-width: 0; }
+}
+
+.deck-stats { margin-bottom: 14px; }
+.deck-hint { font-size: 12px; margin: 10px 0 0; }
+
+/* 미리보기 격자 — 넓으면 두 줄씩 */
+.deck-grid { display: grid; gap: 10px; grid-template-columns: 1fr; }
+@media (min-width: 1100px) { .deck-grid { grid-template-columns: 1fr 1fr; } }
+
+.deck-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 11px;
+  padding: 12px 14px;
+}
+.deck-topic { font-size: 11px; color: var(--accent); font-weight: 700; margin-bottom: 5px; line-height: 1.45; }
+.deck-q {
+  font-size: 13.5px; line-height: 1.55; color: var(--text);
+  max-height: 5.2em; overflow: hidden;
+}
+.deck-q .cloze {
+  display: inline; min-width: 0; padding: 0 2px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-bottom: 1.5px solid var(--accent); border-radius: 2px;
+}
+.deck-q table { font-size: 11.5px; border-collapse: collapse; }
+.deck-q th, .deck-q td { border: 1px solid var(--border); padding: 3px 5px; }
+.deck-a {
+  margin-top: 8px; padding: 7px 9px; border-radius: 7px;
+  background: color-mix(in srgb, var(--correct) 12%, transparent);
+  font-size: 13px; font-weight: 700; color: var(--text);
+}
+.deck-meta { margin-top: 8px; font-size: 11.5px; color: var(--sub); }
+.deck-acts { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+.deck-btn {
+  border: 1px solid var(--border); background: var(--bg); color: var(--sub);
+  border-radius: 8px; padding: 6px 11px; font-size: 12px; font-family: inherit;
+  cursor: pointer; min-height: 34px; white-space: nowrap;
+}
+.deck-btn:active { background: var(--badge-bg); }
+.deck-btn.on { color: var(--accent); border-color: var(--accent); }
+.deck-btn.danger { color: var(--wrong); }
+
+/* 카드 화면 버튼 줄 — 답 보기 전/후로 바뀐다 */
+.card-nav .grade-row { display: flex; gap: 10px; width: 100%; }
+.card-nav .grade-row .btn { flex: 1; }
+#cardStar.active { color: var(--warn); }
+
+/* ═══════════ 첫 화면(스플래시) — 2026-10-10 ═══════════
+   아이콘과 같은 그림을 CSS로 그린다(이미지를 또 받지 않아 즉시 뜬다).
    자주 보이면 성가시므로 **짧게**(0.9초) 보여주고 스르르 사라진다. */
 #splash {
   position: fixed; inset: 0; z-index: 9999;

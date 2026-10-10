@@ -354,9 +354,18 @@ export function cardsFromBox(root, box, meta = {}) {
     groups.get(block).push(el);
   }
 
+  // SuperMemo의 "최소 정보 원칙" — 한 번에 묻는 게 많으면 카드가 아니라 시험이 된다.
+  // 한 블록에 빈칸이 많으면 여러 장으로 쪼개고, 나머지는 **보이게 남겨** 단서로 쓴다
+  // (Anki의 Cloze Overlapper가 열거를 다루는 방식).
+  const MAX_BLANKS = 4;
+  const split = [];
+  for (const [block, els] of groups) {
+    if (els.length <= MAX_BLANKS) { split.push([block, els]); continue; }
+    for (let i = 0; i < els.length; i += MAX_BLANKS) split.push([block, els.slice(i, i + MAX_BLANKS)]);
+  }
   const cards = [];
   let n = 0;
-  for (const [block, els] of groups) {
+  for (const [block, els] of split) {
     const card = block.tagName === 'TR'
       ? tableCard(block, els, meta, n)
       : blockCard(block, els, meta, n);
@@ -370,11 +379,29 @@ export function cardsFromBox(root, box, meta = {}) {
   return cards;
 }
 
-/** 네모에 걸린 강조 요소들(라벨 제외). */
+const EMPH_SEL = '.ask, mark, strong, b, em, i';
+
+/**
+ * 네모에 걸린 강조 요소들.
+ *
+ * `{{...}}`로 **직접 지정한 빈칸(.ask)**이 하나라도 있으면 그것만 쓴다 —
+ * 자동 탐지가 빗나갈 때 노트에서 바로잡는 수단이고, 지정했으면 그 뜻을 따라야 한다.
+ */
 function emphasisIn(root, box) {
+  const inBox = (el) => {
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    return !(r.right < box.l || r.left > box.r || r.bottom < box.t || r.top > box.b);
+  };
+  const explicit = [...root.querySelectorAll('.ask')].filter((el) => {
+    const t = el.textContent.trim();
+    return t.length >= 1 && inBox(el);
+  });
+  if (explicit.length) return explicit;
+
   const out = [];
-  root.querySelectorAll('mark, strong, b, em, i').forEach((el) => {
-    if (el.querySelector('mark, strong, b, em, i')) return;   // 중첩이면 안쪽만
+  root.querySelectorAll(EMPH_SEL).forEach((el) => {
+    if (el.querySelector(EMPH_SEL)) return;   // 중첩이면 안쪽만
     const text = el.textContent.trim();
     if (text.length < 2 || !/[\w가-힣]/.test(text)) return;
     if (isLabel(el, text)) return;
@@ -540,12 +567,11 @@ function tableCard(tr, els, meta, n) {
   const cloneRow = clone.querySelectorAll('tr')[rowIdx];
   if (!cloneRow) return null;
   // 원본 행과 복제 행의 강조를 같은 순서로 대응시킨다
-  const origEm = [...tr.querySelectorAll('mark, strong, b, em, i')];
-  const cloneEm = [...cloneRow.querySelectorAll('mark, strong, b, em, i')];
+  const origEm = [...tr.querySelectorAll(EMPH_SEL)];
+  const cloneEm = [...cloneRow.querySelectorAll(EMPH_SEL)];
   origEm.forEach((o, i) => {
     if (!els.includes(o) || !cloneEm[i]) return;
-    answers.push(o.textContent.trim());
-    cloneEm[i].replaceWith(blankNode(o.textContent.trim()));
+    answers.push(replaceWithCloze(cloneEm[i], o.textContent.trim()));
   });
   if (!answers.length) return null;
   cloneRow.classList.add('card-row-focus');
@@ -566,13 +592,11 @@ function tableCard(tr, els, meta, n) {
 /** 블록을 복제하면서 대상 강조만 빈칸으로 바꾼다. 나머지 서식은 그대로 둔다. */
 function cloneWithBlanks(block, els, answers) {
   const clone = block.cloneNode(true);
-  const orig = [...block.querySelectorAll('mark, strong, b, em, i')];
-  const copy = [...clone.querySelectorAll('mark, strong, b, em, i')];
+  const orig = [...block.querySelectorAll(EMPH_SEL)];
+  const copy = [...clone.querySelectorAll(EMPH_SEL)];
   orig.forEach((o, i) => {
     if (!els.includes(o) || !copy[i]) return;
-    const t = o.textContent.trim();
-    answers.push(t);
-    copy[i].replaceWith(blankNode(t));
+    answers.push(replaceWithCloze(copy[i], o.textContent.trim()));
   });
   return clone.outerHTML;
 }
@@ -584,6 +608,66 @@ function blankNode(answer) {
   b.dataset.answer = answer;
   b.textContent = ' '.repeat(Math.min(14, Math.max(4, answer.length)));
   return b;
+}
+
+/**
+ * 강조 덩어리에서 **실제로 물어볼 핵심어**만 떼어낸다.
+ *
+ * 노트에는 서술부까지 통째로 굵게 쓴 곳이 많다:
+ *   "**중앙부 배꼽모양 함몰(umbilication)이 진단의 핵심 소견**"
+ * 이걸 통째로 가리면 문장 하나가 사라져 맞힐 수가 없다(2026-10-10).
+ * "____이 진단의 핵심 소견"이 되어야 답할 수 있다.
+ *
+ * 두 가지를 떼어낸다:
+ *   (1) 뒤쪽 서술부 — 조사 뒤에 설명이 이어지면 거기서 끊는다.
+ *   (2) 앞쪽 한정어 — "AIDS 환자의 10~30%"처럼 "~의"로 한정하면 단서로 남긴다.
+ *
+ * @returns {{lead:string, answer:string, tail:string}}
+ */
+export function splitAnswer(text) {
+  let lead = '';
+  let core = String(text).trim();
+  let tail = '';
+  if (core.length < 10) return { lead, answer: core, tail };
+
+  // (1) 뒤쪽 서술부. 괄호 안의 조사에 걸리지 않게 괄호를 가린 사본에서 위치를 찾는다.
+  const masked = core.replace(/\([^)]*\)/g, (m) => ' '.repeat(m.length));
+  const JOSA = /(이|가|은|는|을|를|로|으로|에서|에|와|과)\s+(?=\S)/g;
+  // "압박골절 있는 요추"의 "있**는**"은 조사가 아니라 관형형이다 — 여기서 끊으면
+  // "[압박골절 있]는" 처럼 말이 잘린다. 흔한 관형형을 걸러낸다(2026-10-10).
+  const ADNOM = /(있|없|하|되|가|오|보|주|쓰|같|다르|많|적|높|낮|좋|나쁘|크|작|어리|늙)$/;
+  // **가장 앞선** 조사에서 끊는다. 뒤쪽을 고르면 "…ROM가 모든 방향" 처럼
+  // 서술부 일부가 답에 섞여 어색해진다(2026-10-10).
+  let cut = -1;
+  let m;
+  while ((m = JOSA.exec(masked))) {
+    const after = core.slice(m.index + m[0].length).trim();
+    if (after.length < 2 || m.index < 4) continue;
+    // 조사 앞 글자가 용언 어간이면 관형형이다 — 건너뛴다
+    if (/^[은는]$/.test(m[1]) && ADNOM.test(core.slice(0, m.index))) continue;
+    cut = m.index; break;
+  }
+  if (cut > 0) {
+    const rest = core.slice(cut);
+    if (rest.trim().length >= 4) { tail = rest; core = core.slice(0, cut); }
+  }
+
+  // (2) 앞쪽 한정어 — "X의 Y" 꼴이면 "X의"는 단서로 남긴다
+  const q = core.match(/^(.{2,}?의)\s+(\S.*)$/);
+  if (q && q[2].trim().length >= 2) { lead = q[1] + ' '; core = q[2]; }
+
+  return { lead, answer: core.trim(), tail };
+}
+
+/** 강조 요소를 "앞말 + 빈칸 + 뒷말"로 바꾼다. */
+function replaceWithCloze(el, fullText) {
+  const parts = splitAnswer(fullText);
+  const frag = document.createDocumentFragment();
+  if (parts.lead) frag.appendChild(document.createTextNode(parts.lead));
+  frag.appendChild(blankNode(parts.answer));
+  if (parts.tail) frag.appendChild(document.createTextNode(parts.tail));
+  el.replaceWith(frag);
+  return parts.answer;
 }
 
 // ───────────── 시험 일정 ─────────────

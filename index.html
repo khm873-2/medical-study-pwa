@@ -22,20 +22,28 @@
 <!-- 처음 열 때 잠깐 뜨는 화면. 앱이 준비되면 스르르 사라진다.
      자주 보이면 성가시니 **한 번 뜨고 짧게** 끝낸다(2026-10-10). -->
 <div id="splash">
-  <div class="splash-art">
-    <div class="splash-speed"><i></i><i></i><i></i></div>
-    <div class="splash-train">
-      <div class="splash-win">
-        <span class="sl sl1"></span><span class="sl sl2"></span><span class="sl sl3"></span>
-        <svg class="splash-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13l6 6L21 5"/></svg>
+  <div class="splash-glow g1"></div>
+  <div class="splash-glow g2"></div>
+  <div class="splash-glow g3"></div>
+
+  <div class="splash-inner">
+    <div class="splash-art">
+      <div class="splash-speed"><i></i><i></i><i></i></div>
+      <div class="splash-train">
+        <div class="splash-win">
+          <span class="sl sl1"></span><span class="sl sl2"></span><span class="sl sl3"></span>
+          <svg class="splash-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13l6 6L21 5"/></svg>
+        </div>
+        <span class="splash-lamp"></span>
+        <span class="splash-wheel w1"></span><span class="splash-wheel w2"></span>
       </div>
-      <span class="splash-lamp"></span>
-      <span class="splash-wheel w1"></span><span class="splash-wheel w2"></span>
+      <div class="splash-rail"></div>
     </div>
-    <div class="splash-rail"></div>
+
+    <h1 class="splash-name"><span>달</span><span>모</span></h1>
+    <div class="splash-rule"></div>
+    <p class="splash-tag">씽씽! 달리는 모의고사</p>
   </div>
-  <div class="splash-name">달모</div>
-  <div class="splash-tag">씽씽! 달리는 모의고사</div>
 </div>
 
 <div id="app">

@@ -1116,6 +1116,67 @@ await run('카드 만들기', async () => {
   pen.destroy();
   out.push({ name: '읽기 화면에 카드 버튼이 있다', ok: !!document.getElementById('readMakeCard') });
 
+  // 앞 블록이 카드 화면을 띄워놨다 — 읽기 화면으로 되돌린다(숨은 요소는 크기가 0)
+  document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+
+  // ── 핵심어만 가린다 (2026-10-10) ──
+  // "**중앙부 배꼽모양 함몰(umbilication)이 진단의 핵심 소견**"을 통째로 가리면
+  // 문장 하나가 날아가 맞힐 수가 없다. 조사 앞까지만 가리고 서술부는 남긴다.
+  {
+    const R = await import('/js/reader.js');
+    const cut = (t) => { const r = R.splitAnswer(t); return (r.lead || '') + '[' + r.answer + ']' + (r.tail || ''); };
+    out.push({ name: '서술부는 남기고 핵심어만 가린다',
+      ok: cut('중앙부 배꼽모양 함몰(umbilication)이 진단의 핵심 소견')
+        === '[중앙부 배꼽모양 함몰(umbilication)]이 진단의 핵심 소견',
+      detail: cut('중앙부 배꼽모양 함몰(umbilication)이 진단의 핵심 소견') });
+    out.push({ name: '"~의" 한정어는 단서로 남긴다',
+      ok: cut('AIDS 환자의 10~30%') === 'AIDS 환자의 [10~30%]', detail: cut('AIDS 환자의 10~30%') });
+    out.push({ name: '괄호 안의 조사에 안 속는다',
+      ok: cut('능동적 및 수동적 관절가동범위(Active & Passive ROM)가 모든 방향에서 함께 제한')
+        === '[능동적 및 수동적 관절가동범위(Active & Passive ROM)]가 모든 방향에서 함께 제한' });
+    out.push({ name: '관형형("있는")을 조사로 안 본다',
+      ok: cut('압박골절 있는 요추 분절은 제외') === '[압박골절 있는 요추 분절]은 제외',
+      detail: cut('압박골절 있는 요추 분절은 제외') });
+    out.push({ name: '짧은 말은 그대로 둔다', ok: cut('VF/pVT') === '[VF/pVT]' });
+    out.push({ name: '서술부 없는 명사구도 그대로', ok: cut('수축기혈압 90mmHg 미만') === '[수축기혈압 90mmHg 미만]' });
+
+    // 실제 카드에서도 그렇게 나오는가
+    body.innerHTML = renderMarkdown('증상: 구진, **중앙부 배꼽모양 함몰(umbilication)이 진단의 핵심 소견**. 무증상이 대부분이다.');
+    const cc = cardsFromBox(body, whole(), meta);
+    const shown = document.createElement('div');
+    shown.innerHTML = cc[0].contextHtml;
+    out.push({ name: '카드 본문에 서술부가 남아 있다',
+      ok: /진단의 핵심 소견/.test(shown.textContent), detail: shown.textContent.slice(0, 60) });
+    out.push({ name: '답은 핵심어만', ok: cc[0].answers[0] === '중앙부 배꼽모양 함몰(umbilication)',
+      detail: cc[0].answers[0] });
+  }
+
+  // ── 직접 지정한 빈칸 {{...}} (2026-10-10) ──
+  // 자동 탐지는 완벽해질 수 없다. 노트에 {{ }}로 적으면 그걸 그대로 쓴다
+  // (옵시디언 Spaced Repetition 플러그인과 같은 문법이라 그쪽과도 호환).
+  body.innerHTML = renderMarkdown('농가진은 **여름철**에 흔하고 원인균은 {{S. aureus}}와 {{A군 사슬알균}}이다.');
+  const ex = cardsFromBox(body, whole(), meta);
+  out.push({ name: '{{ }}가 있으면 그것만 빈칸이 된다',
+    ok: ex.length === 1 && ex[0].answers.join(',') === 'S. aureus,A군 사슬알균',
+    detail: ex[0] ? ex[0].answers.join(',') : '카드 없음' });
+  out.push({ name: '{{ }}가 있으면 굵게는 무시된다', ok: !ex[0].answers.includes('여름철') });
+  body.innerHTML = renderMarkdown('농가진은 **여름철 소아**에 흔하고 ==딱지==가 특징이라고 알려져 있다.');
+  const au = cardsFromBox(body, whole(), meta);
+  out.push({ name: '{{ }}가 없으면 평소대로 굵게·하이라이트',
+    ok: au[0].answers.join(',') === '여름철 소아,딱지', detail: au[0].answers.join(',') });
+
+  // ── 한 카드에 너무 많이 묻지 않는다 (최소 정보 원칙) ──
+  body.innerHTML = renderMarkdown(
+    '원인균은 **포도알균**, **사슬알균**, **폐렴막대균**, **녹농균**, **장구균**, **혐기균** 이렇게 여섯 가지가 알려져 있다.');
+  const many = cardsFromBox(body, whole(), meta);
+  out.push({ name: '빈칸이 많으면 여러 장으로 쪼갠다', ok: many.length === 2,
+    detail: many.map((c) => c.answers.length).join('+') + '장' });
+  out.push({ name: '한 장에 빈칸은 4개까지', ok: many.every((c) => c.answers.length <= 4) });
+  out.push({ name: '쪼개도 답을 빠뜨리지 않는다',
+    ok: many.reduce((n, c) => n + c.answers.length, 0) === 6 });
+  out.push({ name: '쪼갠 카드끼리 id가 다르다', ok: many[0].id !== many[1].id });
+
   // ── 문맥 — 무슨 이야기인지 알아야 맞힌다 (2026-10-10) ──
   // "주로 ____에 호발하는 얕은 화농성 감염"만 떼어 놓으면 무슨 병인지 몰라 못 맞혔다.
   // 앞에서 카드 화면을 띄웠으므로 읽기 화면으로 되돌린다(숨겨진 요소는 크기가 0이다)
