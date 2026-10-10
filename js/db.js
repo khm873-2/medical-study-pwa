@@ -5,12 +5,13 @@
 // 날아가면 곤란한 데이터라 IndexedDB를 쓴다.
 
 const DB_NAME = 'medstudy';
-const DB_VER = 1;
+const DB_VER = 2;
 
 const STORE_KV = 'kv';            // 설정·토큰
 const STORE_OUTBOX = 'outbox';    // vault에 못 보낸 저장분(재시도 큐)
 const STORE_SESSION = 'session';  // 모의고사별 이어풀기 상태
 const STORE_CACHE = 'cache';      // 시험 HTML/노트 텍스트 캐시
+const STORE_CARDS = 'cards';      // 네모로 만든 플래시카드(관리 화면에서 다시 본다)
 
 let _dbp = null;
 
@@ -26,6 +27,7 @@ function open() {
       }
       if (!db.objectStoreNames.contains(STORE_SESSION)) db.createObjectStore(STORE_SESSION);
       if (!db.objectStoreNames.contains(STORE_CACHE)) db.createObjectStore(STORE_CACHE);
+      if (!db.objectStoreNames.contains(STORE_CARDS)) db.createObjectStore(STORE_CARDS, { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -120,4 +122,29 @@ export async function cacheSet(path, data) {
 }
 export async function cacheClear() {
   return tx(STORE_CACHE, 'readwrite', (s) => s.clear());
+}
+
+// ---- 네모로 만든 카드 ----
+// 왜 저장하나: 카드를 그때그때 만들고 버리면 "지난주에 만든 카드"를 다시 볼 수가 없고,
+// 관리 화면에서 무엇을 버렸는지도 알 수 없다(2026-10-10).
+export async function saveCards(cards) {
+  if (!cards || !cards.length) return 0;
+  const db = await open();
+  await new Promise((res, rej) => {
+    const t = db.transaction(STORE_CARDS, 'readwrite');
+    const st = t.objectStore(STORE_CARDS);
+    cards.forEach((c) => st.put({ ...c, savedAt: c.savedAt || Date.now() }));
+    t.oncomplete = res; t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+  });
+  return cards.length;
+}
+export async function allCards() {
+  const db = await open();
+  return req2val(db.transaction(STORE_CARDS, 'readonly').objectStore(STORE_CARDS).getAll());
+}
+export async function deleteCard(id) {
+  return tx(STORE_CARDS, 'readwrite', (s) => s.delete(id));
+}
+export async function clearCards() {
+  return tx(STORE_CARDS, 'readwrite', (s) => s.clear());
 }

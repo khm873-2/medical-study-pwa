@@ -1077,8 +1077,10 @@ await run('카드 만들기', async () => {
   // ── 카드 화면이 HTML·여러 답을 그린다 ──
   const ctx = document.getElementById('cardContext');
   const ansEl = document.getElementById('cardAnswer');
-  body.innerHTML = renderMarkdown('**가나다**와 **라마바**가 있다.');
+  // 빈칸 둘짜리 카드 — 가리고도 단서가 남을 만큼 긴 문장을 쓴다
+  body.innerHTML = renderMarkdown('급성기 치료는 **가나다정 투여**이고 유지요법은 **라마바정 복용**으로 이어간다.');
   const two = cardsFromBox(body, whole(), meta)[0];
+  out.push({ name: '빈칸 둘짜리 카드가 만들어진다', ok: !!two && two.answers.length === 2 });
   document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
   document.getElementById('cardScreen').classList.remove('hidden');
   ctx.innerHTML = two.contextHtml;
@@ -1090,7 +1092,8 @@ await run('카드 만들기', async () => {
     detail: `${Math.round(cz.getBoundingClientRect().width)}px` });
   // 답 보기 — 빈칸이 채워진다
   ctx.querySelectorAll('.cloze').forEach((el) => { el.textContent = el.dataset.answer; el.classList.add('filled'); });
-  out.push({ name: '답 보기를 누르면 빈칸이 채워진다', ok: ctx.textContent.includes('가나다') && ctx.textContent.includes('라마바') });
+  out.push({ name: '답 보기를 누르면 빈칸이 채워진다',
+    ok: ctx.textContent.includes('가나다정 투여') && ctx.textContent.includes('라마바정 복용') });
   out.push({ name: '채워진 빈칸은 색이 달라진다',
     ok: getComputedStyle(ctx.querySelector('.cloze.filled')).borderBottomColor
       !== getComputedStyle(cz).borderBottomColor || true });
@@ -1116,7 +1119,7 @@ await run('카드 만들기', async () => {
     '**① 농가진(고름딱지증, Impetigo)**', '',
     '- 주로 **여름철 소아·영유아**에 호발하는 얕은 화농성 감염.', '',
     '**② 연조직염(Cellulitis)**', '',
-    '- **진피 깊은 층**을 침범한다.',
+    '- 표피가 아니라 **진피 깊은 층과 피하지방**을 침범하는 급성 세균감염이다.',
   ].join('\n'));
   const li = [...body.querySelectorAll('li')].find((e) => e.textContent.includes('화농성'));
   const lr = li.getBoundingClientRect();
@@ -1143,6 +1146,15 @@ await run('카드 만들기', async () => {
   // 번호 매김은 카드가 안 된다
   body.innerHTML = renderMarkdown('**A1.** [옴] 50세 여자가 가렵다고 왔다. 진단은?');
   out.push({ name: '"A1." 같은 번호는 카드가 안 된다', ok: cardsFromBox(body, whole(), meta).length === 0 });
+
+  // 줄머리 + 대시도 라벨이다 — "**악화·유발 요인** — 하나씩 짝지어 기억"이 카드가 돼서
+  // 뭘 묻는지 알 수 없는 카드가 나왔다(2026-10-10)
+  body.innerHTML = renderMarkdown('- **악화·유발 요인** — 하나씩 짝지어 기억');
+  out.push({ name: '줄머리+대시 라벨은 카드가 안 된다', ok: cardsFromBox(body, whole(), meta).length === 0 });
+  // 다만 조밀한 **정상** 문장까지 날리면 안 된다
+  body.innerHTML = renderMarkdown('심인성쇼크는 **수축기혈압 90 미만**이고 심장지수 **2.2 미만**이다.');
+  out.push({ name: '빈칸이 빽빽해도 주어가 있으면 카드가 된다',
+    ok: cardsFromBox(body, whole(), meta).length === 1 });
 
   // ── 긴 노트에서도 도구모음이 손에 닿는다 (2026-10-10) ──
   document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
@@ -1175,6 +1187,100 @@ await run('카드 만들기', async () => {
     ok: /const back = cardDeck\.backTo;[\s\S]{0,400}back === 'reader'[\s\S]{0,120}show\('readScreen'\)/.test(app) });
   out.push({ name: '뒤로가기도 읽던 화면으로', ok: /cardBack[\s\S]{0,300}back === 'reader'/.test(app) });
   out.push({ name: '카드 화면에 소목차를 띄운다', ok: /cardSource[\s\S]{0,160}c\.heading/.test(app) });
+  return out;
+});
+
+// ══════════ 5n. 카드 골라내기 · 관리 (2026-10-10) ══════════
+// 네모로 만들면 카드가 수백 장이다. 다 외울 수 없으니 우선순위와 골라내기가 필요하다.
+await run('카드 관리', async () => {
+  const out = [];
+  const R = await import('/js/reader.js');
+
+  // ── 우선순위 큐 ──
+  const srs = {};
+  const cards = [{ id: 'star' }, { id: 'leech' }, { id: 'due' }, { id: 'new' },
+    { id: 'future' }, { id: 'dropped' }, { id: 'buried' }];
+  R.toggleStar(srs, 'star');
+  srs.leech = { box: 0, seen: 9, lapses: 4, due: 0 };
+  srs.due = { box: 1, seen: 1, due: 1 };
+  srs.future = { box: 2, seen: 2, due: Date.now() + 86400000 * 5 };
+  R.suspendCard(srs, 'dropped');
+  R.buryCard(srs, 'buried');
+  const q = R.studyQueue(cards, srs);
+  out.push({ name: '중요 → 자주틀림 → 기한 → 새 카드 순',
+    ok: q.slice(0, 4).map((c) => c.id).join(',') === 'star,leech,due,new',
+    detail: q.map((c) => c.id).join(' → ') });
+  out.push({ name: '버린 카드는 안 나온다', ok: !q.some((c) => c.id === 'dropped') });
+  out.push({ name: '오늘 미룬 카드도 안 나온다', ok: !q.some((c) => c.id === 'buried') });
+  out.push({ name: '아직 기한이 안 된 카드는 맨 뒤', ok: q[q.length - 1].id === 'future' });
+  out.push({ name: '하루 분량을 끊을 수 있다', ok: R.studyQueue(cards, srs, { limit: 2 }).length === 2 });
+
+  // ── 상태 다루기 ──
+  out.push({ name: '버리면 suspended', ok: R.isSuspended(srs, 'dropped') });
+  R.unsuspendCard(srs, 'dropped');
+  out.push({ name: '되살리면 다시 나온다',
+    ok: !R.isSuspended(srs, 'dropped') && R.studyQueue(cards, srs).some((c) => c.id === 'dropped') });
+  out.push({ name: '3번 넘게 틀리면 자주틀림', ok: R.isLeech(srs, 'leech') && !R.isLeech(srs, 'due') });
+  out.push({ name: '미루기는 내일로 넘어간다', ok: srs.buried.buried > Date.now(),
+    detail: `${Math.round((srs.buried.buried - Date.now()) / 3600000)}시간 뒤` });
+  R.toggleStar(srs, 'star');
+  out.push({ name: '중요 표시는 끌 수 있다', ok: !R.isStarred(srs, 'star') });
+
+  // 틀리면 lapses가 는다 (약하게 "모른다"를 반영)
+  const s2 = {};
+  R.gradeCard(s2, 'x', false);
+  R.gradeCard(s2, 'x', false);
+  out.push({ name: '틀릴 때마다 기록이 쌓인다', ok: s2.x.lapses === 2, detail: `lapses=${s2.x.lapses}` });
+  R.gradeCard(s2, 'x', true);
+  out.push({ name: '맞히면 상자가 올라간다', ok: s2.x.box === 1 && s2.x.lapses === 2 });
+
+  // ── 성격별 묶기 ──
+  const g = R.groupCards(cards, srs);
+  out.push({ name: '관리 화면용으로 나뉜다',
+    ok: g.leech.length === 1 && g.suspended.length === 0,
+    detail: Object.entries(g).map(([k, v]) => `${k}=${v.length}`).join(' ') });
+
+  // ── 카드 저장 ──
+  const { saveCards, allCards, deleteCard } = await import('/js/db.js');
+  const made = [{ id: 'test-card-1', topic: '감염 › 농가진', answers: ['여름철'],
+    contextHtml: '<li>주로 <span class="cloze" data-answer="여름철">    </span>에 호발</li>' }];
+  await saveCards(made);
+  const back = await allCards();
+  out.push({ name: '만든 카드가 저장된다', ok: back.some((c) => c.id === 'test-card-1') });
+  const got = back.find((c) => c.id === 'test-card-1');
+  out.push({ name: '주제·답·본문이 같이 저장된다',
+    ok: got.topic === '감염 › 농가진' && got.answers[0] === '여름철' && /cloze/.test(got.contextHtml) });
+  out.push({ name: '저장 시각이 찍힌다', ok: !!got.savedAt });
+  await deleteCard('test-card-1');
+  out.push({ name: '완전삭제가 된다', ok: !(await allCards()).some((c) => c.id === 'test-card-1') });
+
+  // ── 화면·버튼 ──
+  out.push({ name: '카드 관리 화면이 있다', ok: !!document.getElementById('deckScreen') });
+  ['cardSkip', 'cardDrop', 'cardStar'].forEach((id) => {
+    const b = document.getElementById(id);
+    out.push({ name: `${id} 버튼이 있다`, ok: !!b && (b.title || '').length > 4, detail: b ? b.title : '' });
+  });
+  document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('cardScreen').classList.remove('hidden');
+  document.getElementById('cardPre').classList.remove('hidden');
+  const skip = document.getElementById('cardSkip').getBoundingClientRect();
+  out.push({ name: '답 보기 전: 나중에 + 답 보기', ok: skip.width > 40 && skip.height >= 40,
+    detail: `${Math.round(skip.width)}x${Math.round(skip.height)}` });
+  document.getElementById('cardPre').classList.add('hidden');
+  document.getElementById('cardGrade').classList.remove('hidden');
+  const drop = document.getElementById('cardDrop').getBoundingClientRect();
+  out.push({ name: '답 본 뒤: 다시 · 버리기 · 알았다', ok: drop.width > 40 && drop.height >= 40 });
+  const grade = [...document.querySelectorAll('#cardGrade .btn')];
+  out.push({ name: '세 버튼이 한 줄에 나란히', ok: grade.length === 3 &&
+    Math.abs(grade[0].getBoundingClientRect().top - grade[2].getBoundingClientRect().top) < 2 });
+
+  const appSrc = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '나중에는 점수를 안 매긴다', ok: /cardSkip[\s\S]{0,200}buryCard/.test(appSrc)
+    && !/cardSkip[\s\S]{0,200}gradeCard/.test(appSrc) });
+  out.push({ name: '만든 카드를 저장한다', ok: /saveCards\(cards\)/.test(appSrc) });
+  out.push({ name: '복습을 우선순위 큐로 시작한다', ok: /studyQueue\(cards, srsNow\)/.test(appSrc) });
+  out.push({ name: '플래시카드 탭에서 관리로 들어간다', ok: /go\.onclick = openDeck/.test(appSrc) });
+  out.push({ name: '자주 틀리면 알려준다', ok: /isLeech\(cardDeck\.srs/.test(appSrc) });
   return out;
 });
 

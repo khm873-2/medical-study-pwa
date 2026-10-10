@@ -196,6 +196,7 @@
     <header>
       <button class="icon-btn" id="cardBack" title="목록">‹</button>
       <h1 id="cardTitle"></h1>
+      <button class="icon-btn" id="cardStar" title="중요 표시 — 다음에 먼저 보여줍니다">☆</button>
       <span class="badge-pill" id="cardProgress">0/0</span>
     </header>
     <div class="card card-face">
@@ -203,13 +204,28 @@
       <div id="cardContext" class="card-context"></div>
       <div id="cardAnswer" class="card-answer hidden"></div>
     </div>
-    <div class="navbar">
-      <button class="btn full" id="cardShow">답 보기</button>
+    <div class="navbar card-nav">
+      <div id="cardPre" class="grade-row">
+        <button class="btn" id="cardSkip" title="오늘은 건너뛴다 — 내일 다시 나옵니다">나중에</button>
+        <button class="btn primary" id="cardShow">답 보기</button>
+      </div>
       <div id="cardGrade" class="grade-row hidden">
         <button class="btn" id="cardAgain">다시</button>
+        <button class="btn" id="cardDrop" title="쓸모없는 카드 — 다시 안 나옵니다">버리기</button>
         <button class="btn primary" id="cardGot">알았다</button>
       </div>
     </div>
+  </section>
+
+  <!-- ======== 카드 관리 ======== -->
+  <section id="deckScreen" class="hidden">
+    <header>
+      <button class="icon-btn" id="deckBack" title="목록">‹</button>
+      <h1>카드 관리</h1>
+      <button class="icon-btn" id="deckRefresh" title="새로고침">↻</button>
+    </header>
+    <div id="deckStats" class="deck-stats"></div>
+    <div id="deckBody"></div>
   </section>
 
   <!-- ======== 풀이 ======== -->

@@ -123,10 +123,98 @@ export function gradeCard(srs, cardId, remembered) {
   const s = srs[cardId] || { box: 0, seen: 0 };
   s.box = remembered ? Math.min(s.box + 1, BOX_DAYS.length - 1) : 0;
   s.seen = (s.seen || 0) + 1;
+  if (!remembered) s.lapses = (s.lapses || 0) + 1;   // 몇 번 틀렸나 — 자주 틀리는 카드를 찾는다
   s.last = Date.now();
   s.due = Date.now() + BOX_DAYS[s.box] * 86400000;
+  delete s.buried;                                   // 풀었으면 오늘 미루기는 끝
   srs[cardId] = s;
   return s;
+}
+
+// ───────────── 카드 다루기 (2026-10-10) ─────────────
+// 네모로 만들면 카드가 쏟아진다. 다 외울 수는 없으니 **골라낼 수단**이 필요하다.
+// Anki가 오래 검증한 방식을 가져오되 이름과 개수를 줄였다:
+//   · 버리기(suspend)  — 쓸모없는 카드. 다시는 안 나온다(목록에는 남아 되살릴 수 있다)
+//   · 나중에(bury)     — 지금은 말고. 내일 다시 나온다
+//   · 중요(star)       — 먼저 보여준다
+//   · 자주 틀림(leech) — 3번 넘게 틀리면 자동으로 붙는 표시. 따로 모아 볼 수 있다
+
+export const LEECH_AT = 3;
+
+export function cardState(srs, id) { return srs[id] || null; }
+export function isSuspended(srs, id) { return !!(srs[id] && srs[id].suspended); }
+export function isStarred(srs, id) { return !!(srs[id] && srs[id].star); }
+export function isLeech(srs, id) { return !!(srs[id] && (srs[id].lapses || 0) >= LEECH_AT); }
+export function isBuried(srs, id, now = Date.now()) {
+  return !!(srs[id] && srs[id].buried && srs[id].buried > now);
+}
+
+/** 쓸모없는 카드 — 다시 안 나온다. */
+export function suspendCard(srs, id) {
+  const s = srs[id] || { box: 0, seen: 0 };
+  s.suspended = true;
+  srs[id] = s;
+  return s;
+}
+export function unsuspendCard(srs, id) {
+  if (srs[id]) delete srs[id].suspended;
+  return srs[id];
+}
+/** 지금은 말고 — 내일 아침에 다시. */
+export function buryCard(srs, id) {
+  const s = srs[id] || { box: 0, seen: 0 };
+  const t = new Date();
+  t.setHours(4, 0, 0, 0);                            // 새벽 4시를 하루 경계로 본다
+  s.buried = (t.getTime() <= Date.now() ? t.getTime() + 86400000 : t.getTime());
+  srs[id] = s;
+  return s;
+}
+export function toggleStar(srs, id) {
+  const s = srs[id] || { box: 0, seen: 0 };
+  s.star = !s.star;
+  srs[id] = s;
+  return s;
+}
+
+/**
+ * 오늘 풀 카드를 **우선순위 순서로** 고른다.
+ *
+ * 카드가 수백 장이면 전부 보는 건 불가능하다. 그래서 순서를 정해준다:
+ *   ① 중요 표시한 것          — 내가 직접 고른 것이 가장 먼저
+ *   ② 자주 틀리는 것          — 약점부터
+ *   ③ 복습 기한이 지난 것     — 잊기 직전이 가장 효율적인 시점(간격 반복의 핵심)
+ *   ④ 아직 안 본 새 카드
+ * 버린 카드·오늘 미룬 카드는 빠진다.
+ */
+export function studyQueue(cards, srs, { limit = 0, now = Date.now() } = {}) {
+  const live = cards.filter((c) => !isSuspended(srs, c.id) && !isBuried(srs, c.id, now));
+  const rank = (c) => {
+    const s = srs[c.id];
+    if (isStarred(srs, c.id)) return 0;
+    if (isLeech(srs, c.id)) return 1;
+    if (!s) return 3;                                 // 새 카드
+    return (s.due || 0) <= now ? 2 : 4;               // 기한 지남 / 아직
+  };
+  const sorted = live
+    .map((c, i) => ({ c, r: rank(c), due: (srs[c.id] && srs[c.id].due) || 0, i }))
+    .sort((a, b) => a.r - b.r || a.due - b.due || a.i - b.i)
+    .map((x) => x.c);
+  return limit > 0 ? sorted.slice(0, limit) : sorted;
+}
+
+/** 관리 화면용 — 카드를 성격별로 나눈다. */
+export function groupCards(cards, srs, now = Date.now()) {
+  const g = { star: [], leech: [], due: [], later: [], mature: [], suspended: [] };
+  for (const c of cards) {
+    const s = srs[c.id];
+    if (s && s.suspended) { g.suspended.push(c); continue; }
+    if (s && s.star) { g.star.push(c); continue; }
+    if (s && (s.lapses || 0) >= LEECH_AT) { g.leech.push(c); continue; }
+    if (!s || (s.due || 0) <= now) { g.due.push(c); continue; }
+    if (s.box >= 3) { g.mature.push(c); continue; }
+    g.later.push(c);
+  }
+  return g;
 }
 
 export function srsStats(cards, srs) {
@@ -277,8 +365,10 @@ export function isLabel(el, text) {
     const txt = block.textContent;
     const idx = txt.indexOf(text);
     const head = idx <= 1;                       // 블록 시작
-    const after = txt.slice(idx + text.length, idx + text.length + 2).trimStart();
-    if (head && (after.startsWith(':') || after.startsWith('：'))) return true;
+    const after = txt.slice(idx + text.length, idx + text.length + 3).trimStart();
+    // 줄머리 + 콜론/대시 = 라벨. "**악화·유발 요인** — 하나씩 짝지어 기억"처럼
+    // 대시로 받는 꼴이 흔해서 콜론만 보면 놓친다(2026-10-10).
+    if (head && /^[:：\-–—]/.test(after)) return true;
     // ④ 블록 전체가 이 강조뿐 — 소제목처럼 쓰인 것
     if (txt.trim() === text) return true;
   }
@@ -356,7 +446,10 @@ function blockCard(block, els, meta, n) {
   const plain = block.textContent.replace(/\s+/g, ' ').trim();
   // 가린 글자가 문단의 거의 전부면 풀 수가 없다
   const hidden = answers.join('').length;
-  if (plain.length - hidden < 6) return null;
+  // 가리고 남는 글이 거의 없으면 단서가 없어 못 푼다.
+  // (너무 빡빡하게 잡으면 "심인성쇼크는 ___이고 심장지수 ___이며 ___이다" 같은
+  //  **정상적인 조밀한 카드**까지 날아간다 — 라벨 자체는 위 isLabel에서 거른다.)
+  if (plain.length - hidden < 8) return null;
   return {
     id: `${meta.notePath || ''}#${meta.heading || ''}#b${n}#${answers.join('|').slice(0, 40)}`,
     notePath: meta.notePath || '', noteTitle: meta.noteTitle || '',
