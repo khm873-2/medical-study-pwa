@@ -16,7 +16,7 @@ import {
   loadSrs, saveSrs, dueCards, gradeCard, srsStats, keepAwake, cardsFromBox,
   studyQueue, groupCards, suspendCard, unsuspendCard, buryCard, toggleStar,
   isStarred, isSuspended, isLeech, LEECH_AT, retrievability, parseExamDates, nextExam,
-  parseSchedule, lecturesFor, dayKey, qaCards,
+  parseSchedule, lecturesFor, dayKey, qaCards, dueToday,
 } from './reader.js';
 import { search, cacheSubject, storageInfo } from './search.js';
 import {
@@ -365,18 +365,17 @@ document.getElementById('refreshBtn').onclick = () => loadList(true);
 async function loadList(force) {
   if (!(await hasToken())) return openSetup();
   show('listScreen');
-  restoreTab();
+  restoreTab(force);          // force를 넘겨야 ↻ 가 노트·시간표까지 다시 읽는다
   // 로딩·오류 문구는 **지금 보고 있는 탭**에 띄운다
   const active = document.querySelector('.tab.active')?.dataset.tab;
   const body = document.getElementById(TAB_BODY[active] || 'todayBody');
-  if (active !== 'today') body.innerHTML = '<p class="muted">불러오는 중…</p>';
+  if (active === 'quizzes' || active === 'exams') body.innerHTML = '<p class="muted">불러오는 중…</p>';
 
   try {
     const index = await buildExamIndex(force);
     const sessions = await allSessions();
     renderList(index, sessions, '퀴즈');
     renderList(index, sessions, '모의고사');
-    if (active === 'today') loadTodayTab(force);
   } catch (e) {
     body.innerHTML = '';
     const box = document.createElement('div');
@@ -401,7 +400,17 @@ async function loadList(force) {
  * 캐시해두기 때문에 **수업 후에 새 퀴즈가 올라오면 새로고침을 눌러야** 보인다.
  * (05_퀴즈/응급_중환자/ 처럼 폴더가 나중에 생기는 경우도 force로 집어온다.)
  */
+let examIndexInFlight = null;
+
 async function buildExamIndex(force) {
+  // 같은 새로고침에서 두 곳(목록·오늘 탭)이 동시에 부른다. 합쳐주지 않으면
+  // 폴더를 두 번 훑어 GitHub API 호출이 배로 든다(2026-10-10).
+  if (examIndexInFlight) return examIndexInFlight;
+  examIndexInFlight = _buildExamIndex(force).finally(() => { examIndexInFlight = null; });
+  return examIndexInFlight;
+}
+
+async function _buildExamIndex(force) {
   const cacheKey = 'exam_index_v2';     // 퀴즈가 들어오면서 구조가 바뀌어 키를 올린다
   let index = force ? null : await kvGet(cacheKey);
   if (!index) {
@@ -446,7 +455,17 @@ function renderList(index, sessions, kind = '모의고사') {
   body.innerHTML = '';
   index = index.filter((g) => (g.kind || '모의고사') === kind);
   if (!index.length) {
-    body.innerHTML = `<p class="muted">${kind}를 찾지 못했습니다.</p>`;
+    // 목록은 캐시해두기 때문에, 수업 후 vault에 새 폴더가 생겨도 새로고침 전에는
+    // 안 보인다. 빈 화면에서 그걸 알려줘야 한다(2026-10-10).
+    body.innerHTML = '';
+    body.appendChild(muted(`${kind}를 찾지 못했습니다.`
+      + (kind === '퀴즈' ? ' vault의 05_퀴즈/{과목}/ 에 파일이 생기면 여기에 나옵니다.' : '')));
+    const b = document.createElement('button');
+    b.className = 'btn full';
+    b.style.marginTop = '10px';
+    b.textContent = '↻ vault에서 다시 찾기';
+    b.onclick = () => loadList(true);
+    body.appendChild(b);
     return;
   }
   // 과목을 접을 수 있게 한다 — 전부 펼쳐져 있으면 찾는 데 오래 걸린다(2026-10-09 피드백).
@@ -1427,21 +1446,27 @@ const TAB_BODY = {
   notes: 'notesBody', cards: 'cardsBody',
 };
 
-function showTab(which, { remember = true } = {}) {
-  if (!TAB_BODY[which]) which = 'quizzes';
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.force] 캐시를 무시하고 vault에서 다시 읽는다(↻ 버튼).
+ *   ⚠️ 이걸 안 넘기면 ↻ 를 눌러도 **노트 목록이 갱신되지 않는다** —
+ *   예습노트는 매일 새로 생기는데 note_index가 kv에 캐시돼 있다(2026-10-10 발견).
+ */
+function showTab(which, { remember = true, force = false } = {}) {
+  if (!TAB_BODY[which]) which = 'today';
   document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x.dataset.tab === which));
   for (const [k, id] of Object.entries(TAB_BODY)) {
     document.getElementById(id).classList.toggle('hidden', k !== which);
   }
   if (remember) localStorage.setItem('last_tab', which);
-  if (which === 'notes') loadNotesTab();
+  if (which === 'notes') loadNotesTab(force);
   if (which === 'cards') loadCardsTab();
-  if (which === 'today') loadTodayTab();
+  if (which === 'today') loadTodayTab(force);
 }
 
 /** 마지막으로 보던 탭으로 돌아간다 — 매번 퀴즈 탭부터 찾아 들어가지 않게. */
-function restoreTab() {
-  showTab(localStorage.getItem('last_tab') || 'today', { remember: false });
+function restoreTab(force) {
+  showTab(localStorage.getItem('last_tab') || 'today', { remember: false, force });
 }
 
 document.querySelectorAll('.tab').forEach((t) => {
@@ -1458,19 +1483,26 @@ let todayCache = null;   // {schedule, exams}
 
 async function todayData(force) {
   if (todayCache && !force) return todayCache;
-  const schedule = [];
-  const exams = [];
+  let schedule = [];
+  let exams = [];
   try {
+    // ⚠️ 받아온 것을 **따로** 모았다가 다 성공했을 때만 넘긴다. 전에는 바로
+    // 쌓다가 중간에 한 파일이 실패하면, catch에서 캐시를 덧붙여 강의가 두 번
+    // 들어갔다(2026-10-10).
+    const gotS = [];
+    const gotE = [];
     for (const f of (await listDir('00_Raw_Text/시간표')).filter((x) => x.type === 'file' && x.name.endsWith('.md'))) {
       const md = await getText(f.path);
       const subject = f.name.replace(/_?시간표\.md$/, '');
-      schedule.push(...parseSchedule(md).map((l) => ({ ...l, src: subject })));
-      exams.push(...parseExamDates(md).map((e) => ({ ...e, src: subject })));
+      gotS.push(...parseSchedule(md).map((l) => ({ ...l, src: subject })));
+      gotE.push(...parseExamDates(md).map((e) => ({ ...e, src: subject })));
     }
+    schedule = gotS;
+    exams = gotE;
     await kvSet('schedule_cache', { schedule, exams });
   } catch {
     const c = await kvGet('schedule_cache');
-    if (c) { schedule.push(...c.schedule); exams.push(...c.exams); }
+    if (c) { schedule = c.schedule || []; exams = c.exams || []; }
   }
   todayCache = { schedule, exams };
   return todayCache;
@@ -1481,7 +1513,7 @@ async function loadTodayTab(force) {
   body.innerHTML = '<p class="muted">불러오는 중…</p>';
   try {
     const [{ schedule, exams }, index, attempts, srs, cards] = await Promise.all([
-      todayData(force), buildExamIndex(false), allAttempts(), loadSrs(), allCards(),
+      todayData(force), buildExamIndex(force), allAttempts(), loadSrs(), allCards(),
     ]);
     body.innerHTML = '';
 
@@ -1587,7 +1619,7 @@ async function loadTodayTab(force) {
     }
 
     // ── 카드 ──
-    const due = studyQueue(cards, srs, { limit: 0 });
+    const due = dueToday(cards, srs);
     const cardSec = section(body, '카드');
     const cb = document.createElement('button');
     cb.className = 'exam-item';
@@ -1680,9 +1712,10 @@ async function openWeakQueue(subject) {
     if (!picked.length) { body.innerHTML = keep; toast('문항을 불러오지 못했습니다.'); return; }
 
     // 모아 풀기는 순서 자체가 섞여 있어야 "무슨 유형인지 고르는" 연습이 된다
-    picked.sort(() => Math.random() - 0.5);
+    shuffle(picked);
 
-    currentExam = { subject, file: '', path: WEAK_KEY, title: `다시 볼 문항 — ${subject}` };
+    // file이 비면 vault에 저장할 때 파일명이 "과목_날짜__모의고사풀이.md"로 빈다
+    currentExam = { subject, file: '다시볼문항.html', path: WEAK_KEY, title: `다시 볼 문항 — ${subject}` };
     if (quiz) quiz.destroy();
     destroyPen();
     await clearSession(WEAK_KEY);         // 이전 모아풀기 상태가 남아 섞이지 않게
@@ -2207,7 +2240,8 @@ async function openDeck(keep = false) {
   catch (e) { body.innerHTML = `<div class="warn-box">${escapeText(e.message)}</div>`; return; }
   deckView.cards = cards;
   deckView.srs = srs;
-  if (!deckView.exam) loadExamDate().then(() => paintExamBar());
+  // 시험 날짜를 못 읽어도 카드 화면은 열려야 한다(배지만 안 뜰 뿐)
+  if (!deckView.exam) loadExamDate().then(() => paintExamBar()).catch(() => {});
 
   // 카드가 0장이면 **가져오기로 보낸다** — 여기서 그냥 멈추면 노트의 Q&A를
   // 끌어올 입구가 없다(처음 쓰는 사람이 딱 이 상태다).
@@ -2804,6 +2838,24 @@ window.addEventListener('online', flushOutbox);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) flushOutbox(); });
 
 // ---------- 잡다 ----------
+// 버튼 핸들러 17개가 async인데 try/catch가 없다. 하나하나 감싸는 대신 여기서
+// 받는다 — 저장소가 꽉 차거나(iOS에서 실제로 일어난다) 네트워크가 끊겼을 때
+// **아무 반응이 없는** 것이 가장 나쁘다. 눌렀는데 조용하면 계속 누르게 된다.
+//
+// 조용히 넘길 것은 걸러낸다: 백업·이력 저장처럼 사용자가 시키지 않은 뒷일이
+// 실패했다고 공부 중에 배지를 띄우면 방해만 된다.
+const QUIET_ERRORS = /AbortError|NetworkError when attempting|Load failed|The operation was aborted/i;
+
+export function reportError(reason) {
+  const msg = String((reason && (reason.message || reason)) || '알 수 없는 오류');
+  if (msg === 'NO_TOKEN') { openSetup(); return 'setup'; }
+  if (QUIET_ERRORS.test(msg)) return 'quiet';
+  toast(`처리하지 못했습니다: ${msg.slice(0, 80)}`);
+  return 'toast';
+}
+
+window.addEventListener('unhandledrejection', (e) => reportError(e.reason));
+
 function toast(text) {
   const el = document.createElement('div');
   el.textContent = text;

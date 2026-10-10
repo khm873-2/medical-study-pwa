@@ -389,6 +389,21 @@ export function studyQueue(cards, srs, { limit = 0, now = Date.now() } = {}) {
   return limit > 0 ? sorted.slice(0, limit) : sorted;
 }
 
+/**
+ * **오늘 꼭 봐야 하는** 카드만. studyQueue는 기한이 안 된 카드까지 뒤에 붙여주므로
+ * (분량이 모자랄 때 채우려고) 개수를 세는 데 쓰면 "4,716장 남음"처럼 나온다.
+ * 숫자를 보여줄 때는 이걸 쓴다(2026-10-10).
+ */
+export function dueToday(cards, srs, now = Date.now()) {
+  return (cards || []).filter((c) => {
+    if (isSuspended(srs, c.id) || isBuried(srs, c.id, now)) return false;
+    const s = srs[c.id];
+    if (!s) return true;                                  // 새 카드
+    if (isStarred(srs, c.id) || isLeech(srs, c.id)) return true;
+    return (s.due || 0) <= now;
+  });
+}
+
 /** 관리 화면용 — 카드를 성격별로 나눈다. */
 export function groupCards(cards, srs, now = Date.now()) {
   const g = { star: [], leech: [], due: [], later: [], mature: [], suspended: [] };

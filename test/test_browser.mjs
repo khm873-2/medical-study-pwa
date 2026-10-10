@@ -1723,10 +1723,30 @@ await run('오늘 탭 배선', async () => {
   const quiz = await fetch('/js/quiz.js').then((r) => r.text());
   const att = await fetch('/js/attempts.js').then((r) => r.text());
   const sw = await fetch('/sw.js').then((r) => r.text());
+  const reader = await fetch('/js/reader.js').then((r) => r.text());
 
   out.push({ name: '오늘 탭을 그리는 함수가 있다', ok: /async function loadTodayTab/.test(app) });
-  out.push({ name: '탭을 누르면 오늘 탭을 그린다', ok: /which === 'today'\) loadTodayTab\(\)/.test(app) });
+  out.push({ name: '탭을 누르면 오늘 탭을 그린다', ok: /which === 'today'\)\s*loadTodayTab\(/.test(app) });
   out.push({ name: '기본 탭이 오늘', ok: /last_tab'\) \|\| 'today'/.test(app) });
+  // ↻ 가 노트 목록까지 다시 읽는가 — 예습노트는 매일 새로 생긴다
+  out.push({ name: '새로고침이 탭 데이터까지 다시 읽는다',
+    ok: /restoreTab\(force\)/.test(app) && /loadNotesTab\(force\)/.test(app),
+    detail: '전에는 ↻ 를 눌러도 note_index 캐시 때문에 새 노트가 안 보였다' });
+  out.push({ name: '인덱스 동시 호출을 합친다', ok: /examIndexInFlight/.test(app) });
+  out.push({ name: '퀴즈가 없을 때 다시 찾기 버튼을 준다',
+    ok: /vault에서 다시 찾기/.test(app) });
+  out.push({ name: '이어풀기로 되살린 답도 결과에서 이력에 넣는다',
+    ok: /_recorded\.has\(i\)\) this\._record\(i\)/.test(quiz) });
+  // ⚠️ unhandledrejection 자체는 이 하네스(puppeteer)가 가로채서 못 본다.
+  //    그래서 배선과 걸러내기 규칙만 소스로 확인한다.
+  out.push({ name: '처리 안 된 실패를 한 곳에서 받는다',
+    ok: /addEventListener\('unhandledrejection'/.test(app) && /function reportError/.test(app),
+    detail: 'async 버튼 핸들러 17개에 try/catch가 없어 눌러도 조용했다' });
+  out.push({ name: '토큰 없음은 배지 대신 설정으로 보낸다', ok: /'NO_TOKEN'\) \{ openSetup\(\)/.test(app) });
+  out.push({ name: '뒷일 실패는 조용히 넘긴다', ok: /QUIET_ERRORS/.test(app) });
+  out.push({ name: '카드 개수는 오늘 볼 것만 센다',
+    ok: /dueToday\(cards, srs\)/.test(app) && /export function dueToday/.test(reader),
+    detail: 'studyQueue는 기한 안 된 카드까지 붙여줘서 "4,716장 남음"이 된다' });
   out.push({ name: '시간표를 읽어 강의를 뽑는다',
     ok: /parseSchedule/.test(app) && /lecturesFor/.test(app) });
   out.push({ name: '오프라인이면 기억해둔 시간표를 쓴다', ok: /schedule_cache/.test(app) });

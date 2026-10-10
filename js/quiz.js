@@ -37,6 +37,8 @@ export class Quiz {
     this.memos = new Array(questions.length).fill('');
     // "찍어서 맞췄다" 표시 — 맞은 문항도 다시 볼 큐에 넣기 위한 것(2026-10-10)
     this.unsure = new Array(questions.length).fill(false);
+    // 이번 화면에서 이력을 남긴 문항 — 이어풀기로 되살린 답을 끝낼 때 한 번만 쌓는다
+    this._recorded = new Set();
     this._imgCache = new Map();
 
     this.el = {
@@ -323,6 +325,7 @@ export class Quiz {
   _record(idx) {
     const q = this.all[idx];
     if (!q) return;
+    this._recorded.add(idx);
     recordAttempt({
       // 모아 풀기에서는 문항마다 원래 시험이 다르다 — 이력은 원본 시험에 쌓아야 한다
       exam: q.__exam || this.examKey,
@@ -432,7 +435,20 @@ export class Quiz {
     };
   }
 
-  finish() { this.persist(); this.onFinish(this.results()); }
+  /**
+   * 결과 보기 — 이어풀기로 되살린 답은 이력에 없으므로 여기서 메꾼다.
+   *
+   * 왜 필요한가: `select()`에서만 기록하면 **앱을 닫았다 다시 열어 이어 푼 문항**이
+   * 전부 "다시 볼 문항"에서 빠진다. 이미 풀던 시험이 있는 상태로 이 기능이
+   * 들어왔으니 더 그렇다(2026-10-10).
+   */
+  finish() {
+    this.persist();
+    this.order.forEach((i) => {
+      if (this.answers[i] !== null && !this._recorded.has(i)) this._record(i);
+    });
+    this.onFinish(this.results());
+  }
 
   /**
    * 틀린 문제만 다시 풀기 — 답안을 비우고 그 문항들만 순회한다.
@@ -442,7 +458,12 @@ export class Quiz {
     const wrongIdx = this.order.filter(
       (i) => this.answers[i] !== null && (!this.isCorrect(i) || this.unsure[i]));
     if (!wrongIdx.length) return false;
-    wrongIdx.forEach((i) => { this.answers[i] = null; this.unsure[i] = false; this.eliminated[i] = new Set(); });
+    wrongIdx.forEach((i) => {
+      this.answers[i] = null;
+      this.unsure[i] = false;
+      this.eliminated[i] = new Set();
+      this._recorded.delete(i);          // 다시 풀면 새 시도로 센다
+    });
     this.order = wrongIdx;
     this.cur = 0;
     this.persist();
@@ -454,6 +475,7 @@ export class Quiz {
     this.answers.fill(null);
     this.unsure.fill(false);
     this.eliminated = this.all.map(() => new Set());
+    this._recorded.clear();              // 처음부터 다시 — 모두 새 시도로 센다
     this.cur = 0;
     clearSession(this.examKey).catch(() => {});
   }
