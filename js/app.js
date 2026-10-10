@@ -1502,7 +1502,8 @@ function makeCardsFromBox(box) {
 /** 카드 묶음을 띄운다. 돌아갈 곳을 기억해 읽던 자리로 복귀한다. */
 async function startDeck(cards, title, { backTo = 'list' } = {}) {
   const srsNow = await loadSrs();
-  cardDeck = { cards, idx: 0, srs: srsNow, title, all: cards, backTo };
+  cardDeck = { cards, idx: 0, srs: srsNow, title, all: cards, backTo,
+    noteTitle: cards[0] ? cards[0].noteTitle : '' };
   show('cardScreen');
   renderCard();
 }
@@ -1670,10 +1671,32 @@ function renderCard() {
   const c = cardDeck.cards[cardDeck.idx];
   document.getElementById('cardTitle').textContent = cardDeck.title;
   document.getElementById('cardProgress').textContent = `${cardDeck.idx + 1}/${cardDeck.cards.length}`;
-  document.getElementById('cardSource').textContent = c.heading;
-  document.getElementById('cardContext').textContent = c.context;
-  document.getElementById('cardAnswer').textContent = c.answer;
-  document.getElementById('cardAnswer').classList.add('hidden');
+  // 어느 대목인지 보여야 "무엇에 대한 질문인지" 생각할 수 있다(2026-10-10 요청)
+  document.getElementById('cardSource').textContent =
+    [cardDeck.noteTitle || cardDeck.title, c.heading].filter(Boolean).join('  ·  ');
+
+  const ctx = document.getElementById('cardContext');
+  if (c.contextHtml) ctx.innerHTML = c.contextHtml;    // 표·서식을 그대로 살린다
+  else ctx.textContent = c.context || '';
+
+  const ans = document.getElementById('cardAnswer');
+  const list = c.answers && c.answers.length ? c.answers : [c.answer].filter(Boolean);
+  ans.innerHTML = '';
+  list.forEach((a, i) => {
+    const row = document.createElement('div');
+    row.className = 'ans-row';
+    if (list.length > 1) {
+      const num = document.createElement('span');
+      num.className = 'ans-num';
+      num.textContent = i + 1;
+      row.appendChild(num);
+    }
+    const t = document.createElement('span');
+    t.textContent = a;
+    row.appendChild(t);
+    ans.appendChild(row);
+  });
+  ans.classList.add('hidden');
   document.getElementById('cardShow').classList.remove('hidden');
   document.getElementById('cardGrade').classList.add('hidden');
   window.scrollTo(0, 0);
@@ -1681,6 +1704,11 @@ function renderCard() {
 
 document.getElementById('cardShow').onclick = () => {
   document.getElementById('cardAnswer').classList.remove('hidden');
+  // 빈칸 자리에 답을 채워 넣는다 — 목록만 따로 보면 어느 칸인지 헷갈린다
+  document.querySelectorAll('#cardContext .cloze').forEach((el) => {
+    el.textContent = el.dataset.answer || '';
+    el.classList.add('filled');
+  });
   document.getElementById('cardShow').classList.add('hidden');
   document.getElementById('cardGrade').classList.remove('hidden');
 };
@@ -1702,9 +1730,14 @@ async function advanceCard(remembered) {
   backup.scheduleBackup();       // 외운 기록은 되찾을 수 없다 — 모아서 vault에 올린다
   if (cardDeck.idx + 1 >= cardDeck.cards.length) {
     const s = srsStats(cardDeck.all, cardDeck.srs);
+    const back = cardDeck.backTo;
     toast(`끝! 처음 ${s.new} · 학습중 ${s.learning} · 익힘 ${s.mature}`);
     cardDeck = null;
-    show('listScreen');
+    // 읽다가 만든 카드면 **읽던 자리로** 돌아간다(2026-10-10 버그: 목록으로 나가버렸다)
+    if (back === 'reader' && reader) {
+      show('readScreen');
+      if (readerPen) requestAnimationFrame(() => readerPen.resize());
+    } else show('listScreen');
     return;
   }
   cardDeck.idx++;

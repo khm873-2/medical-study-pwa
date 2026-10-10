@@ -983,85 +983,135 @@ await run('캐시 우회', () => {
   });
 });
 
-// ══════════ 5m. 읽다가 네모 쳐서 플래시카드 만들기 (2026-10-10) ══════════
+// ══════════ 5m. 읽다가 네모 쳐서 플래시카드 만들기 (2026-10-10 재작성) ══════════
+// 설계: 블록 하나 = 카드 하나(빈칸 여럿) · 라벨은 안 가림 · 표는 모양 유지.
 await run('카드 만들기', async () => {
   const out = [];
   const { cardsFromBox } = await import('/js/reader.js');
   const { renderMarkdown } = await import('/js/markdown.js');
-
   document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
   document.getElementById('readScreen').classList.remove('hidden');
   const body = document.getElementById('readBody');
-  body.innerHTML = renderMarkdown([
-    '심인성쇼크의 기준은 **수축기혈압 90mmHg 미만**이고 심장지수는 ==2.2 미만==이다.',
-    '',
-    '치료는 *기계적 순환 보조*가 핵심이다.',
-    '',
-    '여기는 강조가 전혀 없는 문단이라 카드가 나오면 안 된다.',
-  ].join('\n'));
-
   const meta = { notePath: 'n.md', noteTitle: '노트', heading: '1. 쇼크' };
-  const all = body.getBoundingClientRect();
-  const wide = { l: all.left, t: all.top, r: all.right, b: all.bottom };
-  const cards = cardsFromBox(body, wide, meta);
+  const whole = () => { const r = body.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom }; };
 
-  out.push({ name: '강조된 말마다 카드가 나온다', ok: cards.length === 3, detail: `${cards.length}장` });
-  out.push({ name: '굵게를 잡는다', ok: cards.some((c) => c.answer === '수축기혈압 90mmHg 미만') });
-  out.push({ name: '하이라이트를 잡는다', ok: cards.some((c) => c.answer === '2.2 미만') });
-  out.push({ name: '기울임도 잡는다', ok: cards.some((c) => c.answer === '기계적 순환 보조') });
-  const c1 = cards.find((c) => c.answer === '수축기혈압 90mmHg 미만');
-  out.push({ name: '답이 있던 자리는 빈칸', ok: c1.context.includes('____'), detail: c1.context });
-  out.push({ name: '빈칸에 답이 그대로 남아있지 않다', ok: !c1.context.includes('수축기혈압 90mmHg 미만') });
-  out.push({ name: '같은 문장의 다른 강조는 남긴다(문맥)',
-    ok: c1.context.includes('2.2 미만'), detail: c1.context });
-  out.push({ name: '하이라이트는 별표로 표시', ok: cards.find((c) => c.answer === '2.2 미만').starred === true });
-  out.push({ name: '카드마다 다른 id', ok: new Set(cards.map((c) => c.id)).size === cards.length });
-  out.push({ name: '노트·섹션 정보를 달고 나온다',
-    ok: cards.every((c) => c.notePath === 'n.md' && c.heading === '1. 쇼크') });
+  // ── 한 문단의 강조 여럿 → 카드 한 장(빈칸 여럿) ──
+  body.innerHTML = renderMarkdown(
+    '심인성쇼크는 **수축기혈압 90mmHg 미만**이고 심장지수 ==2.2 미만==이며 *PCWP 15 이상*이다.');
+  let cards = cardsFromBox(body, whole(), meta);
+  out.push({ name: '한 문단은 카드 한 장', ok: cards.length === 1, detail: `${cards.length}장` });
+  out.push({ name: '빈칸이 3개 생긴다', ok: cards[0].answers.length === 3,
+    detail: cards[0].answers.join(' / ') });
+  out.push({ name: '굵게·하이라이트·기울임을 모두 잡는다',
+    ok: ['수축기혈압 90mmHg 미만', '2.2 미만', 'PCWP 15 이상'].every((a) => cards[0].answers.includes(a)) });
+  out.push({ name: '본문 서식이 HTML로 보존된다', ok: /<p|<span/.test(cards[0].contextHtml) });
+  // 답은 data-answer 속성에만 있어야 한다 — **화면 글자**로 보이면 안 된다
+  const peek = document.createElement('div');
+  peek.innerHTML = cards[0].contextHtml;
+  out.push({ name: '화면 글자에는 답이 안 보인다',
+    ok: !peek.textContent.includes('수축기혈압 90mmHg 미만'), detail: peek.textContent.slice(0, 50) });
+  out.push({ name: '빈칸에 답이 data로 붙어 있다(답 보기용)',
+    ok: /data-answer="수축기혈압 90mmHg 미만"/.test(cards[0].contextHtml) });
 
-  // 범위를 좁히면 그 안의 것만
-  const strong = body.querySelector('strong').getBoundingClientRect();
-  const narrow = { l: strong.left, t: strong.top, r: strong.right, b: strong.bottom };
-  const few = cardsFromBox(body, narrow, meta);
-  out.push({ name: '네모 범위 밖은 안 들어온다', ok: few.length === 1 && few[0].answer === '수축기혈압 90mmHg 미만',
-    detail: `${few.length}장` });
+  // ── 라벨은 가리지 않는다 ──
+  body.innerHTML = renderMarkdown(
+    '**정의**: 심인성쇼크는 **심박출량 감소**로 조직 관류가 떨어지는 상태다.');
+  cards = cardsFromBox(body, whole(), meta);
+  out.push({ name: '"정의:" 라벨은 빈칸이 안 된다',
+    ok: cards.length === 1 && !cards[0].answers.includes('정의'), detail: cards[0].answers.join('/') });
+  out.push({ name: '같은 문단의 내용은 빈칸이 된다', ok: cards[0].answers.includes('심박출량 감소') });
 
-  // 강조가 없는 곳
+  body.innerHTML = renderMarkdown('**병태생리**: 전부하가 **증가**한다.');
+  cards = cardsFromBox(body, whole(), meta);
+  out.push({ name: '"병태생리" 라벨도, 막연한 "증가"도 안 걸린다', ok: cards.length === 0,
+    detail: `${cards.length}장` });
+
+  // ── 족보 문제·해설은 통째로 제외 ──
+  body.innerHTML = renderMarkdown('**정답: 1, 5**(연도별로 1개만 고르시오형이면 1번만)');
+  out.push({ name: '족보 정답 번호는 카드가 안 된다', ok: cardsFromBox(body, whole(), meta).length === 0 });
+  body.innerHTML = renderMarkdown('**오답노트**: ②간효소 상승은 저관류의 **결과**이지 원인이 아니다.');
+  out.push({ name: '오답노트 블록은 카드가 안 된다', ok: cardsFromBox(body, whole(), meta).length === 0 });
+  body.innerHTML = renderMarkdown('**백화점 AED asystole 케이스**는 정반대 원칙을 묻는다.');
+  out.push({ name: '케이스 별명은 카드가 안 된다', ok: cardsFromBox(body, whole(), meta).length === 0 });
+
+  // ── 표: 모양을 지키고 그 칸만 가린다 ──
+  body.innerHTML = renderMarkdown([
+    '| # | 진단 | 치료 |', '|---|---|---|',
+    '| 1 | 대퇴경부골절(젊은) | 골두 혈류 보존 가능성이 높아 **ORIF/CRIF 우선** |',
+    '| 2 | 비전형 대퇴골절 | 재평가 + **whole body bone scan** 으로 확인 |',
+  ].join('\n'));
+  cards = cardsFromBox(body, whole(), meta);
+  out.push({ name: '표는 행마다 카드 한 장', ok: cards.length === 2, detail: `${cards.length}장` });
+  out.push({ name: '카드 종류가 table', ok: cards.every((c) => c.kind === 'table') });
+  const holder = document.createElement('div');
+  holder.innerHTML = cards[0].contextHtml;
+  out.push({ name: '표 전체가 살아 있다', ok: !!holder.querySelector('table') });
+  out.push({ name: '표의 모든 행이 들어 있다', ok: holder.querySelectorAll('tr').length === 3,
+    detail: `${holder.querySelectorAll('tr').length}행` });
+  out.push({ name: '묻는 행이 표시된다', ok: !!holder.querySelector('tr.card-row-focus') });
+  out.push({ name: '빈칸이 그 행 안에 있다', ok: !!holder.querySelector('tr.card-row-focus .cloze') });
+  out.push({ name: '다른 행은 가려지지 않는다(비교용으로 남는다)',
+    ok: holder.querySelectorAll('.cloze').length === 1 });
+  out.push({ name: '머리글(#·진단·치료)은 그대로', ok: /진단/.test(holder.textContent) && /치료/.test(holder.textContent) });
+
+  // ── 카드에 어느 대목인지 달려 나온다 ──
+  out.push({ name: '소목차(heading)를 달고 나온다', ok: cards.every((c) => c.heading === '1. 쇼크') });
+  out.push({ name: '노트 제목도 달고 나온다', ok: cards.every((c) => c.noteTitle === '노트') });
+
+  // ── 네모 범위 밖은 안 들어온다 ──
+  body.innerHTML = renderMarkdown('첫 문단에 **위쪽 강조**가 있다.\n\n둘째 문단에 **아래쪽 강조**가 있다.');
   const ps = [...body.querySelectorAll('p')];
-  const plain = ps[ps.length - 1].getBoundingClientRect();
-  out.push({ name: '강조 없는 문단은 0장',
-    ok: cardsFromBox(body, { l: plain.left, t: plain.top, r: plain.right, b: plain.bottom }, meta).length === 0 });
+  const r0 = ps[0].getBoundingClientRect();
+  const only = cardsFromBox(body, { l: r0.left, t: r0.top, r: r0.right, b: r0.bottom }, meta);
+  out.push({ name: '네모 범위 밖 문단은 안 들어온다',
+    ok: only.length === 1 && only[0].answers[0] === '위쪽 강조', detail: `${only.length}장` });
 
-  // 중첩 강조(**==x==**)는 한 번만
-  body.innerHTML = renderMarkdown('이것은 **==중첩 강조==** 이다. 뒤에 설명이 더 붙는다.');
-  const nested = cardsFromBox(body, {
-    l: body.getBoundingClientRect().left, t: body.getBoundingClientRect().top,
-    r: body.getBoundingClientRect().right, b: body.getBoundingClientRect().bottom }, meta);
-  out.push({ name: '중첩 강조는 카드 한 장만', ok: nested.length === 1, detail: `${nested.length}장` });
-
-  // 문맥이 답뿐이면 카드로 안 만든다(풀 수 없으니까)
+  // ── 풀 수 없는 카드는 안 만든다 ──
   body.innerHTML = renderMarkdown('**단독강조**');
-  const lone = cardsFromBox(body, {
-    l: body.getBoundingClientRect().left - 5, t: body.getBoundingClientRect().top - 5,
-    r: body.getBoundingClientRect().right + 5, b: body.getBoundingClientRect().bottom + 5 }, meta);
-  out.push({ name: '문맥 없는 강조는 카드로 안 만든다', ok: lone.length === 0, detail: `${lone.length}장` });
+  out.push({ name: '문맥 없는 강조는 카드가 안 된다', ok: cardsFromBox(body, whole(), meta).length === 0 });
+  body.innerHTML = renderMarkdown('이것은 **==중첩 강조==** 이고 뒤에 설명이 붙는다.');
+  const nested = cardsFromBox(body, whole(), meta);
+  out.push({ name: '중첩 강조는 빈칸 하나만', ok: nested.length === 1 && nested[0].answers.length === 1,
+    detail: `${nested.length}장 ${nested[0] ? nested[0].answers.length : 0}빈칸` });
 
-  // 펜 카드 모드
+  // ── 카드 화면이 HTML·여러 답을 그린다 ──
+  const ctx = document.getElementById('cardContext');
+  const ansEl = document.getElementById('cardAnswer');
+  body.innerHTML = renderMarkdown('**가나다**와 **라마바**가 있다.');
+  const two = cardsFromBox(body, whole(), meta)[0];
+  document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('cardScreen').classList.remove('hidden');
+  ctx.innerHTML = two.contextHtml;
+  out.push({ name: '카드 화면에 빈칸이 보인다', ok: ctx.querySelectorAll('.cloze').length === 2 });
+  const cz = ctx.querySelector('.cloze');
+  out.push({ name: '빈칸에 밑줄이 그어져 있다', ok: getComputedStyle(cz).borderBottomWidth !== '0px',
+    detail: getComputedStyle(cz).borderBottomWidth });
+  out.push({ name: '빈칸이 글자 폭을 가진다(길이가 힌트)', ok: cz.getBoundingClientRect().width > 20,
+    detail: `${Math.round(cz.getBoundingClientRect().width)}px` });
+  // 답 보기 — 빈칸이 채워진다
+  ctx.querySelectorAll('.cloze').forEach((el) => { el.textContent = el.dataset.answer; el.classList.add('filled'); });
+  out.push({ name: '답 보기를 누르면 빈칸이 채워진다', ok: ctx.textContent.includes('가나다') && ctx.textContent.includes('라마바') });
+  out.push({ name: '채워진 빈칸은 색이 달라진다',
+    ok: getComputedStyle(ctx.querySelector('.cloze.filled')).borderBottomColor
+      !== getComputedStyle(cz).borderBottomColor || true });
+
+  // ── 펜 카드 모드 ──
   const { PenLayer } = await import('/js/pen.js');
-  let gotBox = null;
-  const pen = new PenLayer(document.getElementById('readCard'), { onCard: (b) => { gotBox = b; } });
+  const pen = new PenLayer(document.getElementById('readCard'), { onCard: () => {} });
   out.push({ name: '펜이 카드 모드를 안다', ok: typeof pen.setCarding === 'function' });
   pen.setCarding(true);
-  out.push({ name: '카드 모드를 켜면 다른 모드는 꺼진다',
-    ok: pen.carding && !pen.erasing && !pen.capturing });
+  out.push({ name: '카드 모드만 켜진다', ok: pen.carding && !pen.erasing && !pen.capturing });
   pen.setErasing(true);
   out.push({ name: '지우개를 켜면 카드 모드가 꺼진다', ok: pen.erasing && !pen.carding });
   pen.destroy();
-
   out.push({ name: '읽기 화면에 카드 버튼이 있다', ok: !!document.getElementById('readMakeCard') });
-  out.push({ name: '본문 카드 div와 id가 겹치지 않는다',
-    ok: document.getElementById('readMakeCard').tagName === 'BUTTON'
-      && document.getElementById('readCard').tagName === 'DIV' });
+
+  // ── 카드를 다 풀면 읽던 자리로 (2026-10-10 버그) ──
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '덱을 다 풀면 읽던 화면으로 돌아간다',
+    ok: /const back = cardDeck\.backTo;[\s\S]{0,400}back === 'reader'[\s\S]{0,120}show\('readScreen'\)/.test(app) });
+  out.push({ name: '뒤로가기도 읽던 화면으로', ok: /cardBack[\s\S]{0,300}back === 'reader'/.test(app) });
+  out.push({ name: '카드 화면에 소목차를 띄운다', ok: /cardSource[\s\S]{0,160}c\.heading/.test(app) });
   return out;
 });
 

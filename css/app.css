@@ -823,3 +823,35 @@ summary.subject-head > .head-row, summary.root-head > .head-row {
 }
 #updateBar button:active { background: rgba(255,255,255,.34); }
 #updateBar button:disabled { opacity: .6; }
+
+/* ═══════════ 플래시카드 — 빈칸 채우기 (2026-10-10 재작성) ═══════════
+   한 문단의 강조를 한꺼번에 가려 카드 한 장으로 만든다. 표는 모양을 지킨다. */
+#cardSource { font-size: 12px; font-weight: 600; margin-bottom: 12px; line-height: 1.5; }
+.card-context { font-size: 16.5px; line-height: 1.75; }
+.card-context p { margin: 8px 0; }
+.card-context table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.card-context th, .card-context td {
+  border: 1px solid var(--border); padding: 7px 9px; text-align: left;
+}
+.card-context th { background: var(--badge-bg); font-weight: 700; }
+.card-context .card-row-focus > * { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+
+/* 빈칸 — 글자 수만큼 넓어서 길이가 힌트가 된다 */
+.cloze {
+  display: inline-block; min-width: 3em;
+  border-bottom: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border-radius: 3px 3px 0 0; padding: 0 3px;
+  white-space: pre-wrap; vertical-align: baseline;
+}
+.cloze.filled {
+  background: color-mix(in srgb, var(--correct) 16%, transparent);
+  border-bottom-color: var(--correct); color: var(--text); font-weight: 700;
+}
+.card-answer { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.ans-row { display: flex; gap: 9px; align-items: baseline; padding: 5px 0; font-size: 16px; font-weight: 700; }
+.ans-num {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; background: var(--correct); color: #fff;
+  font-size: 11px; font-weight: 800; border-radius: 9px;
+}

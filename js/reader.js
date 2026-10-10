@@ -168,78 +168,201 @@ async function reacquire() {
 /**
  * 화면에 그려진 범위 안의 **강조된 말**을 가려 플래시카드를 만든다.
  *
- * 노트를 읽다가 "이 부분 외웠나?" 싶을 때 펜으로 네모를 치면, 그 안의
- * **굵게**·*기울임*·==하이라이트== 가 빈칸이 되고 나머지 문장이 문제가 된다.
- * 되새김질용이라 노트를 떠나지 않고 바로 확인한다(2026-10-10 요청).
+ * 설계 원칙(2026-10-10 재작성):
+ *   ① **블록 하나 = 카드 하나.** 한 문장에 강조가 셋이면 빈칸 셋짜리 카드 한 장이다.
+ *      강조마다 카드를 쪼개면 같은 문장을 세 번 보게 되고 카드 수가 폭발한다.
+ *   ② **라벨은 가리지 않는다.** "**정의**:", "**병태생리**:" 처럼 줄머리에 콜론이 붙는
+ *      굵은 글씨는 목차 역할이지 외울 내용이 아니다(vault 실측 3,917회).
+ *   ③ **표는 모양을 지킨다.** 표 안의 칸을 물을 때 표를 글로 풀어버리면 뭘 묻는지
+ *      알 수 없다. 표 전체를 그대로 두고 그 칸만 가린다.
  *
- * 왜 DOM에서 뽑나: 마크다운 원문이 아니라 **지금 보고 있는 화면**이 기준이어야
- * 사용자가 친 네모와 어긋나지 않는다.
+ * 마크다운 원문이 아니라 **지금 보고 있는 DOM**에서 뽑는다 — 사용자가 친 네모와
+ * 어긋나지 않으려면 화면이 기준이어야 한다.
  *
- * @param {HTMLElement} root   본문 요소(#readBody)
- * @param {{l:number,t:number,r:number,b:number}} box  root 기준이 아니라 **뷰포트** 좌표
- * @param {object} meta  {notePath, noteTitle, heading}
+ * @param {HTMLElement} root  본문 요소(#readBody)
+ * @param {{l,t,r,b}} box     **뷰포트** 좌표
+ * @param {object} meta       {notePath, noteTitle, heading}
+ * @returns {Array<{id,contextHtml,answers,heading,...}>}
  */
 export function cardsFromBox(root, box, meta = {}) {
-  const EMPH = 'mark, strong, b, em, i';
-  const picked = [];
-  root.querySelectorAll(EMPH).forEach((el) => {
-    // 강조 안에 강조가 또 있으면(**==x==**) 가장 안쪽만 쓴다 — 중복 카드를 막는다
-    if (el.querySelector(EMPH)) return;
-    const text = el.textContent.trim();
-    if (text.length < 2 || !/[\w가-힣]/.test(text)) return;
-    const r = el.getBoundingClientRect();
-    if (!r.width || !r.height) return;
-    // 네모와 겹치면 채택(완전히 들어가야 한다고 하면 쓰기 어렵다)
-    if (r.right < box.l || r.left > box.r || r.bottom < box.t || r.top > box.b) return;
-    picked.push({ el, text });
-  });
-  if (!picked.length) return [];
+  const hits = emphasisIn(root, box);
+  if (!hits.length) return [];
 
-  // 같은 문장 안의 강조끼리는 서로를 가려줘야 문제가 된다
+  // 블록(문단·목록항목·표의 행) 단위로 묶는다
+  const groups = new Map();
+  for (const el of hits) {
+    const block = blockOf(el);
+    if (!block) continue;
+    if (!groups.has(block)) groups.set(block, []);
+    groups.get(block).push(el);
+  }
+
   const cards = [];
-  const seen = new Set();
-  picked.forEach(({ el, text }, i) => {
-    const key = `${sentenceOf(el)}|${text}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    const context = buildContext(el, text, picked.map((p) => p.el));
-    if (!context) return;
-    cards.push({
-      id: `${meta.notePath || ''}#${meta.heading || ''}#box#${text}#${i}`,
-      notePath: meta.notePath || '',
-      noteTitle: meta.noteTitle || '',
-      heading: meta.heading || '',
-      context,
-      answer: text,
-      starred: el.tagName === 'MARK',
-    });
-  });
+  let n = 0;
+  for (const [block, els] of groups) {
+    const card = block.tagName === 'TR'
+      ? tableCard(block, els, meta, n)
+      : blockCard(block, els, meta, n);
+    if (card) { cards.push(card); n++; }
+  }
   return cards;
 }
 
-/** 이 강조가 속한 문장(또는 블록) 요소. */
-function sentenceOf(el) {
-  let p = el.parentElement;
-  while (p && !/^(P|LI|TD|TH|DIV|BLOCKQUOTE|H1|H2|H3|H4)$/.test(p.tagName)) p = p.parentElement;
-  return p || el.parentElement;
+/** 네모에 걸린 강조 요소들(라벨 제외). */
+function emphasisIn(root, box) {
+  const out = [];
+  root.querySelectorAll('mark, strong, b, em, i').forEach((el) => {
+    if (el.querySelector('mark, strong, b, em, i')) return;   // 중첩이면 안쪽만
+    const text = el.textContent.trim();
+    if (text.length < 2 || !/[\w가-힣]/.test(text)) return;
+    if (isLabel(el, text)) return;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    if (r.right < box.l || r.left > box.r || r.bottom < box.t || r.top > box.b) return;
+    out.push(el);
+  });
+  return out;
 }
 
-/** 같은 블록의 글을 가져오되, 이 답은 ____ 로, 다른 강조는 그대로 둔다. */
-function buildContext(el, answer, allEmph) {
-  const block = sentenceOf(el);
-  if (!block) return '';
-  const parts = [];
-  const walk = (node) => {
-    if (node.nodeType === 3) { parts.push(node.nodeValue); return; }
-    if (node.nodeType !== 1) return;
-    if (node === el) { parts.push('____'); return; }
-    // 같은 블록 안의 **다른** 강조는 남겨둔다 — 문맥이 너무 비면 풀 수 없다
-    node.childNodes.forEach(walk);
+/** 외울 내용이 아니라 **목차 역할**인 굵은 글씨인가? */
+const LABEL_WORDS = new Set([
+  '정의', '병태생리', '기전', '원인', '증상', '진단', '치료', '예후', '합병증', '감별',
+  '분류', '역학', '검사', '소견', '처치', '수술', '약물', '예방', '경과', '특징',
+  '오답노트', '정답', '출처', '담당교수', '족보', '왕족', '족보 타당도', '통합출처',
+  '핵심', '요약', '정리', '참고', '주의', '암기', '암기법', '팁', '표기 규칙',
+  '소스 종류', '기출', '빈출', '포인트', '비고', '결론',
+]);
+
+/**
+ * 답으로 쓰기엔 너무 막연한 말. 실제로 카드를 만들어 풀어보고 추린 것이다 —
+ * "전신 저관류의 **결과**(허혈성 간손상)이지" 같은 게 카드가 되면 풀 수가 없다.
+ */
+const VAGUE_ANSWERS = new Set([
+  '결과', '원인', '이유', '차이', '특징', '목적', '방법', '경우', '내용', '부분',
+  '전부', '모두', '일부', '관계', '상태', '문제', '중요', '필수', '금기', '가능',
+  '증가', '감소', '상승', '저하', '정상', '비정상', '양성', '음성', '있음', '없음',
+]);
+
+/** 이 블록이 **족보 문제·해설**인가? 그 안은 외울 지식이 아니라 문제 그 자체다. */
+function isQuizBlock(block) {
+  if (!block) return false;
+  const t = block.textContent.trim();
+  if (/^(오답노트|정답|해설|선지)\s*[:：]/.test(t)) return true;
+  if (/^정답\s*[:：]?\s*[①-⑩\d]/.test(t)) return true;
+  return false;
+}
+
+export function isLabel(el, text) {
+  const t = text.replace(/[:：]\s*$/, '').trim();
+  // ① 사전에 있는 구조어
+  if (LABEL_WORDS.has(t)) return true;
+  // ② "정답 ①", "정답: 1, 5" 류 — 족보의 정답 번호지 지식이 아니다
+  if (/^정답\s*[:：]?/.test(t)) return true;
+  // ③ 답으로 쓰기엔 막연한 말
+  if (VAGUE_ANSWERS.has(t)) return true;
+  // ④ "백화점 AED asystole 케이스" 같은 **별명** — 외울 건 케이스 이름이 아니라 내용이다
+  if (/(케이스|사례|증례|문항|문제)$/.test(t)) return true;
+  // ⑤ 족보 문제·해설 블록 안은 통째로 제외
+  if (isQuizBlock(blockOf(el))) return true;
+  // ③ 줄(블록) 맨 앞에 있고 바로 뒤가 콜론 — vault에서 가장 흔한 라벨 형태
+  const block = blockOf(el);
+  if (block) {
+    const txt = block.textContent;
+    const idx = txt.indexOf(text);
+    const head = idx <= 1;                       // 블록 시작
+    const after = txt.slice(idx + text.length, idx + text.length + 2).trimStart();
+    if (head && (after.startsWith(':') || after.startsWith('：'))) return true;
+    // ④ 블록 전체가 이 강조뿐 — 소제목처럼 쓰인 것
+    if (txt.trim() === text) return true;
+  }
+  return false;
+}
+
+/** 이 강조가 속한 블록. 표 안이면 **행(TR)** 을 돌려준다(표 모양을 지키려고). */
+function blockOf(el) {
+  let p = el.parentElement;
+  let cell = null;
+  while (p) {
+    if (/^(TD|TH)$/.test(p.tagName)) cell = p;
+    if (cell && p.tagName === 'TR') return p;
+    if (/^(P|LI|BLOCKQUOTE|H1|H2|H3|H4|H5|DIV)$/.test(p.tagName)) return p;
+    p = p.parentElement;
+  }
+  return null;
+}
+
+/** 보통 문단·목록 — 블록 하나를 빈칸 여럿짜리 카드 한 장으로. */
+function blockCard(block, els, meta, n) {
+  const answers = [];
+  const html = cloneWithBlanks(block, els, answers);
+  if (!answers.length) return null;
+  const plain = block.textContent.replace(/\s+/g, ' ').trim();
+  // 가린 글자가 문단의 거의 전부면 풀 수가 없다
+  const hidden = answers.join('').length;
+  if (plain.length - hidden < 6) return null;
+  return {
+    id: `${meta.notePath || ''}#${meta.heading || ''}#b${n}#${answers.join('|').slice(0, 40)}`,
+    notePath: meta.notePath || '', noteTitle: meta.noteTitle || '',
+    heading: meta.heading || '',
+    contextHtml: html,
+    answers,
+    starred: els.some((e) => e.tagName === 'MARK'),
+    kind: 'block',
   };
-  block.childNodes.forEach(walk);
-  const text = parts.join('').replace(/\s+/g, ' ').trim();
-  if (!text.includes('____')) return '';
-  // 문맥이 답만 덩그러니면 카드로 쓸모가 없다
-  if (text.replace(/____/g, '').trim().length < 4) return '';
-  return text.length > 300 ? `${text.slice(0, 300)}…` : text;
+}
+
+/** 표 — 표 전체를 그대로 두고 그 행의 강조만 가린다. */
+function tableCard(tr, els, meta, n) {
+  const table = tr.closest('table');
+  if (!table) return blockCard(tr, els, meta, n);
+  const answers = [];
+  const rowIdx = [...table.querySelectorAll('tr')].indexOf(tr);
+  const clone = table.cloneNode(true);
+  const cloneRow = clone.querySelectorAll('tr')[rowIdx];
+  if (!cloneRow) return null;
+  // 원본 행과 복제 행의 강조를 같은 순서로 대응시킨다
+  const origEm = [...tr.querySelectorAll('mark, strong, b, em, i')];
+  const cloneEm = [...cloneRow.querySelectorAll('mark, strong, b, em, i')];
+  origEm.forEach((o, i) => {
+    if (!els.includes(o) || !cloneEm[i]) return;
+    answers.push(o.textContent.trim());
+    cloneEm[i].replaceWith(blankNode(o.textContent.trim()));
+  });
+  if (!answers.length) return null;
+  cloneRow.classList.add('card-row-focus');
+  const wrap = document.createElement('div');
+  wrap.className = 'tablewrap';
+  wrap.appendChild(clone);
+  return {
+    id: `${meta.notePath || ''}#${meta.heading || ''}#t${n}#${answers.join('|').slice(0, 40)}`,
+    notePath: meta.notePath || '', noteTitle: meta.noteTitle || '',
+    heading: meta.heading || '',
+    contextHtml: wrap.outerHTML,
+    answers,
+    starred: els.some((e) => e.tagName === 'MARK'),
+    kind: 'table',
+  };
+}
+
+/** 블록을 복제하면서 대상 강조만 빈칸으로 바꾼다. 나머지 서식은 그대로 둔다. */
+function cloneWithBlanks(block, els, answers) {
+  const clone = block.cloneNode(true);
+  const orig = [...block.querySelectorAll('mark, strong, b, em, i')];
+  const copy = [...clone.querySelectorAll('mark, strong, b, em, i')];
+  orig.forEach((o, i) => {
+    if (!els.includes(o) || !copy[i]) return;
+    const t = o.textContent.trim();
+    answers.push(t);
+    copy[i].replaceWith(blankNode(t));
+  });
+  return clone.outerHTML;
+}
+
+/** 빈칸. 글자 수만큼 넓이를 줘서 "몇 자쯤인지"가 힌트가 되게 한다. */
+function blankNode(answer) {
+  const b = document.createElement('span');
+  b.className = 'cloze';
+  b.dataset.answer = answer;
+  b.textContent = ' '.repeat(Math.min(14, Math.max(4, answer.length)));
+  return b;
 }
