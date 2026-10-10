@@ -97,13 +97,6 @@ export function extractCards(note) {
   return cards;
 }
 
-// ───────────── 복습 주기(가벼운 Leitner) ─────────────
-//
-// SM-2를 그대로 쓰기엔 과하다. 상자 5개짜리 Leitner로 충분하고, 사용자가
-// Obsidian Spaced Repetition 플러그인을 비활성화해둔 상태라 여기서 대신 돌린다.
-
-const BOX_DAYS = [0, 1, 3, 7, 21]; // 상자별 다음 복습까지 일수
-
 export async function loadSrs() {
   return (await kvGet('srs')) || {};
 }
@@ -111,24 +104,100 @@ export async function saveSrs(srs) {
   return kvSet('srs', srs);
 }
 
+// ───────────── 간격 반복 (FSRS 간소판, 2026-10-10) ─────────────
+//
+// 왜 바꿨나: 라이트너 상자(0·1·3·7·21일)는 **카드마다 난이도가 다르다는 걸 모른다.**
+// 쉬운 카드는 더 길게, 어려운 카드는 더 자주 봐야 하는데 전부 같은 간격을 쓴다.
+//
+// FSRS(Free Spaced Repetition Scheduler)의 뼈대만 가져왔다:
+//   · S(안정성) — 이 기억이 얼마나 오래 가는가. 맞히면 늘고 틀리면 줄어든다.
+//   · D(난이도) — 이 카드가 나에게 얼마나 어려운가(1~10). 틀리면 올라간다.
+//   · 복습 간격 = S를 목표 기억률(90%)로 환산한 날수.
+// 원본의 17개 파라미터 최적화는 뺐다 — 카드 수천 장의 로그가 있어야 의미가 있고,
+// 없으면 기본값이 더 안전하다. 핵심인 "S·D를 각 카드가 따로 갖는다"만 취한다.
+//
+// **시험 일정 연동**: 시험까지 N일 남았으면 그 뒤로 넘어가는 복습은 의미가 없다.
+// 간격을 시험 전으로 당겨서, 남은 기간 안에 최소 한 번은 더 보게 만든다.
+
+const TARGET_RETENTION = 0.9;   // 복습 시점에 90% 기억하고 있도록
+const MIN_S = 0.3, MAX_S = 365 * 2;
+const DAY = 86400000;
+
+/** 안정성 S → 다음 복습까지 날수. */
+function intervalOf(S) {
+  // FSRS의 forgetting curve를 뒤집은 식. R=0.9면 대략 S와 비슷한 날수가 나온다.
+  return Math.max(1, Math.round(S * (Math.pow(TARGET_RETENTION, -1 / 0.5) - 1) / (Math.pow(0.9, -1 / 0.5) - 1)));
+}
+
+/** 처음 본 카드의 초기 상태. 답을 맞혔는지에 따라 출발점이 다르다. */
+function initState(remembered) {
+  return remembered
+    ? { S: 3.0, D: 4.5 }     // 바로 맞혔으면 꽤 안다
+    : { S: 0.6, D: 6.5 };    // 틀렸으면 거의 모른다
+}
+
+export function gradeCard(srs, cardId, remembered, opts = {}) {
+  const now = opts.now || Date.now();
+  const prev = srs[cardId];
+  const s = prev || { seen: 0 };
+
+  if (!prev || prev.S == null) {
+    Object.assign(s, initState(remembered));
+  } else {
+    const elapsed = Math.max(0, (now - (s.last || now)) / DAY);
+    // 복습 시점의 기억률 — 늦게 볼수록 낮다. 낮을 때 맞히면 그만큼 크게 는다.
+    const R = Math.pow(1 + elapsed / Math.max(s.S, 0.1), -0.5);
+    if (remembered) {
+      const ease = 1 + (11 - s.D) * 0.08 * (1 - R);   // 어려운 카드일수록 덜 는다
+      s.S = Math.min(MAX_S, s.S * Math.max(1.05, ease));
+      s.D = Math.max(1, s.D - 0.15);
+    } else {
+      s.S = Math.max(MIN_S, Math.min(s.S * 0.35, 2));  // 잊었으면 크게 줄인다
+      s.D = Math.min(10, s.D + 1.0);
+    }
+  }
+
+  s.seen = (s.seen || 0) + 1;
+  if (!remembered) s.lapses = (s.lapses || 0) + 1;
+  s.last = now;
+  let days = remembered ? intervalOf(s.S) : 1;        // 틀리면 내일 다시
+
+  // 시험이 코앞이면 그 뒤로 미루지 않는다 — 시험 전에 한 번은 더 봐야 한다
+  if (opts.examAt) {
+    const left = Math.ceil((opts.examAt - now) / DAY);
+    if (left > 0 && days > left) days = Math.max(1, Math.ceil(left / 2));
+  }
+  s.due = now + days * DAY;
+  s.box = boxOf(s.S);                                  // 화면 표시용(처음·학습중·익힘)
+  delete s.buried;
+  srs[cardId] = s;
+  return s;
+}
+
+/** S를 사람이 읽는 단계로. 기존 화면·통계가 box를 쓰므로 유지한다. */
+function boxOf(S) {
+  if (S < 1) return 0;
+  if (S < 4) return 1;
+  if (S < 10) return 2;
+  if (S < 30) return 3;
+  return 4;
+}
+
+/** 이 카드를 지금 보면 얼마나 기억하고 있을까(0~1). 관리 화면에서 보여준다. */
+export function retrievability(st, now = Date.now()) {
+  if (!st || st.S == null || !st.last) return 0;
+  const elapsed = Math.max(0, (now - st.last) / DAY);
+  return Math.pow(1 + elapsed / Math.max(st.S, 0.1), -0.5);
+}
+
+/** 오늘 볼 카드(기한이 지났거나 처음 보는 것). studyQueue가 순서까지 정해준다. */
 export function dueCards(cards, srs, now = Date.now()) {
   return cards.filter((c) => {
     const s = srs[c.id];
     if (!s) return true;                 // 처음 보는 카드
+    if (s.suspended) return false;
     return (s.due || 0) <= now;
   });
-}
-
-export function gradeCard(srs, cardId, remembered) {
-  const s = srs[cardId] || { box: 0, seen: 0 };
-  s.box = remembered ? Math.min(s.box + 1, BOX_DAYS.length - 1) : 0;
-  s.seen = (s.seen || 0) + 1;
-  if (!remembered) s.lapses = (s.lapses || 0) + 1;   // 몇 번 틀렸나 — 자주 틀리는 카드를 찾는다
-  s.last = Date.now();
-  s.due = Date.now() + BOX_DAYS[s.box] * 86400000;
-  delete s.buried;                                   // 풀었으면 오늘 미루기는 끝
-  srs[cardId] = s;
-  return s;
 }
 
 // ───────────── 카드 다루기 (2026-10-10) ─────────────
@@ -515,4 +584,36 @@ function blankNode(answer) {
   b.dataset.answer = answer;
   b.textContent = ' '.repeat(Math.min(14, Math.max(4, answer.length)));
   return b;
+}
+
+// ───────────── 시험 일정 ─────────────
+// vault의 `00_Raw_Text/시간표/*.md`에 "| 2026-10-23 | 금 | … | 종합 시험(90분) |" 꼴로
+// 적혀 있다. 그걸 읽어 **다음 시험일**을 찾고, 복습 간격이 시험을 넘기지 않게 한다.
+
+const EXAM_ROW = /\|\s*(\d{4}-\d{2}-\d{2})\s*\|[^\n|]*\|[^\n|]*\|\s*([^|\n]+?)\s*\|/g;
+// "시험"·"형성평가"는 실제 평가, 그냥 "평가"는 강의 제목일 수 있다
+// ("중환자 중증도 분류 및 **평가**"가 시험으로 잡혔다 — 2026-10-10)
+const EXAM_WORD = /(시험|형성평가|종합평가|중간고사|기말고사)/;
+
+/** 시간표 마크다운에서 시험 일정을 뽑는다. */
+export function parseExamDates(md) {
+  const out = [];
+  let m;
+  EXAM_ROW.lastIndex = 0;
+  while ((m = EXAM_ROW.exec(String(md)))) {
+    const name = m[2].trim();
+    if (!name || /해당없음|^—$/.test(name)) continue;
+    if (!EXAM_WORD.test(name)) continue;
+    // 강의 제목은 길고 여러 주제를 '&'·','로 잇는다. 시험 칸은 짧다.
+    if (name.length > 24 || /[&,]/.test(name)) continue;
+    const t = Date.parse(`${m[1]}T09:00:00`);
+    if (!Number.isNaN(t)) out.push({ date: m[1], at: t, name });
+  }
+  return out;
+}
+
+/** 오늘 이후로 가장 가까운 시험. 없으면 null. */
+export function nextExam(exams, now = Date.now()) {
+  const future = (exams || []).filter((e) => e.at > now).sort((a, b) => a.at - b.at);
+  return future[0] || null;
 }

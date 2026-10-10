@@ -118,7 +118,7 @@ const SYSTEM = `당신은 의대생의 시험 공부를 돕는 튜터다. 한국
  * @param {string} [p.lecture]
  * @returns {Promise<string>} 답변 텍스트
  */
-export async function ask({ term, question, noteText, subject, lecture }, retried = false) {
+export async function ask({ term, question, noteText, subject, lecture, onProgress }, retried = false) {
   if (!(await hasKey())) throw new Error('NO_KEY');
   const model = await getModel();
 
@@ -137,7 +137,10 @@ export async function ask({ term, question, noteText, subject, lecture }, retrie
   }
   if (noteText) parts.push(`[내 노트 발췌 — 이 맥락을 우선 반영]\n${noteText.slice(0, 1500)}`);
 
-  return callGemini({ model, system: SYSTEM, text: parts.join('\n\n'), maxTokens: 900 })
+  return callGeminiStream({
+    model, system: SYSTEM, text: parts.join('\n\n'), maxTokens: 900,
+    onChunk: onProgress ? (_p, full) => onProgress(full) : null,
+  })
     .then((text) => {
       answerCache.set(cacheKey, text);
       if (answerCache.size > 80) answerCache.delete(answerCache.keys().next().value);
@@ -146,7 +149,7 @@ export async function ask({ term, question, noteText, subject, lecture }, retrie
     .catch(async (e) => {
       if (/^MODEL_404$/.test(e.message) && !retried) {
         const v = await verifyKey(await getKey());
-        if (v.ok && v.model !== model) return ask({ term, question, noteText, subject, lecture }, true);
+        if (v.ok && v.model !== model) return ask({ term, question, noteText, subject, lecture, onProgress }, true);
         throw new Error(v.ok ? `모델 "${model}"을 쓸 수 없습니다(404).` : v.error);
       }
       throw e;
@@ -184,6 +187,99 @@ async function callGemini({ model, system, text: userText, maxTokens = 900, temp
   throw new Error(`RATE_WAIT:${rc.waitSec || 30}`);
 }
 
+/**
+ * **스트리밍** 호출 — 글자가 오는 대로 넘겨준다.
+ *
+ * 왜: 1600토큰을 다 받고 나서 한꺼번에 그리면 40초를 멍하니 기다리게 된다(2026-10-10).
+ * 스트리밍이면 2초 안에 첫 줄이 뜨고 나머지가 채워진다. 총 시간은 같지만
+ * **읽기 시작하는 시점**이 20배 빨라진다.
+ */
+async function callGeminiStream({ model, system, text: userText, maxTokens = 900, temperature = 0.3, onChunk }) {
+  const keys = await usableKeys();
+  if (!keys.length) {
+    const rc = await rateCheck();
+    if (rc.noKey) throw new Error('NO_KEY');
+    throw new Error(`RATE_WAIT:${rc.waitSec}`);
+  }
+  let lastErr = null;
+  for (const key of keys) {
+    try {
+      return await streamOnce({ key, model, system, text: userText, maxTokens, temperature, onChunk });
+    } catch (e) {
+      lastErr = e;
+      if (e.message === 'KEY_RATE' || e.message === 'KEY_BAD') continue;
+      throw e;
+    }
+  }
+  if (lastErr && lastErr.message === 'KEY_BAD') throw new Error('넣어둔 키가 모두 유효하지 않습니다. 설정에서 확인해 주세요.');
+  const rc = await rateCheck();
+  throw new Error(`RATE_WAIT:${rc.waitSec || 30}`);
+}
+
+async function streamOnce({ key, model, system, text: userText, maxTokens, temperature, onChunk }) {
+  const body = {
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{ role: 'user', parts: [{ text: userText }] }],
+    generationConfig: { temperature, maxOutputTokens: maxTokens, thinkingConfig: { thinkingBudget: 0 } },
+  };
+  logOf(key).push(Date.now());
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body) }
+  );
+  if (!res.ok) { handleHttpError(res.status, await res.text().catch(() => ''), key); }
+  if (!res.body) {                       // 스트림을 못 쓰면 평소 방식으로
+    return callOnce({ key, model, system, text: userText, maxTokens, temperature });
+  }
+
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  let full = '';
+  let finish = null;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    // SSE: "data: {...}\n\n" 단위
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      let j;
+      try { j = JSON.parse(payload); } catch { continue; }
+      const cand = j?.candidates?.[0];
+      const piece = cand?.content?.parts?.map((x) => x.text || '').join('') || '';
+      if (cand?.finishReason) finish = cand.finishReason;
+      if (piece) { full += piece; if (onChunk) onChunk(piece, full); }
+    }
+  }
+  if (!full) throw new Error(finish ? `답변을 받지 못했습니다(${finish}).` : '빈 응답을 받았습니다.');
+  if (finish === 'MAX_TOKENS') { const e = new Error('TRUNCATED'); e.partial = full.trim(); throw e; }
+  return full.trim();
+}
+
+/** HTTP 오류를 키 단위 오류로 바꾼다(두 호출 경로가 같은 규칙을 쓰게). */
+function handleHttpError(status, text, key) {
+  if (status === 400 && /API key not valid/i.test(text)) {
+    coolUntil.set(key, Date.now() + 3600000);
+    throw new Error('KEY_BAD');
+  }
+  if (status === 429 || status === 403) {
+    const m = text.match(/"retryDelay"\s*:\s*"(\d+)s"/);
+    const sec = m ? Number(m[1]) : 30;
+    coolUntil.set(key, Date.now() + sec * 1000);
+    const arr = logOf(key);
+    while (arr.length < RPM_LIMIT) arr.push(Date.now());
+    throw new Error('KEY_RATE');
+  }
+  if (status === 404) throw new Error('MODEL_404');
+  throw new Error(`Gemini 오류 ${status}${text ? ' — ' + text.slice(0, 120) : ''}`);
+}
+
 /** 키 하나로 한 번 호출. 이 키만의 문제는 KEY_RATE/KEY_BAD로 알린다. */
 async function callOnce({ key, model, system, text: userText, maxTokens, temperature }) {
   const body = {
@@ -208,25 +304,7 @@ async function callOnce({ key, model, system, text: userText, maxTokens, tempera
     }
   );
 
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    if (res.status === 400 && /API key not valid/i.test(t)) {
-      coolUntil.set(key, Date.now() + 3600000);   // 잘못된 키는 한 시간 쉬게 둔다
-      throw new Error('KEY_BAD');
-    }
-    if (res.status === 429 || res.status === 403) {
-      // 구글이 알려주는 재시도 시간을 그대로 쓴다
-      const m = t.match(/"retryDelay"\s*:\s*"(\d+)s"/);
-      const sec = m ? Number(m[1]) : 30;
-      coolUntil.set(key, Date.now() + sec * 1000);
-      const arr = logOf(key);
-      while (arr.length < RPM_LIMIT) arr.push(Date.now());   // 이 키는 꽉 찬 것으로 본다
-      throw new Error('KEY_RATE');
-    }
-    // "no longer available" 등 — 부르는 쪽이 모델을 다시 찾아 재시도한다.
-    if (res.status === 404) throw new Error('MODEL_404');
-    throw new Error(`Gemini 오류 ${res.status}${t ? ' — ' + t.slice(0, 120) : ''}`);
-  }
+  if (!res.ok) handleHttpError(res.status, await res.text().catch(() => ''), key);
   const json = await res.json();
   const cand = json?.candidates?.[0];
   const text = cand?.content?.parts?.map((p) => p.text).join('') || '';
@@ -417,20 +495,26 @@ const BREAK_SYSTEM = `당신은 의대생에게 임상 vignette 푸는 법을 �
  * 지문을 단서·인상·선지 기준으로 뜯는다.
  * @returns {Promise<{clues:Array, impression:string, options:Array}>}
  */
-export async function breakdown(question, retried = false) {
+export async function breakdown(question, retried = false, onProgress = null) {
   if (!(await hasKey())) throw new Error('NO_KEY');
   const model = await getModel();
 
   const cacheKey = `BD2|${question.q.slice(0, 80)}`;
-  if (!retried && answerCache.has(cacheKey)) return parseBreakdown(answerCache.get(cacheKey), question);
+  if (!retried && answerCache.has(cacheKey)) {
+    const cached = parseBreakdown(answerCache.get(cacheKey), question);
+    if (onProgress) onProgress(cached);
+    return cached;
+  }
 
   const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
   const opts = (question.opts || []).map((o, i) => `${CIRCLED[i] || i + 1} ${o}`).join('\n');
 
   try {
-    const text = await callGemini({
+    // 스트리밍 — 줄이 완성되는 대로 바로 보여준다(다 기다리면 40초가 걸린다)
+    const text = await callGeminiStream({
       model, system: BREAK_SYSTEM, maxTokens: 1600, temperature: 0.2,
       text: `[지문]\n${question.q}\n\n[선지]\n${opts}`,
+      onChunk: onProgress ? (_piece, full) => onProgress(parseBreakdown(full, question)) : null,
     });
     answerCache.set(cacheKey, text);
     if (answerCache.size > 80) answerCache.delete(answerCache.keys().next().value);
@@ -438,7 +522,7 @@ export async function breakdown(question, retried = false) {
   } catch (e) {
     if (e.message === 'MODEL_404' && !retried) {
       const v = await verifyKey(await getKey());
-      if (v.ok && v.model !== model) return breakdown(question, true);
+      if (v.ok && v.model !== model) return breakdown(question, true, onProgress);
       throw new Error(v.ok ? `모델 "${model}"을 쓸 수 없습니다(404).` : v.error);
     }
     // 잘렸어도 거기까지는 보여준다 — 아무것도 없는 것보다 낫다

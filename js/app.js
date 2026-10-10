@@ -15,7 +15,7 @@ import {
   noteList, loadNote, renderSection, extractCards,
   loadSrs, saveSrs, dueCards, gradeCard, srsStats, keepAwake, cardsFromBox,
   studyQueue, groupCards, suspendCard, unsuspendCard, buryCard, toggleStar,
-  isStarred, isSuspended, isLeech, LEECH_AT,
+  isStarred, isSuspended, isLeech, LEECH_AT, retrievability, parseExamDates, nextExam,
 } from './reader.js';
 import { search, cacheSubject, storageInfo } from './search.js';
 import {
@@ -808,8 +808,10 @@ async function askNow(term) {
   body.innerHTML = '<div class="ai-loading">묻는 중…</div>';
   status.textContent = '';
   try {
+    const body2 = document.getElementById('aiBody');
     const answer = await gem.ask({
       term,
+      onProgress: (full) => { body2.innerHTML = renderMarkdown(full); },
       question: askCtx.question,
       noteText: wikiState ? wikiState.refs.sections[wikiState.secIdx].text : '',
       subject: currentExam ? currentExam.subject : '',
@@ -988,7 +990,14 @@ async function runBreakdown() {
   el.innerHTML = '<div class="bd-loading">지문을 뜯어보는 중…</div>';
   document.getElementById('toolBreak').classList.add('active');
   try {
-    renderBreakdown(el, await gem.breakdown(q), q);
+    // 스트리밍 — 줄이 오는 대로 다시 그린다. 다 기다리면 40초가 걸렸다(2026-10-10).
+    let painted = false;
+    const data = await gem.breakdown(q, false, (partial) => {
+      if (!partial.clues.length && !partial.impression && !partial.options.length) return;
+      renderBreakdown(el, partial, q);
+      painted = true;
+    });
+    if (!painted || data.clues.length || data.options.length) renderBreakdown(el, data, q);
   } catch (e) {
     const wait = /^RATE_WAIT:(\d+)$/.exec(e.message);
     el.innerHTML = '';
@@ -1521,6 +1530,7 @@ function makeCardsFromBox(box) {
 /** 카드 묶음을 띄운다. 돌아갈 곳을 기억해 읽던 자리로 복귀한다. */
 async function startDeck(cards, title, { backTo = 'list' } = {}) {
   const srsNow = await loadSrs();
+  if (!deckView.exam) deckView.exam = (await kvGet('next_exam')) || null;
   // 중요 → 자주 틀림 → 복습 기한 → 새 카드 순으로. 버린 것·오늘 미룬 것은 빠진다.
   const queue = studyQueue(cards, srsNow);
   if (!queue.length) {
@@ -1624,56 +1634,9 @@ document.getElementById('readTts').onclick = () => {
 
 // ---- 플래시카드 ----
 async function loadCardsTab() {
-  const body = document.getElementById('cardsBody');
-  body.innerHTML = '<p class="muted">카드를 세는 중…</p>';
-  try {
-    const groups = await noteList(false);
-    const srs = await loadSrs();
-    body.innerHTML = '';
-
-    // 네모로 만든 카드가 주력이므로 관리 화면을 맨 위에 둔다
-    const mine = await allCards().catch(() => []);
-    const go = document.createElement('button');
-    go.className = 'btn primary full';
-    go.textContent = mine.length ? `내 카드 관리 (${mine.length}장)` : '내 카드 관리';
-    go.onclick = openDeck;
-    body.appendChild(go);
-
-    const hint = document.createElement('p');
-    hint.className = 'muted';
-    hint.style.margin = '14px 0 10px';
-    hint.textContent = mine.length
-      ? '노트 읽기에서 🃏 를 켜고 펜으로 네모를 치면 카드가 쌓입니다. 아래는 노트 전체의 ⭐ ==하이라이트== 로 만든 카드입니다.'
-      : '노트 읽기에서 🃏 를 켜고 펜으로 네모를 치면 카드가 만들어집니다. 아래는 노트 전체의 ⭐ ==하이라이트== 로 바로 복습하는 방법입니다.';
-    body.appendChild(hint);
-
-    for (const g of groups) {
-      const det = document.createElement('details');
-      det.className = 'subject-group';
-      const sum = document.createElement('summary');
-      sum.className = 'subject-head';
-      sum.innerHTML = '<span class="head-row">' +
-        `<span>${escapeText(g.subject.replace(/_/g, ' '))}</span>` +
-                      `<span class="subject-count">${g.notes.length}개</span>` + '</span>';
-      det.appendChild(sum);
-      body.appendChild(det);
-      for (const n of g.notes) {
-        const b = document.createElement('button');
-        b.className = 'exam-item';
-        const name = document.createElement('span');
-        name.className = 'exam-name';
-        name.textContent = n.name.replace(/^\d{4}_/, '');
-        const meta = document.createElement('span');
-        meta.className = 'exam-progress';
-        meta.textContent = '›';
-        b.appendChild(name); b.appendChild(meta);
-        b.onclick = () => startCards(n.path, srs);
-        det.appendChild(b);
-      }
-    }
-  } catch (e) {
-    body.innerHTML = `<div class="warn-box">${e.message}</div>`;
-  }
+  // 노트 전체 하이라이트로 만든 카드는 거의 안 쓴다 — 네모로 만든 카드만 다룬다(2026-10-10).
+  // 탭을 누르면 바로 관리 화면으로 보낸다.
+  openDeck();
 }
 
 async function startCards(path, srs) {
@@ -1808,7 +1771,8 @@ document.getElementById('cardBack').onclick = () => {
 async function advanceCard(remembered) {
   if (!cardDeck) return;
   const c = cardDeck.cards[cardDeck.idx];
-  gradeCard(cardDeck.srs, c.id, remembered);
+  // 시험이 코앞이면 복습을 그 전으로 당긴다(FSRS 간격이 시험을 넘기지 않게)
+  gradeCard(cardDeck.srs, c.id, remembered, { examAt: deckView.exam ? deckView.exam.at : null });
   await saveSrs(cardDeck.srs);
   backup.scheduleBackup();       // 외운 기록은 되찾을 수 없다 — 모아서 vault에 올린다
   if (!remembered && isLeech(cardDeck.srs, c.id)) {
@@ -1844,132 +1808,186 @@ const DECK_GROUPS = [
   ['suspended', '버린 것', '다시 안 나옵니다 — 되살릴 수 있습니다'],
 ];
 
-async function openDeck() {
+let deckView = { group: 'due', cards: [], srs: {}, exam: null };
+
+async function openDeck(keep = false) {
   show('deckScreen');
   const body = document.getElementById('deckBody');
-  body.innerHTML = '<p class="muted">불러오는 중…</p>';
+  if (!keep) body.innerHTML = '<p class="muted">불러오는 중…</p>';
   let cards, srs;
   try { cards = await allCards(); srs = await loadSrs(); }
   catch (e) { body.innerHTML = `<div class="warn-box">${escapeText(e.message)}</div>`; return; }
+  deckView.cards = cards;
+  deckView.srs = srs;
+  if (!deckView.exam) loadExamDate().then(() => paintExamBar());
 
   if (!cards.length) {
+    document.getElementById('deckSide').innerHTML = '';
     document.getElementById('deckStats').innerHTML = '';
-    body.innerHTML = '<p class="muted">아직 만든 카드가 없습니다. 노트 읽기에서 🃏 를 켜고 펜으로 네모를 쳐보세요.</p>';
+    body.innerHTML = '<p class="muted">아직 만든 카드가 없습니다.<br>노트 읽기에서 🃏 를 켜고 펜으로 네모를 쳐보세요.</p>';
     return;
   }
-  const g = groupCards(cards, srs);
+  paintExamBar();
+  renderDeck();
+}
 
-  // 한눈 요약
+/** 시험까지 며칠 남았는지 — 복습 간격이 이 날짜를 넘기지 않는다. */
+async function loadExamDate() {
+  try {
+    const files = await listDir('00_Raw_Text/시간표');
+    const all = [];
+    for (const f of files.filter((x) => x.type === 'file' && x.name.endsWith('.md'))) {
+      all.push(...parseExamDates(await getText(f.path)));
+    }
+    deckView.exam = nextExam(all);
+    await kvSet('next_exam', deckView.exam);
+  } catch {
+    deckView.exam = (await kvGet('next_exam')) || null;   // 오프라인이면 기억해둔 것
+  }
+}
+
+function paintExamBar() {
+  const bar = document.getElementById('deckExam');
+  const e = deckView.exam;
+  if (!e || e.at < Date.now()) { bar.classList.add('hidden'); return; }
+  const days = Math.ceil((e.at - Date.now()) / 86400000);
+  bar.classList.remove('hidden');
+  bar.innerHTML = '';
+  const d = document.createElement('span');
+  d.className = 'deck-exam-d';
+  d.textContent = `D-${days}`;
+  const t = document.createElement('span');
+  t.textContent = `${e.name} (${e.date}) — 복습 간격을 시험 전으로 당깁니다`;
+  bar.append(d, t);
+}
+
+function renderDeck() {
+  const { cards, srs } = deckView;
+  const g = groupCards(cards, srs);
+  const counts = { all: cards.length, ...Object.fromEntries(Object.entries(g).map(([k, v]) => [k, v.length])) };
+
+  // ── 왼쪽 탭 ──
+  const side = document.getElementById('deckSide');
+  side.innerHTML = '';
+  const TABS = [
+    ['due', '오늘 볼 것', '🗓'],
+    ['star', '중요', '★'],
+    ['leech', '자주 틀림', '⚠'],
+    ['later', '학습 중', '📘'],
+    ['mature', '익힘', '✓'],
+    ['suspended', '버림', '🗑'],
+    ['all', '전체', '📚'],
+  ];
+  for (const [key, label, icon] of TABS) {
+    const n = key === 'all' ? counts.all : counts[key] || 0;
+    const b = document.createElement('button');
+    b.className = `deck-tab${deckView.group === key ? ' active' : ''}`;
+    b.innerHTML = `<span class="dt-ico">${icon}</span><span class="dt-l">${label}</span><span class="dt-n">${n}</span>`;
+    b.onclick = () => { deckView.group = key; renderDeck(); };
+    side.appendChild(b);
+  }
+
+  // ── 요약 + 시작 ──
   const stats = document.getElementById('deckStats');
   stats.innerHTML = '';
-  [['전체', cards.length], ['오늘 볼 것', g.due.length], ['자주 틀림', g.leech.length], ['버림', g.suspended.length]]
-    .forEach(([label, n]) => {
-      const d = document.createElement('div');
-      d.className = 'deck-stat';
-      d.innerHTML = `<span class="deck-n">${n}</span><span class="deck-l">${label}</span>`;
-      stats.appendChild(d);
-    });
-
-  body.innerHTML = '';
-  // 오늘 볼 것부터 바로 시작할 수 있게
   const startable = studyQueue(cards, srs);
   if (startable.length) {
     const go = document.createElement('button');
     go.className = 'btn primary full';
-    go.style.marginBottom = '14px';
-    go.textContent = `오늘 분량 풀기 (${Math.min(startable.length, 40)}장)`;
+    const n = Math.min(startable.length, 40);
+    go.textContent = `오늘 분량 풀기 (${n}장${startable.length > n ? ` / ${startable.length}` : ''})`;
     go.onclick = () => startDeck(startable.slice(0, 40), '카드 복습', { backTo: 'deck' });
-    body.appendChild(go);
+    stats.appendChild(go);
+  } else {
+    const p2 = document.createElement('p');
+    p2.className = 'muted';
+    p2.textContent = '오늘 볼 카드가 없습니다 — 잘 하고 있습니다.';
+    stats.appendChild(p2);
   }
 
-  for (const [key, label, hint] of DECK_GROUPS) {
-    const list = g[key];
-    if (!list.length) continue;
-    const det = document.createElement('details');
-    det.className = 'subject-group';
-    det.open = key === 'star' || key === 'leech';
-    const sum = document.createElement('summary');
-    sum.className = 'subject-head';
-    sum.innerHTML = '<span class="head-row">' +
-      `<span>${escapeText(label)}</span>` +
-      `<span class="subject-count">${list.length}장</span></span>`;
-    det.appendChild(sum);
-    const hintEl = document.createElement('p');
-    hintEl.className = 'muted deck-hint';
-    hintEl.textContent = hint;
-    det.appendChild(hintEl);
-    list.slice(0, 80).forEach((c) => det.appendChild(deckRow(c, srs)));
-    if (list.length > 80) {
-      const more = document.createElement('p');
-      more.className = 'muted deck-hint';
-      more.textContent = `… 외 ${list.length - 80}장`;
-      det.appendChild(more);
-    }
-    body.appendChild(det);
+  // ── 카드 미리보기 목록 ──
+  const body = document.getElementById('deckBody');
+  body.innerHTML = '';
+  const list = deckView.group === 'all' ? cards : (g[deckView.group] || []);
+  if (!list.length) {
+    body.innerHTML = '<p class="muted">이 칸에는 카드가 없습니다.</p>';
+    return;
+  }
+  const grid = document.createElement('div');
+  grid.className = 'deck-grid';
+  list.slice(0, 120).forEach((c) => grid.appendChild(deckCard(c, srs)));
+  body.appendChild(grid);
+  if (list.length > 120) {
+    const more = document.createElement('p');
+    more.className = 'muted deck-hint';
+    more.textContent = `… 외 ${list.length - 120}장`;
+    body.appendChild(more);
   }
 }
 
-/** 카드 한 줄 — 무엇에 대한 카드인지 + 고르기 버튼들. */
-function deckRow(c, srs) {
-  const row = document.createElement('div');
-  row.className = 'deck-row';
+/** 카드 미리보기 한 장 — 눌러서 답을 열어보고, 거기서 바로 골라낸다. */
+function deckCard(c, srs) {
+  const st = srs[c.id] || {};
+  const card = document.createElement('div');
+  card.className = 'deck-card';
 
-  const main = document.createElement('div');
-  main.className = 'deck-main';
   const topic = document.createElement('div');
   topic.className = 'deck-topic';
   topic.textContent = c.topic || c.heading || c.noteTitle || '';
+
   const q = document.createElement('div');
   q.className = 'deck-q';
-  const tmp = document.createElement('div');
-  tmp.innerHTML = c.contextHtml || '';
-  tmp.querySelectorAll('.cloze').forEach((el) => { el.textContent = ' ____ '; });
-  q.textContent = tmp.textContent.replace(/\s+/g, ' ').trim().slice(0, 110);
+  q.innerHTML = c.contextHtml || '';
+  q.querySelectorAll('.cloze').forEach((el) => { el.textContent = '____'; });
+
   const a = document.createElement('div');
-  a.className = 'deck-a';
-  a.textContent = (c.answers || []).join(' / ');
-  main.append(topic, q, a);
+  a.className = 'deck-a hidden';
+  a.textContent = (c.answers || []).join('  /  ');
+
+  const meta = document.createElement('div');
+  meta.className = 'deck-meta';
+  const bits = [];
+  if (st.due) {
+    const d = Math.ceil((st.due - Date.now()) / 86400000);
+    bits.push(d <= 0 ? '오늘' : `${d}일 뒤`);
+  } else bits.push('새 카드');
+  if (st.S != null) bits.push(`기억 ${Math.round(retrievability(st) * 100)}%`);
+  if (st.lapses) bits.push(`${st.lapses}번 틀림`);
+  meta.textContent = bits.join(' · ');
 
   const acts = document.createElement('div');
   acts.className = 'deck-acts';
-  const st = srs[c.id] || {};
-  if (st.lapses) {
-    const bad = document.createElement('span');
-    bad.className = 'deck-lapse';
-    bad.textContent = `${st.lapses}번 틀림`;
-    acts.appendChild(bad);
-  }
+  const peek = document.createElement('button');
+  peek.className = 'deck-btn';
+  peek.textContent = '답';
+  peek.onclick = () => { a.classList.toggle('hidden'); peek.classList.toggle('on'); };
   const star = document.createElement('button');
   star.className = `deck-btn${isStarred(srs, c.id) ? ' on' : ''}`;
   star.textContent = isStarred(srs, c.id) ? '★' : '☆';
-  star.title = '중요 표시';
-  star.onclick = async () => { toggleStar(srs, c.id); await saveSrs(srs); backup.scheduleBackup(); openDeck(); };
-  acts.appendChild(star);
-
+  star.onclick = async () => { toggleStar(srs, c.id); await saveSrs(srs); backup.scheduleBackup(); renderDeck(); };
+  const dropped = isSuspended(srs, c.id);
   const drop = document.createElement('button');
   drop.className = 'deck-btn';
-  const dropped = isSuspended(srs, c.id);
   drop.textContent = dropped ? '되살리기' : '버리기';
   drop.onclick = async () => {
     if (dropped) unsuspendCard(srs, c.id); else suspendCard(srs, c.id);
-    await saveSrs(srs); backup.scheduleBackup(); openDeck();
+    await saveSrs(srs); backup.scheduleBackup(); renderDeck();
   };
-  acts.appendChild(drop);
-
+  acts.append(peek, star, drop);
   if (dropped) {
     const del = document.createElement('button');
     del.className = 'deck-btn danger';
-    del.textContent = '완전삭제';
-    del.onclick = async () => { await deleteCard(c.id); openDeck(); };
+    del.textContent = '삭제';
+    del.onclick = async () => { await deleteCard(c.id); openDeck(true); };
     acts.appendChild(del);
   }
 
-  row.append(main, acts);
-  return row;
+  card.append(topic, q, a, meta, acts);
+  return card;
 }
 
 document.getElementById('deckBack').onclick = () => show('listScreen');
-document.getElementById('deckRefresh').onclick = () => openDeck();
+document.getElementById('deckRefresh').onclick = () => { deckView.exam = null; openDeck(); };
 
 function shuffle(a) {
   for (let i = a.length - 1; i > 0; i--) {
@@ -2331,13 +2349,33 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') backup.flushBackup().catch(() => {});
 });
 
+/** 스플래시를 치운다 — 짧게 보여주되, 준비가 늦으면 그만큼만 더 기다린다. */
+function hideSplash() {
+  const el = document.getElementById('splash');
+  if (!el || el.classList.contains('gone')) return;
+  const MIN = 900;                       // 그림이 한 번 움직일 만큼
+  const wait = Math.max(0, MIN - (Date.now() - (window.__t0 || Date.now())));
+  setTimeout(() => {
+    el.classList.add('gone');
+    setTimeout(() => el.remove(), 500);  // 사라진 뒤 DOM에서도 뺀다
+  }, wait);
+}
+
 // ---------- 시작 ----------
 (async function init() {
+  window.__t0 = Date.now();
   await applyTheme();
   initServiceWorker();
   initResizers();
   refreshSyncBar();
   flushOutbox();
-  if (await hasToken()) loadList(false);
-  else openSetup();
+  try {
+    if (await hasToken()) await loadList(false);
+    else openSetup();
+  } finally {
+    hideSplash();                        // 실패해도 스플래시에 갇히지 않게
+  }
 })();
+
+// 어떤 이유로든 초기화가 멈추면 3초 뒤엔 무조건 치운다
+setTimeout(hideSplash, 3000);

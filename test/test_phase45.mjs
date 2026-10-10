@@ -98,12 +98,63 @@ const srs = {};
 R.gradeCard(srs, 'c1', true);
 ok('맞히면 box 증가', srs.c1.box === 1);
 ok('다음 복습일 설정', srs.c1.due > Date.now());
-R.gradeCard(srs, 'c1', true);
-ok('연속으로 맞히면 간격 늘어남', srs.c1.box === 2);
+// FSRS로 바꿨다(2026-10-10) — 상자 대신 S(안정성)·D(난이도)를 카드마다 들고 간다
+const S1 = srs.c1.S;
+R.gradeCard(srs, 'c1', true, { now: srs.c1.due });
+ok('연속으로 맞히면 안정성이 커진다', srs.c1.S > S1, `${S1.toFixed(1)} → ${srs.c1.S.toFixed(1)}`);
 const dueAt2 = srs.c1.due;
-R.gradeCard(srs, 'c1', false);
-ok('틀리면 box 0으로', srs.c1.box === 0);
-ok('틀리면 간격 짧아짐', srs.c1.due < dueAt2);
+const D1 = srs.c1.D;
+R.gradeCard(srs, 'c1', false, { now: srs.c1.due });
+ok('틀리면 안정성이 줄어든다', srs.c1.S < 2, `S=${srs.c1.S.toFixed(2)}`);
+ok('틀리면 난이도가 올라간다', srs.c1.D > D1, `${D1.toFixed(1)} → ${srs.c1.D.toFixed(1)}`);
+ok('틀리면 내일 다시 본다',
+  Math.round((srs.c1.due - srs.c1.last) / 86400000) === 1, `${Math.round((srs.c1.due - srs.c1.last) / 86400000)}일`);
+ok('틀린 횟수가 쌓인다', srs.c1.lapses >= 1);
+
+// 쉬운 카드와 어려운 카드의 간격이 갈린다 — Leitner가 못 하던 것
+const fs3 = {};
+let t3 = Date.now();
+for (let i = 0; i < 4; i++) { R.gradeCard(fs3, 'easy', true, { now: t3 }); t3 = fs3.easy.due; }
+let t4 = Date.now();
+for (let i = 0; i < 4; i++) { R.gradeCard(fs3, 'hard', i >= 3, { now: t4 }); t4 = fs3.hard.due; }
+const gap = (id) => Math.round((fs3[id].due - fs3[id].last) / 86400000);
+ok('쉬운 카드는 간격이 길어진다', gap('easy') > gap('hard'), `쉬움 ${gap('easy')}일 vs 어려움 ${gap('hard')}일`);
+ok('어려운 카드는 난이도가 높다', fs3.hard.D > fs3.easy.D, `${fs3.hard.D.toFixed(1)} vs ${fs3.easy.D.toFixed(1)}`);
+
+// 시험 일정 연동 — 간격이 시험을 넘지 않는다.
+// 간격이 길게 자란 카드(여러 번 맞혀 S가 큰 상태)라야 당기는 효과가 보인다.
+const grow = (srsObj, opts) => {
+  let t = Date.now();
+  for (let i = 0; i < 6; i++) { R.gradeCard(srsObj, 'x', true, { now: t, ...opts }); t = srsObj.x.due; }
+};
+const fs6 = {};
+grow(fs6, {});                                    // 시험 없음
+const plainGap = Math.round((fs6.x.due - fs6.x.last) / 86400000);
+// 같은 상태에서 "시험이 모레"일 때만 달라지는지 본다(지금 시점 고정)
+const fs5 = { x: { ...fs6.x } };
+const nowT = Date.now();
+const examAt = nowT + 2 * 86400000;
+R.gradeCard(fs5, 'x', true, { now: nowT, examAt });
+const examGap = Math.round((fs5.x.due - nowT) / 86400000);
+R.gradeCard(fs6, 'x', true, { now: nowT });
+const plainGap2 = Math.round((fs6.x.due - nowT) / 86400000);
+ok('복습이 시험 전으로 당겨진다', examGap < plainGap2, `시험있음 ${examGap}일 vs 없음 ${plainGap2}일`);
+ok('시험 전에 한 번은 더 본다', fs5.x.due <= examAt, `${examGap}일 뒤 (시험 2일 뒤)`);
+
+// 기억률 예측
+ok('방금 본 카드는 기억률이 높다', R.retrievability(fs6.x) > 0.9);
+ok('오래 안 본 카드는 기억률이 떨어진다',
+  R.retrievability(fs6.x, Date.now() + 400 * 86400000) < 0.5);
+
+// 시간표에서 시험일 읽기
+const tt = ['| 날짜 | 요일 | 교시 | 주제 |', '|---|---|---|---|',
+  '| 2026-10-14 | 수 | 1 | 중환자실의 구조와 운영 & 중증도 분류 및 평가 |',
+  '| 2026-10-23 | 금 | 2~3 | 종합 시험(90분) |'].join('\n');
+const exams = R.parseExamDates(tt);
+ok('시험만 골라낸다(강의 제목 제외)', exams.length === 1 && /종합 시험/.test(exams[0].name),
+  exams.map((e) => e.name).join(','));
+ok('다음 시험을 찾는다', R.nextExam(exams, Date.parse('2026-10-20')).date === '2026-10-23');
+ok('지난 시험은 안 고른다', R.nextExam(exams, Date.parse('2026-11-01')) === null);
 
 const sample = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
 const srs2 = { a: { box: 4, due: Date.now() + 1e9 }, b: { box: 1, due: 0 } };

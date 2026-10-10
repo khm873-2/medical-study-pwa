@@ -32,6 +32,8 @@ const errors = [];
 page.on('pageerror', (e) => errors.push(String(e.message)));
 
 await page.goto(URL_BASE, { waitUntil: 'networkidle0' });
+// 첫 화면(스플래시)이 걷힐 때까지 기다린다 — 안 그러면 클릭·드래그가 전부 막힌다
+await page.waitForFunction(() => !document.getElementById('splash'), { timeout: 6000 }).catch(() => {});
 
 /** 페이지 안에서 평가하고 {name, ok, detail}[] 를 받는다. */
 const results = [];
@@ -429,7 +431,11 @@ await run('노트 탭', () => {
 await run('유령 참조', () => {
   const out = [];
   const ids = new Set([...document.querySelectorAll('[id]')].map((e) => e.id));
-  return fetch('/js/app.js').then((r) => r.text()).then(async (appSrc) => {
+  // 스플래시는 역할이 끝나면 DOM에서 빠진다 — 소스에 있으면 정상이다
+  return fetch('/index.html').then((r) => r.text()).then((htmlSrc) => {
+    [...htmlSrc.matchAll(/id="([^"]+)"/g)].forEach((m) => ids.add(m[1]));
+    return fetch('/js/app.js').then((r) => r.text());
+  }).then(async (appSrc) => {
     const srcs = { 'app.js': appSrc };
     for (const f of ['quiz.js', 'wiki.js', 'ask.js', 'reader.js', 'search.js', 'pen.js', 'markdown.js']) {
       srcs[f] = await fetch(`/js/${f}`).then((r) => r.text());
@@ -818,9 +824,9 @@ await run('키 전환', async () => {
         content: { parts: [{ text: '[인상]\n정상 응답' }] }, finishReason: 'STOP' }] }) };
     };
     const r = await G.breakdown({ q: '테스트 지문', opts: ['가', '나'] });
+    const order = used.filter((k, i) => k !== used[i - 1]);   // 연속 중복(폴백)은 한 번으로
     out.push({ name: '1번 키가 429면 다음 키로 넘어간다',
-      ok: used.length === 2 && used[0] === 'AIza_KEY_ONE' && used[1] === 'AIza_KEY_TWO',
-      detail: used.join(' → ') });
+      ok: order.join(',') === 'AIza_KEY_ONE,AIza_KEY_TWO', detail: used.join(' → ') });
     out.push({ name: '전환 후 정상 응답을 받는다', ok: r.impression === '정상 응답', detail: r.impression });
 
     // ② 막힌 키는 쉬는 중으로 표시되고 다음 호출에서 건너뛴다
@@ -856,8 +862,9 @@ await run('키 전환', async () => {
         content: { parts: [{ text: '[인상]\n살았다' }] }, finishReason: 'STOP' }] }) };
     };
     const r2 = await G.breakdown({ q: 'y', opts: ['가', '나'] });
+    const order2 = used2.filter((k, i) => k !== used2[i - 1]);
     out.push({ name: '잘못된 키는 건너뛰고 쓸 수 있는 키를 쓴다',
-      ok: r2.impression === '살았다' && used2.length === 2, detail: used2.join(' → ') });
+      ok: r2.impression === '살았다' && order2.join(',') === 'AIza_BAD,AIza_GOOD', detail: used2.join(' → ') });
 
     // ⑤ 키가 하나도 없으면 NO_KEY
     await G.setKeys([]);
@@ -1231,8 +1238,10 @@ await run('카드 관리', async () => {
   R.gradeCard(s2, 'x', false);
   R.gradeCard(s2, 'x', false);
   out.push({ name: '틀릴 때마다 기록이 쌓인다', ok: s2.x.lapses === 2, detail: `lapses=${s2.x.lapses}` });
-  R.gradeCard(s2, 'x', true);
-  out.push({ name: '맞히면 상자가 올라간다', ok: s2.x.box === 1 && s2.x.lapses === 2 });
+  const sBefore = s2.x.S;
+  R.gradeCard(s2, 'x', true, { now: s2.x.due });
+  out.push({ name: '맞히면 안정성이 올라간다(FSRS)', ok: s2.x.S > sBefore && s2.x.lapses === 2,
+    detail: `S ${sBefore.toFixed(2)} → ${s2.x.S.toFixed(2)}` });
 
   // ── 성격별 묶기 ──
   const g = R.groupCards(cards, srs);
@@ -1279,8 +1288,80 @@ await run('카드 관리', async () => {
     && !/cardSkip[\s\S]{0,200}gradeCard/.test(appSrc) });
   out.push({ name: '만든 카드를 저장한다', ok: /saveCards\(cards\)/.test(appSrc) });
   out.push({ name: '복습을 우선순위 큐로 시작한다', ok: /studyQueue\(cards, srsNow\)/.test(appSrc) });
-  out.push({ name: '플래시카드 탭에서 관리로 들어간다', ok: /go\.onclick = openDeck/.test(appSrc) });
+  out.push({ name: '카드 탭이 관리 화면으로 바로 간다',
+    ok: /async function loadCardsTab\(\)[\s\S]{0,260}openDeck\(\)/.test(appSrc) });
   out.push({ name: '자주 틀리면 알려준다', ok: /isLeech\(cardDeck\.srs/.test(appSrc) });
+  return out;
+});
+
+// ══════════ 5o. 스트리밍 — 40초 멍때리지 않게 (2026-10-10) ══════════
+await run('스트리밍', async () => {
+  const out = [];
+  const G = await import('/js/gemini.js');
+  const realFetch = window.fetch;
+  try {
+    await G.setKeys(['AIza_STREAM_TEST']);
+    G.resetLimiter();
+
+    // SSE를 흉내 낸다 — 조각이 나눠서 온다
+    const pieces = [
+      '[단서]\n5년 전부터 당뇨병 || 유착관절낭염 위험인자\n',
+      '체온 36.7 || 감염성 관절염 배제\n[인상]\n',
+      '당뇨 환자의 전 방향 수동 운동제한\n[선지]\n① || X || 석회 침착 없음\n② || O || 당뇨 기저력과 부합\n',
+    ];
+    let url = '';
+    window.fetch = async (u) => {
+      url = String(u);
+      const enc = new TextEncoder();
+      let i = 0;
+      return {
+        ok: true,
+        body: { getReader: () => ({ read: async () => {
+          if (i >= pieces.length) return { done: true };
+          const chunk = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: pieces[i++] }] } }] })}\n\n`;
+          return { done: false, value: enc.encode(chunk) };
+        } }) },
+      };
+    };
+
+    const q = { q: '54세 여자가 5년 전부터 당뇨병을 치료 중이다. 체온 36.7도이다.', opts: ['가', '나'] };
+    const snapshots = [];
+    const final = await G.breakdown(q, false, (partial) => {
+      snapshots.push({ clues: partial.clues.length, imp: !!partial.impression, opts: partial.options.length });
+    });
+
+    out.push({ name: '스트리밍 주소로 호출한다', ok: /streamGenerateContent\?alt=sse/.test(url), detail: url.slice(-40) });
+    out.push({ name: '다 받기 전에 중간 결과가 온다', ok: snapshots.length >= 2, detail: `${snapshots.length}번 갱신` });
+    out.push({ name: '첫 갱신에 이미 단서가 있다', ok: snapshots[0] && snapshots[0].clues >= 1,
+      detail: JSON.stringify(snapshots[0]) });
+    out.push({ name: '갱신될수록 내용이 늘어난다',
+      ok: snapshots[snapshots.length - 1].clues >= snapshots[0].clues,
+      detail: snapshots.map((x) => x.clues).join('→') });
+    out.push({ name: '마지막에 인상·선지까지 채워진다',
+      ok: !!final.impression && final.options.length === 2, detail: final.impression });
+    out.push({ name: '최종 결과가 온전하다', ok: final.clues.length === 2 });
+
+    // 스트림을 못 쓰는 환경이면 평소 방식으로 떨어진다
+    G.resetLimiter();
+    window.fetch = async () => ({ ok: true, body: null,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: '[인상]\n폴백 동작' }] }, finishReason: 'STOP' }] }) });
+    const fb = await G.breakdown({ q: '다른 지문', opts: ['가', '나'] });
+    out.push({ name: '스트림이 없으면 평소 방식으로 받는다', ok: fb.impression === '폴백 동작', detail: fb.impression });
+
+    // 한도 처리가 스트리밍에서도 같게 동작한다
+    G.resetLimiter();
+    window.fetch = async () => ({ ok: false, status: 429, text: async () => '{"retryDelay":"25s"}' });
+    let msg = '';
+    try { await G.breakdown({ q: 'x', opts: ['가', '나'] }); } catch (e) { msg = e.message; }
+    out.push({ name: '스트리밍도 429를 RATE_WAIT으로 바꾼다', ok: /^RATE_WAIT:\d+$/.test(msg), detail: msg });
+
+    await G.setKeys([]);
+    G.resetLimiter();
+  } finally { window.fetch = realFetch; }
+
+  const appSrc = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '뜯어보기가 오는 대로 그린다', ok: /gem\.breakdown\(q, false, \(partial\)/.test(appSrc) });
+  out.push({ name: 'AI 답변도 오는 대로 그린다', ok: /onProgress: \(full\) =>[\s\S]{0,60}renderMarkdown\(full\)/.test(appSrc) });
   return out;
 });
 

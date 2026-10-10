@@ -19,6 +19,25 @@
 <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png?v=3">
 </head>
 <body>
+<!-- 처음 열 때 잠깐 뜨는 화면. 앱이 준비되면 스르르 사라진다.
+     자주 보이면 성가시니 **한 번 뜨고 짧게** 끝낸다(2026-10-10). -->
+<div id="splash">
+  <div class="splash-art">
+    <div class="splash-speed"><i></i><i></i><i></i></div>
+    <div class="splash-train">
+      <div class="splash-win">
+        <span class="sl sl1"></span><span class="sl sl2"></span><span class="sl sl3"></span>
+        <svg class="splash-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13l6 6L21 5"/></svg>
+      </div>
+      <span class="splash-lamp"></span>
+      <span class="splash-wheel w1"></span><span class="splash-wheel w2"></span>
+    </div>
+    <div class="splash-rail"></div>
+  </div>
+  <div class="splash-name">달모</div>
+  <div class="splash-tag">씽씽! 달리는 모의고사</div>
+</div>
+
 <div id="app">
 
   <!-- ======== 설정 / 온보딩 ======== -->
@@ -146,7 +165,7 @@
       <button class="tab active" data-tab="quizzes">퀴즈</button>
       <button class="tab" data-tab="exams">모의고사</button>
       <button class="tab" data-tab="notes">노트 읽기</button>
-      <button class="tab" data-tab="cards">플래시카드</button>
+      <button class="tab" data-tab="cards">카드</button>
     </div>
     <div id="quizBody"></div>
     <div id="listBody" class="hidden"></div>
@@ -224,8 +243,14 @@
       <h1>카드 관리</h1>
       <button class="icon-btn" id="deckRefresh" title="새로고침">↻</button>
     </header>
-    <div id="deckStats" class="deck-stats"></div>
-    <div id="deckBody"></div>
+    <div id="deckExam" class="deck-exam hidden"></div>
+    <div class="deck-split">
+      <nav class="deck-side" id="deckSide"></nav>
+      <div class="deck-main-col">
+        <div id="deckStats" class="deck-stats"></div>
+        <div id="deckBody"></div>
+      </div>
+    </div>
   </section>
 
   <!-- ======== 풀이 ======== -->

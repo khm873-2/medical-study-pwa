@@ -23,12 +23,24 @@ global.fetch = async (url, opts) => {
   lastCall = { url, opts, body: JSON.parse(opts.body) };
   return nextResponse;
 };
-const resp = (status, body) => ({
-  ok: status >= 200 && status < 300,
-  status,
-  json: async () => body,
-  text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
-});
+// 스트리밍 응답을 흉내 낸다(2026-10-10). body가 없으면 코드가 비스트리밍으로 폴백하면서
+// 같은 요청을 한 번 더 보내 큐가 어긋난다 — 목도 SSE를 돌려주게 맞춘다.
+const resp = (status, body) => {
+  const ok = status >= 200 && status < 300;
+  const r = {
+    ok,
+    status,
+    json: async () => body,
+    text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+  };
+  if (ok && body && typeof body === 'object') {
+    const sse = `data: ${JSON.stringify(body)}\n\n`;
+    const bytes = new TextEncoder().encode(sse);
+    let sent = false;
+    r.body = { getReader: () => ({ read: async () => (sent ? { done: true } : (sent = true, { done: false, value: bytes })) }) };
+  }
+  return r;
+};
 
 // ---- 키 관리 ----
 ok('처음엔 키 없음', !(await G.hasKey()));
