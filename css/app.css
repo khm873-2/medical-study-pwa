@@ -1480,3 +1480,12 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
   background: color-mix(in srgb, var(--warn) 16%, transparent);
   border-color: var(--warn); color: var(--warn);
 }
+
+/* 노트에서 가져온 Q&A 카드 — 답이 여러 줄(목록·표 설명)인 경우가 많다.
+   줄바꿈을 살리지 않으면 "① … ② …"가 한 덩어리로 뭉쳐 읽을 수 없다(2026-10-10). */
+.ans-row, .deck-a { white-space: pre-wrap; }
+/* 긴 답은 무한히 늘어나지 않게 — 카드 안에서 스크롤한다 */
+.card-answer { max-height: 46vh; overflow-y: auto; }
+.deck-a { max-height: 9em; overflow-y: auto; font-weight: 600; }
+/* 질문은 문장이라 왼쪽 정렬이 자연스럽다(기존 빈칸 카드는 가운데였다) */
+.card-context.qa-q { text-align: left; }

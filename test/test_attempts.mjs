@@ -184,6 +184,96 @@ const mk = (id, over = {}) => ({
     JSON.stringify(exams.map((e) => e.date)));
 }
 
+// ---------- 노트에 손으로 쓴 Q&A → 카드 ----------
+{
+  // 포맷 변형을 손으로 짚는다
+  const md = [
+    '## 1. 천식의 진단',
+    '',
+    '### PFT 먼저',
+    '**Q. 천식을 정의하는 3요소는?**',
+    '🔴 **①기도의 만성 염증 ②기도과민성 ③가역적 기도폐쇄**. COPD도 ①②는 있다.',
+    '',
+    '**Q. 답이 여러 줄인 경우?**',
+    '- 첫 줄',
+    '- 둘째 줄',
+    '',
+    '**Q. 답이 없는 질문?**',
+    '',
+    '## 2. 다음 장',
+    '**Q. 제목이 바뀌면 사슬도 바뀌나?**',
+    '⭐ 바뀐다.',
+    '',
+  ].join('\n');
+  const cs = R.qaCards(md, { path: '01_임종평_전범위/03_호흡기/02_천식.md', title: '02_천식' });
+
+  ok('답 없는 질문은 카드가 안 된다', cs.length === 3, `${cs.length}장: ${cs.map((c) => c.question).join(' | ')}`);
+  ok('질문에서 Q. 과 ** 를 뗀다', cs[0].question === '천식을 정의하는 3요소는?', cs[0].question);
+  ok('답에서 마크다운·마커를 뗀다',
+    cs[0].answers[0].startsWith('①기도의 만성 염증'), cs[0].answers[0].slice(0, 40));
+  ok('🔴은 기출 근거로 기록된다', cs[0].examBacked === true && cs[0].starred === false);
+  ok('⭐은 중요 표시로 기록된다', cs[2].starred === true && cs[2].examBacked === false);
+  ok('제목 사슬이 붙는다', cs[0].heading === '1. 천식의 진단 › PFT 먼저', cs[0].heading);
+  ok('제목이 바뀌면 사슬도 갈린다', cs[2].heading === '2. 다음 장', cs[2].heading);
+  ok('여러 줄 답을 줄바꿈째로 담는다', cs[1].answers[0] === '- 첫 줄\n- 둘째 줄', JSON.stringify(cs[1].answers[0]));
+  ok('카드 종류가 qa', cs.every((c) => c.kind === 'qa'));
+  ok('카드 화면이 쓰는 필드가 다 있다',
+    cs.every((c) => c.id && c.topic && c.contextHtml && c.answers.length === 1));
+  ok('countQa가 카드 수와 맞는다', R.countQa(md) === cs.length, `${R.countQa(md)} vs ${cs.length}`);
+
+  // 내용 안에 =나 *가 하나 섞인 경우 — 실제 노트에서 56장이 이 때문에 깨졌다
+  const tricky = '**Q. 감마글로불린 패턴은?**\n==IgG↑=자가면역간염, IgM↑=PBC==. 끝.\n';
+  const t = R.qaCards(tricky, {})[0];
+  ok('==안에 = 가 있어도 기호를 벗긴다', !/==/.test(t.answers[0]), t.answers[0]);
+  ok('내용은 보존된다', /IgG↑=자가면역간염/.test(t.answers[0]), t.answers[0]);
+
+  const unbal = '**Q. 짝이 안 맞는 경우?**\n선행/악행금지가 우선한다== — 설명.\n';
+  ok('짝 안 맞는 기호도 떼어낸다', !/==/.test(R.qaCards(unbal, {})[0].answers[0]));
+
+  // HTML 주입 — 질문이 그대로 innerHTML로 들어가므로
+  const xss = '**Q. <img src=x onerror=alert(1)>는?**\n답.\n';
+  const x = R.qaCards(xss, {})[0];
+  ok('질문을 HTML로 넣기 전에 이스케이프한다',
+    x.contextHtml.includes('&lt;img') && !x.contextHtml.includes('<img'), x.contextHtml);
+
+  // 너무 긴 답은 자른다
+  const long = `**Q. 긴 답?**\n${'가'.repeat(1200)}\n`;
+  const L = R.qaCards(long, {})[0];
+  ok('너무 긴 답은 자르고 표시한다',
+    L.truncated === true && L.answers[0].length <= R.QA_MAX + 2, `${L.answers[0].length}자`);
+
+  // ---------- 실제 vault ----------
+  const roots = ['01_임종평_전범위', '02_Wiki'];
+  const all = [];
+  let files = 0;
+  const walk = (d) => {
+    for (const f of readdirSync(d, { withFileTypes: true })) {
+      const p = `${d}/${f.name}`;
+      if (f.isDirectory()) walk(p);
+      else if (f.name.endsWith('.md') && !f.name.startsWith('_')) {
+        const got = R.qaCards(readFileSync(p, 'utf8'), { path: p.replace(`${VAULT}/`, ''), title: f.name });
+        if (got.length) { files++; all.push(...got); }
+      }
+    }
+  };
+  roots.forEach((r) => walk(`${VAULT}/${r}`));
+
+  ok('실제 노트에서 4,000장 넘게 나온다', all.length > 4000, `${all.length}장 / 파일 ${files}개`);
+  ok('id가 겹치지 않는다', new Set(all.map((c) => c.id)).size === all.length,
+    `${all.length - new Set(all.map((c) => c.id)).size}건 중복`);
+  ok('마크다운 기호가 남은 카드가 없다',
+    !all.some((c) => /\*\*|==|\[\[/.test(c.question) || /\*\*|==|\[\[/.test(c.answers[0])),
+    JSON.stringify(all.filter((c) => /\*\*|==/.test(c.answers[0])).slice(0, 1).map((c) => c.question)));
+  ok('질문이 비어 있는 카드가 없다', all.every((c) => c.question.length >= 3));
+  ok('답이 비어 있는 카드가 없다', all.every((c) => c.answers[0].length >= 2));
+  ok('모든 카드에 제목 사슬이 있다', all.every((c) => c.heading),
+    `${all.filter((c) => !c.heading).length}장 없음`);
+  const red = all.filter((c) => c.examBacked).length;
+  ok('기출 근거(🔴) 카드가 절반 넘는다', red > all.length * 0.4, `${red}/${all.length}`);
+  ok('잘린 카드는 드물다', all.filter((c) => c.truncated).length < all.length * 0.02,
+    `${all.filter((c) => c.truncated).length}장`);
+}
+
 console.log(`test_attempts.mjs  ${fail.length ? '❌' : '✅'} ${pass}개 통과${fail.length ? `, ${fail.length}개 실패` : ''}`);
 fail.forEach((f) => console.log('   ✗ ' + f));
 process.exit(fail.length ? 1 : 0);

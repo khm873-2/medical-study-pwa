@@ -97,6 +97,124 @@ export function extractCards(note) {
   return cards;
 }
 
+// ───────────── 노트에 손으로 쓴 Q&A → 카드 (2026-10-10) ─────────────
+//
+// 왜 따로 만드나: 임종평·위키 노트는 이미 `**Q. …?**` 다음 줄에 답이 오는 꼴로
+// 4,800장 넘게 쓰여 있다. 하이라이트에서 기계적으로 뽑은 카드와 달리 **질문을
+// 직접 쓴 것**이라 품질이 비교가 안 되는데, 앱이 한 장도 모르고 있었다.
+//
+// 🔴 = 실제 기출에 근거가 있는 항목, ⭐ = AI가 고른 핵심. 이 두 마커가 노트에
+// 이미 깔려 있으므로 우선순위를 따로 매길 필요가 없다.
+
+const QA_Q = /^\*\*Q\.\s*([\s\S]+?)\*\*\s*$/;
+const MD_HEAD = /^(#{1,6})\s+(.*)$/;
+/** 카드 하나가 지나치게 길면 외울 단위가 아니다 — 잘라서 "노트에서 보기"로 넘긴다. */
+export const QA_MAX = 700;
+
+/**
+ * 마크다운 강조·링크 기호를 떼고 사람이 읽는 글자만 남긴다.
+ *
+ * ⚠️ 내용 안에 `=`나 `*`가 하나 들어간 경우가 흔하다
+ * (`==IgG↑=자가면역간염==`, `==3cm 초과=피부경유배액술==`).
+ * `[^=]+` 처럼 잡으면 이것들이 안 벗겨져 카드에 `==`가 그대로 남는다 —
+ * 실측 4,716장 중 56장이 그랬다. 그래서 비탐욕 `[\s\S]*?`로 잡는다(2026-10-10).
+ */
+function plainMd(s) {
+  return String(s)
+    .replace(/!\[\[[^\]]+\]\]/g, '')                   // 임베드 이미지
+    .replace(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g, '$1')  // 위키링크
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/==([\s\S]*?)==/g, '$1')
+    .replace(/\*\*([\s\S]*?)\*\*/g, '$1')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1$2')
+    .replace(/^\s*>\s?/gm, '')
+    // 노트에 짝이 안 맞는 기호가 남은 경우(실측 4,716장 중 4장) 그냥 떼어낸다 —
+    // 카드는 평문으로 보여주므로 기호를 남겨둘 이유가 없다.
+    .replace(/==|\*\*|\[\[|\]\]/g, '')
+    .trim();
+}
+
+/**
+ * 노트 마크다운에서 `**Q. …**` + 다음 줄들을 카드로 뽑는다.
+ *
+ * @param {string} md
+ * @param {object} [meta] {path, title}
+ * @returns {Array} 카드 배열(카드 화면이 쓰는 스키마: topic/contextHtml/answers)
+ */
+export function qaCards(md, { path = '', title = '' } = {}) {
+  const lines = String(md).split('\n');
+  const out = [];
+  const trail = [];            // 현재 위치의 제목 사슬
+
+  for (let i = 0; i < lines.length; i++) {
+    const h = lines[i].match(MD_HEAD);
+    if (h) {
+      const level = h[1].length;
+      trail.length = Math.max(0, level - 1);
+      trail[level - 1] = plainMd(h[2]);
+      continue;
+    }
+    const q = lines[i].match(QA_Q);
+    if (!q) continue;
+
+    // 답 = 빈 줄이 나오거나 다음 질문·제목이 나올 때까지
+    const body = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      const l = lines[j];
+      if (!l.trim()) break;
+      if (QA_Q.test(l) || MD_HEAD.test(l)) break;
+      body.push(l);
+    }
+    i += body.length;
+    if (!body.length) continue;              // 답이 비면 카드가 안 된다
+
+    const rawAnswer = body.join('\n');
+    const examBacked = /🔴/.test(rawAnswer);
+    const starred = /⭐/.test(rawAnswer);
+    let answer = plainMd(rawAnswer).replace(/^[🔴⭐\s]+/, '').trim();
+    let truncated = false;
+    if (answer.length > QA_MAX) { answer = answer.slice(0, QA_MAX).trim() + ' …'; truncated = true; }
+
+    const question = plainMd(q[1]).replace(/^[🔴⭐\s]+/, '').trim();
+    if (!question || !answer) continue;
+
+    const heading = trail.filter(Boolean).join(' › ');
+    out.push({
+      id: `qa:${path}#${out.length}`,
+      kind: 'qa',
+      notePath: path,
+      noteTitle: title,
+      heading,
+      topic: heading,
+      question,
+      // 카드 화면은 contextHtml을 그대로 넣는다 — 질문은 평문이므로 이스케이프한다
+      contextHtml: escapeForCard(question),
+      answers: [answer],
+      starred,
+      examBacked,
+      truncated,
+    });
+  }
+  return out;
+}
+
+function escapeForCard(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/** 노트 하나에 Q&A가 몇 장 들어있나 — 가져오기 화면에 개수를 보여주려고. */
+export function countQa(md) {
+  let n = 0;
+  const lines = String(md).split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!QA_Q.test(lines[i])) continue;
+    const next = lines[i + 1];
+    if (next && next.trim() && !QA_Q.test(next) && !MD_HEAD.test(next)) n++;
+  }
+  return n;
+}
+
 export async function loadSrs() {
   return (await kvGet('srs')) || {};
 }

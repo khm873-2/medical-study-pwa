@@ -16,7 +16,7 @@ import {
   loadSrs, saveSrs, dueCards, gradeCard, srsStats, keepAwake, cardsFromBox,
   studyQueue, groupCards, suspendCard, unsuspendCard, buryCard, toggleStar,
   isStarred, isSuspended, isLeech, LEECH_AT, retrievability, parseExamDates, nextExam,
-  parseSchedule, lecturesFor, dayKey,
+  parseSchedule, lecturesFor, dayKey, qaCards,
 } from './reader.js';
 import { search, cacheSubject, storageInfo } from './search.js';
 import {
@@ -2064,6 +2064,8 @@ function renderCard() {
   const ctx = document.getElementById('cardContext');
   if (c.contextHtml) ctx.innerHTML = c.contextHtml;    // 표·서식을 그대로 살린다
   else ctx.textContent = c.context || '';
+  // 노트에서 가져온 Q&A는 빈칸이 아니라 문장형 질문이라 왼쪽 정렬이 읽기 쉽다
+  ctx.classList.toggle('qa-q', c.kind === 'qa');
 
   const ans = document.getElementById('cardAnswer');
   const list = c.answers && c.answers.length ? c.answers : [c.answer].filter(Boolean);
@@ -2207,10 +2209,20 @@ async function openDeck(keep = false) {
   deckView.srs = srs;
   if (!deckView.exam) loadExamDate().then(() => paintExamBar());
 
+  // 카드가 0장이면 **가져오기로 보낸다** — 여기서 그냥 멈추면 노트의 Q&A를
+  // 끌어올 입구가 없다(처음 쓰는 사람이 딱 이 상태다).
   if (!cards.length) {
     document.getElementById('deckSide').innerHTML = '';
     document.getElementById('deckStats').innerHTML = '';
-    body.innerHTML = '<p class="muted">아직 만든 카드가 없습니다.<br>노트 읽기에서 🃏 를 켜고 펜으로 네모를 쳐보세요.</p>';
+    body.innerHTML = '';
+    body.appendChild(muted('아직 카드가 없습니다. 노트에 써둔 Q&A를 가져오거나, 노트 읽기에서 펜으로 네모를 쳐 만들 수 있습니다.'));
+    const b = document.createElement('button');
+    b.className = 'btn primary full';
+    b.style.marginTop = '10px';
+    b.textContent = '📥 노트에서 Q&A 가져오기';
+    b.onclick = () => { deckView.group = 'import'; renderQaImport(); };
+    body.appendChild(b);
+    paintExamBar();
     return;
   }
   paintExamBar();
@@ -2247,6 +2259,129 @@ function paintExamBar() {
   bar.append(d, t);
 }
 
+// ── 노트에 손으로 쓴 Q&A 가져오기 (2026-10-10) ──
+//
+// 임종평·위키 노트에 `**Q. …?**` 꼴로 직접 쓴 문답이 4,800장 가까이 있는데 앱이
+// 한 장도 몰랐다. 하이라이트에서 기계적으로 뽑은 카드와는 질이 다르다.
+//
+// 개수를 미리 보여주려면 노트 192개를 전부 내려받아야 해서 과목을 누를 때 가져온다.
+
+const ROOT_LABEL = {
+  '98_예습노트_보관': '예습노트',
+  '02_Wiki': '위키',
+  '01_임종평_전범위': '임종평 전범위',
+};
+
+/** 다가오는 시험과 얼마나 겹치나 — 과목 순서를 정하는 데만 쓴다(정확할 필요는 없다). */
+function overlapScore(subject, lectures) {
+  const words = new Set();
+  for (const l of lectures || []) {
+    for (const w of String(l.name).split(/[^가-힣A-Za-z]+/)) {
+      if (w.length >= 2) words.add(w.toLowerCase());
+    }
+  }
+  const s = String(subject).replace(/^\d+_/, '').toLowerCase();
+  let hit = 0;
+  for (const w of words) if (s.includes(w) || w.includes(s)) hit++;
+  return hit;
+}
+
+async function renderQaImport() {
+  const body = document.getElementById('deckBody');
+  const stats = document.getElementById('deckStats');
+  stats.innerHTML = '';
+  const have = deckView.cards.filter((c) => c.kind === 'qa').length;
+  const head = document.createElement('p');
+  head.className = 'muted';
+  head.innerHTML = '노트에 <b>Q. …?</b> 꼴로 직접 쓴 문답을 카드로 가져옵니다.'
+    + ' 🔴(실제 기출 근거)이 붙은 것은 중요 표시로 들어옵니다.'
+    + (have ? `<br>지금까지 가져온 Q&A 카드 ${have}장.` : '');
+  stats.appendChild(head);
+
+  body.innerHTML = '<p class="muted">노트 목록을 불러오는 중…</p>';
+  let groups;
+  try { groups = await noteList(false); }
+  catch (e) { body.innerHTML = ''; body.appendChild(muted(`노트 목록을 못 읽었습니다: ${e.message}`)); return; }
+
+  // 시험이 가까운 과목의 강의 이름으로 순서를 정한다 — 내가 과목 목록을 박아두지 않게
+  let lectures = [];
+  try {
+    const { schedule, exams } = await todayData(false);
+    const next = nextExam(exams);
+    const norm = (s) => String(s || '').replace(/[_\s]/g, '');
+    lectures = next ? schedule.filter((l) => norm(l.src) === norm(next.src)) : [];
+  } catch { /* 순서만 못 정할 뿐이라 그냥 넘어간다 */ }
+
+  const byRoot = new Map();
+  for (const g of groups) {
+    if (!byRoot.has(g.root)) byRoot.set(g.root, []);
+    byRoot.get(g.root).push(g);
+  }
+
+  body.innerHTML = '';
+  for (const [root, gs] of byRoot) {
+    const h = document.createElement('div');
+    h.className = 'today-h';
+    h.textContent = ROOT_LABEL[root] || root.replace(/^\d+_/, '');
+    body.appendChild(h);
+
+    gs.slice().sort((a, b) => overlapScore(b.subject, lectures) - overlapScore(a.subject, lectures)
+      || a.subject.localeCompare(b.subject, 'ko')).forEach((g) => {
+      const row = document.createElement('button');
+      row.className = 'exam-item';
+      const hot = overlapScore(g.subject, lectures) > 0;
+      const name = document.createElement('span');
+      name.className = 'exam-name';
+      name.innerHTML = `<b>${escapeHtml(g.subject.replace(/^\d+_/, ''))}</b>`
+        + `<span class="exam-meta">노트 ${g.notes.length}개${hot ? ' · 이번 시험과 겹침' : ''}</span>`;
+      const tail = document.createElement('span');
+      tail.className = 'exam-progress';
+      tail.textContent = '가져오기 ›';
+      row.append(name, tail);
+      row.onclick = () => importQa(g, row);
+      body.appendChild(row);
+    });
+  }
+}
+
+/** 과목 하나의 노트를 모두 읽어 Q&A 카드를 담는다. */
+async function importQa(group, row) {
+  const tail = row.querySelector('.exam-progress');
+  row.disabled = true;
+  const cards = [];
+  let done = 0;
+  for (const n of group.notes) {
+    tail.textContent = `${done}/${group.notes.length}…`;
+    try {
+      const md = await getText(n.path);
+      cards.push(...qaCards(md, { path: n.path, title: n.name }));
+    } catch { /* 한 노트를 못 읽어도 나머지는 가져온다 */ }
+    done++;
+  }
+  if (!cards.length) {
+    tail.textContent = 'Q&A 없음';
+    row.disabled = false;
+    toast(`${group.subject}에는 Q. 꼴 문답이 없습니다.`);
+    return;
+  }
+
+  // 🔴 실제 기출 근거가 있는 것은 중요 표시로 들어온다 — 우선순위를 노트가 이미 알고 있다
+  const srs = deckView.srs || (await loadSrs());
+  let starred = 0;
+  for (const c of cards) {
+    if ((c.examBacked || c.starred) && !isStarred(srs, c.id)) { toggleStar(srs, c.id); starred++; }
+  }
+  await saveCards(cards);
+  await saveSrs(srs);
+  backup.scheduleBackup();
+
+  tail.textContent = `${cards.length}장 ✓`;
+  toast(`${cards.length}장 가져왔습니다${starred ? ` (기출 ${starred}장은 중요 표시)` : ''}.`);
+  await openDeck(true);          // 목록을 새로 읽어 개수를 갱신한다
+  deckView.group = 'import';
+  renderDeck();
+}
+
 function renderDeck() {
   const { cards, srs } = deckView;
   const g = groupCards(cards, srs);
@@ -2263,15 +2398,21 @@ function renderDeck() {
     ['mature', '익힘', '✓'],
     ['suspended', '버림', '🗑'],
     ['all', '전체', '📚'],
+    ['import', '가져오기', '📥'],
   ];
   for (const [key, label, icon] of TABS) {
-    const n = key === 'all' ? counts.all : counts[key] || 0;
+    const n = key === 'all' ? counts.all
+      : key === 'import' ? cards.filter((c) => c.kind === 'qa').length
+        : counts[key] || 0;
     const b = document.createElement('button');
     b.className = `deck-tab${deckView.group === key ? ' active' : ''}`;
     b.innerHTML = `<span class="dt-ico">${icon}</span><span class="dt-l">${label}</span><span class="dt-n">${n}</span>`;
     b.onclick = () => { deckView.group = key; renderDeck(); };
     side.appendChild(b);
   }
+
+  // 가져오기는 카드 목록이 아니라 "어느 노트에서 끌어올까"를 고르는 화면이다
+  if (deckView.group === 'import') { renderQaImport(); return; }
 
   // ── 요약 + 시작 ──
   const stats = document.getElementById('deckStats');

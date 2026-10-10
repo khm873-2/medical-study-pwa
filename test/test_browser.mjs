@@ -1831,6 +1831,56 @@ await run('찍었음 버튼 생김새', () => {
   return out;
 });
 
+// ══════════ 노트에서 가져온 Q&A 카드 ══════════
+await run('Q&A 가져오기 배선', async () => {
+  const out = [];
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  const reader = await fetch('/js/reader.js').then((r) => r.text());
+  out.push({ name: 'Q&A 파서가 있다', ok: /export function qaCards/.test(reader) });
+  out.push({ name: 'app이 qaCards를 쓴다', ok: /qaCards\(md, \{ path/.test(app) });
+  out.push({ name: '가져오기 화면이 있다', ok: /async function renderQaImport/.test(app) });
+  out.push({ name: '카드 관리에 가져오기 탭이 있다', ok: /\['import', '가져오기'/.test(app) });
+  out.push({ name: '카드가 0장일 때도 가져오기로 갈 수 있다',
+    ok: /노트에서 Q&A 가져오기/.test(app), detail: '처음 쓰는 사람이 딱 이 상태다' });
+  out.push({ name: '🔴 기출 카드는 중요 표시로 들어온다',
+    ok: /c\.examBacked \|\| c\.starred/.test(app) });
+  out.push({ name: '과목 순서를 시험 강의 이름으로 정한다', ok: /function overlapScore/.test(app) });
+  out.push({ name: '질문은 이스케이프해서 넣는다', ok: /escapeForCard/.test(reader) });
+  return out;
+});
+
+await run('Q&A 카드 생김새', () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('cardScreen').classList.remove('hidden');
+
+  const ctx = document.getElementById('cardContext');
+  const ans = document.getElementById('cardAnswer');
+  ctx.classList.add('qa-q');
+  ctx.textContent = '저산소성 서맥인 소아에서 가장 먼저 해야 하는 처치는?';
+  ans.classList.remove('hidden');
+  ans.innerHTML = '<div class="ans-row">① 산소·환기 교정이 1차다.\n② 아트로핀은 미주신경성 서맥용.\n③ 맥박 60 미만 + 관류 저하면 가슴압박.</div>';
+
+  const r = (el) => el.getBoundingClientRect();
+  out.push({ name: '질문이 왼쪽 정렬', ok: getComputedStyle(ctx).textAlign === 'left',
+    detail: getComputedStyle(ctx).textAlign });
+  const row = ans.querySelector('.ans-row');
+  out.push({ name: '답의 줄바꿈이 살아 있다', ok: getComputedStyle(row).whiteSpace === 'pre-wrap',
+    detail: getComputedStyle(row).whiteSpace });
+  out.push({ name: '답이 세 줄로 보인다', ok: r(row).height > 50, detail: `${Math.round(r(row).height)}px` });
+  out.push({ name: '답이 가로로 넘치지 않는다', ok: ans.scrollWidth <= ans.clientWidth + 1,
+    detail: `${ans.scrollWidth} vs ${ans.clientWidth}` });
+
+  // 아주 긴 답 — 화면 밖으로 밀어내지 않고 안에서 스크롤해야 한다
+  row.textContent = Array.from({ length: 40 }, (_, i) => `${i + 1}줄 설명이 길게 이어진다.`).join('\n');
+  const overflowY = getComputedStyle(ans).overflowY;
+  out.push({ name: '긴 답은 카드 안에서 스크롤한다', ok: overflowY === 'auto' || overflowY === 'scroll',
+    detail: overflowY });
+  out.push({ name: '긴 답이 화면 높이를 넘지 않는다', ok: r(ans).height <= window.innerHeight,
+    detail: `${Math.round(r(ans).height)} vs ${window.innerHeight}` });
+  return out;
+});
+
 // 아주 좁은 폭 — 긴 강의명·긴 시험 이름이 가로 스크롤을 만드는지 본다
 await page.setViewport({ width: 390, height: 844 });
 await run('오늘 탭 — 좁은 폭', () => {
