@@ -278,7 +278,9 @@ async function renderKeyList() {
     name.textContent = k.masked;
     const state = document.createElement('span');
     state.className = `key-state${k.ok ? '' : ' cool'}`;
-    state.textContent = k.ok ? `${k.limit - k.used}회 남음` : `${k.waitSec}초 쉬는 중`;
+    state.textContent = k.ok
+      ? (k.known ? `${k.limit - k.used}회 남음` : '사용 가능')
+      : (k.waitSec > 600 ? '오늘 한도 소진' : `${k.waitSec}초 쉬는 중`);
     const del = document.createElement('button');
     del.className = 'key-del';
     del.textContent = '삭제';
@@ -867,24 +869,52 @@ function showRateWait(sec, term) {
   const body = document.getElementById('aiBody');
   const status = document.getElementById('aiStatus');
   let left = sec;
-  const render = async () => {
-    const keys = (await gem.getKeys()).length;
-    body.innerHTML =
-      `<div class="warn-box">넣어둔 키 ${keys}개가 모두 한도에 걸렸습니다. ` +
-      `<b>${left}초</b> 뒤 자동으로 다시 묻습니다.<br>` +
-      `설정에서 <b>키를 더 넣으면</b> 이런 일이 줄어듭니다 — 키마다 한도가 따로입니다.</div>`;
+
+  // 기다리라고만 하면 할 수 있는 게 없다 — 그 자리에서 빠져나갈 길을 준다(2026-10-10)
+  const paint = async () => {
+    const keys = await gem.getKeys();
+    body.innerHTML = '';
+
+    const box = document.createElement('div');
+    box.className = 'warn-box';
+    box.innerHTML = keys.length <= 1
+      ? `키가 <b>1개</b>뿐이라 한도에 걸리면 기다릴 수밖에 없습니다. ` +
+        `<b>다른 구글 계정</b>으로 키를 하나만 더 넣으면 한도가 따로라 거의 안 걸립니다.`
+      : `넣어둔 키 <b>${keys.length}개</b>가 모두 한도에 걸렸습니다. 키를 더 넣으면 줄어듭니다.`;
+    body.appendChild(box);
+
+    const count = document.createElement('p');
+    count.className = 'muted';
+    count.style.margin = '10px 0 12px';
+    count.innerHTML = `<b>${left}초</b> 뒤 자동으로 다시 묻습니다.`;
+    body.appendChild(count);
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap';
+    const add = document.createElement('button');
+    add.className = 'btn primary';
+    add.textContent = '키 추가하기';
+    add.onclick = () => { clearInterval(rateTimer); openSetup(); };
+    const other = document.createElement('button');
+    other.className = 'btn';
+    other.textContent = '다른 앱에서 묻기';
+    other.onclick = () => { clearInterval(rateTimer); fillAskSheet(term); };
+    const now = document.createElement('button');
+    now.className = 'btn';
+    now.textContent = '지금 다시 시도';
+    now.onclick = () => { clearInterval(rateTimer); askNow(term); };
+    row.append(add, other, now);
+    body.appendChild(row);
+
     status.textContent = `대기 중 · 남은 호출 ${await gem.callsLeft()}회`;
   };
-  render();
+
+  paint();
   clearInterval(rateTimer);
   rateTimer = setInterval(() => {
     left--;
-    if (left <= 0) {
-      clearInterval(rateTimer);
-      askNow(term);
-      return;
-    }
-    render();
+    if (left <= 0) { clearInterval(rateTimer); askNow(term); return; }
+    paint();
   }, 1000);
 }
 let rateTimer = null;

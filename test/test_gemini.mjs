@@ -219,21 +219,28 @@ queue = [okResp('다른 답변')];
 const c3 = await G.ask({ term: '캐시테스트', question: { num: 2 } });
 ok('문항이 다르면 새로 질문', c3 === '다른 답변');
 
-// 분당 한도에 도달하면 보내기 전에 막는다
+// 한도는 **가정하지 않고 배운다**(2026-10-10). 지레 막으면 남은 할당량을 못 쓰고
+// "요청이 많습니다"만 보게 된다. 그래서 처음엔 막지 않고, 429를 맞은 뒤부터 막는다.
+G.resetLimiter();
+await G.setKeys(['AIzaTestKey']);
 let n = 0;
-while ((await G.callsLeft()) > 0 && n < 20) {
-  queue = [okResp(`답${n}`)];
-  await G.ask({ term: `연속질문${n}` });
-  n++;
-}
-ok('한도만큼 호출됨', (await G.callsLeft()) === 0, `남은 ${await G.callsLeft()}`);
+for (; n < 12; n++) { queue = [okResp(`답${n}`)]; await G.ask({ term: `연속질문${n}` }); }
+ok('한도를 모를 땐 12번도 그냥 나간다', n === 12, `${n}회`);
+ok('아직 한도를 배우지 않았다', G.learnedLimit('AIzaTestKey') === null);
+
+// 429를 한 번 맞으면 그 키의 한도를 배우고, 다음부터는 보내기 전에 막는다
+nextResponse = resp(429, JSON.stringify({ error: { details: [{ retryDelay: '11s' }] } }));
 let blocked = null;
 try { await G.ask({ term: '한도초과질문' }); } catch (e) { blocked = e.message; }
-ok('한도 넘으면 네트워크 전에 차단', /^RATE_WAIT:\d+$/.test(blocked || ''), blocked);
-const waitSec = Number((blocked || '').split(':')[1]);
+ok('429 → RATE_WAIT', /^RATE_WAIT:\d+$/.test(blocked || ''), blocked);
+ok('그 키의 한도를 배운다', G.learnedLimit('AIzaTestKey') !== null, `${G.learnedLimit('AIzaTestKey')}`);
+
+let blocked2 = null;
+try { await G.ask({ term: '한도초과질문2' }); } catch (e) { blocked2 = e.message; }
+ok('배운 뒤에는 네트워크 전에 막는다', /^RATE_WAIT:\d+$/.test(blocked2 || ''), blocked2);
+const waitSec = Number((blocked2 || '').split(':')[1]);
 ok('대기 시간이 합리적(1~60초)', waitSec >= 1 && waitSec <= 60, `${waitSec}초`);
 
-// rateCheck가 상태를 그대로 알려준다
 const rc = await G.rateCheck();
 ok('rateCheck가 막힌 상태를 알림', rc.ok === false && rc.waitSec > 0, JSON.stringify(rc));
 

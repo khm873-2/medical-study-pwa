@@ -342,10 +342,17 @@ function handleHttpError(status, text, key) {
   }
   if (status === 429 || status === 403) {
     const m = text.match(/"retryDelay"\s*:\s*"(\d+)s"/);
-    const sec = m ? Number(m[1]) : 30;
+    // 일일 한도(PerDay)는 내일까지 안 풀린다 — 분당 한도와 섞으면 쓸 수 있는 키를 버린다
+    const perDay = /PerDay|per day|RequestsPerDay/i.test(text);
+    const sec = perDay ? 6 * 3600 : (m ? Number(m[1]) : 20);
     coolUntil.set(key, Date.now() + sec * 1000);
-    const arr = logOf(key);
-    while (arr.length < RPM_LIMIT) arr.push(Date.now());
+    if (!perDay) {
+      // 이 키의 분당 한도를 배운다 — 방금 통한 만큼이 실제 한도다
+      const used = logOf(key).length;
+      const cap = Math.max(3, used - 1);
+      const prev = learned.get(key);
+      learned.set(key, prev == null ? cap : Math.min(prev, cap));
+    }
     throw new Error('KEY_RATE');
   }
   if (status === 404) throw new Error('MODEL_404');
@@ -400,7 +407,11 @@ async function callOnce({ key, model, system, text: userText, maxTokens, tempera
 //   · **키마다** 분당 호출 수를 세고, 꽉 찬 키는 건너뛴다
 //   · 429가 오면 그 키를 잠시 쉬게 하고 다음 키로 넘어간다
 //   · 모든 키가 막혔을 때만 "기다려라"라고 알린다
-const RPM_LIMIT = 8;             // 키 하나당. 여유를 두고 보수적으로
+// 한도는 모델·계정마다 다르고 구글이 공식 표를 내려서 알 수가 없다(2026-10-10 확인).
+// **가정해서 지레 막으면** 아직 남은 할당량을 못 쓰고 "요청이 많습니다"만 보게 된다.
+// 그래서 처음엔 막지 않고, 429를 맞으면 **그때 그 키의 한도를 배운다.**
+const RPM_FALLBACK = 15;         // 배우기 전 표시용(설정 화면의 "남은 횟수")
+const learned = new Map();       // 키 → 이 키에서 실제로 통한 분당 호출 수
 const callLog = new Map();       // 키 → 최근 호출 시각[]
 const coolUntil = new Map();     // 키 → 이 시각까지 쉰다(429를 맞은 키)
 const answerCache = new Map();   // 질문 → 답변
@@ -417,10 +428,15 @@ function logOf(key) {
 function keyReady(key) {
   const cool = coolUntil.get(key) || 0;
   if (cool > Date.now()) return { ok: false, waitSec: Math.ceil((cool - Date.now()) / 1000) };
+  const cap = learned.get(key);
+  if (cap == null) return { ok: true };          // 아직 한도를 모른다 → 일단 써본다
   const arr = logOf(key);
-  if (arr.length < RPM_LIMIT) return { ok: true };
+  if (arr.length < cap) return { ok: true };
   return { ok: false, waitSec: Math.max(1, Math.ceil((60000 - (Date.now() - arr[0])) / 1000)) };
 }
+
+/** 이 키의 분당 한도(아직 모르면 null). */
+export function learnedLimit(key) { return learned.get(key) ?? null; }
 
 /** 지금 쓸 수 있는 키들(한도가 덜 찬 순서). 전부 막혔으면 빈 배열. */
 export async function usableKeys() {
@@ -444,7 +460,11 @@ export async function rateCheck() {
 /** 남은 호출 수(모든 키 합). 설정 화면 표시용. */
 export async function callsLeft() {
   const keys = await getKeys();
-  return keys.reduce((n, k) => n + ((coolUntil.get(k) || 0) > Date.now() ? 0 : Math.max(0, RPM_LIMIT - logOf(k).length)), 0);
+  return keys.reduce((n, k) => {
+    if ((coolUntil.get(k) || 0) > Date.now()) return n;
+    const cap = learned.get(k) ?? RPM_FALLBACK;
+    return n + Math.max(0, cap - logOf(k).length);
+  }, 0);
 }
 
 /** 키별 상태 — 설정 화면에서 어느 키가 쉬는 중인지 보여준다. */
@@ -452,7 +472,11 @@ export async function keyStatus() {
   const keys = await getKeys();
   return keys.map((k) => {
     const r = keyReady(k);
-    return { key: k, masked: maskKey(k), ok: r.ok, waitSec: r.waitSec || 0, used: logOf(k).length, limit: RPM_LIMIT };
+    return {
+      key: k, masked: maskKey(k), ok: r.ok, waitSec: r.waitSec || 0,
+      used: logOf(k).length, limit: learned.get(k) ?? RPM_FALLBACK,
+      known: learned.has(k),
+    };
   });
 }
 
@@ -460,6 +484,7 @@ export async function keyStatus() {
 export function resetLimiter() {
   callLog.clear();
   coolUntil.clear();
+  learned.clear();
   answerCache.clear();
 }
 

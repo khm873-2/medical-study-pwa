@@ -1510,6 +1510,85 @@ await run('응답 속도', async () => {
   return out;
 });
 
+// ══════════ 5q. 429가 나기 전에 조용히 다른 키로 (2026-10-10) ══════════
+// 한도를 가정해 지레 막으면 아직 남은 할당량을 못 쓰고 "요청이 많습니다"만 보게 된다.
+// 처음엔 막지 않고 써보다가, 429를 맞으면 그때 그 키의 한도를 배운다.
+await run('키 자동 전환', async () => {
+  const out = [];
+  const G = await import('/js/gemini.js');
+  const realFetch = window.fetch;
+
+  const sse = (text) => {
+    const enc = new TextEncoder();
+    let sent = false;
+    const chunk = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] })}\n\n`;
+    return { ok: true, body: { getReader: () => ({ read: async () => (sent ? { done: true } : (sent = true, { done: false, value: enc.encode(chunk) })) }) } };
+  };
+  const err429 = (body) => ({ ok: false, status: 429, text: async () => body });
+
+  try {
+    // ── 1. 지레 막지 않는다 ──
+    G.resetLimiter();
+    await G.setKeys(['K1']);
+    out.push({ name: '한도를 모를 땐 막지 않는다', ok: G.learnedLimit('K1') === null });
+    let calls = 0;
+    window.fetch = async () => { calls++; return sse('[인상]\n됨'); };
+    for (let i = 0; i < 12; i++) await G.breakdown({ q: `지문${i}`, opts: ['가', '나'] });
+    out.push({ name: '12번 연속으로 막힘 없이 나간다', ok: calls === 12, detail: `${calls}회` });
+
+    // ── 2. 429를 맞으면 그 키의 한도를 배운다 ──
+    G.resetLimiter();
+    await G.setKeys(['K1']);
+    let n = 0;
+    window.fetch = async () => (++n <= 5 ? sse('[인상]\n됨') : err429('{"error":{"details":[{"retryDelay":"13s"}]}}'));
+    for (let i = 0; i < 5; i++) await G.breakdown({ q: `a${i}`, opts: ['가', '나'] });
+    let msg = '';
+    try { await G.breakdown({ q: 'a-over', opts: ['가', '나'] }); } catch (e) { msg = e.message; }
+    out.push({ name: '한도에 걸리면 RATE_WAIT', ok: /^RATE_WAIT:\d+$/.test(msg), detail: msg });
+    out.push({ name: '그 키의 한도를 배운다', ok: G.learnedLimit('K1') !== null,
+      detail: `배운 한도 ${G.learnedLimit('K1')}` });
+
+    // ── 3. 키가 여럿이면 429가 사용자에게 안 보인다 ──
+    G.resetLimiter();
+    await G.setKeys(['A', 'B', 'C']);
+    const used = [];
+    window.fetch = async (url, init) => {
+      const k = init.headers['x-goog-api-key'];
+      used.push(k);
+      if (k === 'A') return err429('{"error":{"details":[{"retryDelay":"30s"}]}}');
+      return sse('[인상]\n두 번째 키로 성공');
+    };
+    const r = await G.breakdown({ q: '전환 확인', opts: ['가', '나'] });
+    out.push({ name: '첫 키가 429여도 사용자는 답을 받는다', ok: r.impression === '두 번째 키로 성공',
+      detail: used.join(' → ') });
+    out.push({ name: '막힌 키는 다음 호출에서 건너뛴다',
+      ok: !(await G.usableKeys()).includes('A'), detail: (await G.usableKeys()).join(',') });
+
+    used.length = 0;
+    await G.breakdown({ q: '두 번째 확인', opts: ['가', '나'] });
+    out.push({ name: '두 번째 호출은 A를 아예 안 쓴다', ok: !used.includes('A'), detail: used.join(' → ') });
+
+    // ── 4. 일일 한도와 분당 한도를 가른다 ──
+    G.resetLimiter();
+    await G.setKeys(['D']);
+    window.fetch = async () => err429('{"error":{"message":"Quota exceeded for quota metric GenerateRequestsPerDay"}}');
+    try { await G.breakdown({ q: 'daily', opts: ['가', '나'] }); } catch {}
+    const st = await G.keyStatus();
+    out.push({ name: '일일 한도는 오래 쉰다(분당과 구분)', ok: st[0].waitSec > 3600,
+      detail: `${Math.round(st[0].waitSec / 3600)}시간` });
+    out.push({ name: '일일 한도는 분당 한도로 잘못 배우지 않는다', ok: G.learnedLimit('D') === null });
+
+    G.resetLimiter();
+    await G.setKeys([]);
+  } finally { window.fetch = realFetch; }
+
+  const appSrc = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '대기 화면에서 키를 추가할 수 있다', ok: /키 추가하기/.test(appSrc) });
+  out.push({ name: '대기 화면에서 다른 앱으로 넘길 수 있다', ok: /다른 앱에서 묻기[\s\S]{0,120}fillAskSheet/.test(appSrc) });
+  out.push({ name: '키가 하나뿐이면 그걸 알려준다', ok: /키가 <b>1개<\/b>뿐이라/.test(appSrc) });
+  return out;
+});
+
 // ══════════ 6. 좁은 화면(아이패드 세로) ══════════
 await page.setViewport({ width: 820, height: 1180 });
 await new Promise((r) => setTimeout(r, 120));
