@@ -246,8 +246,11 @@ ok('rateCheck가 막힌 상태를 알림', rc.ok === false && rc.waitSec > 0, JS
   ok('요청에 thinkingBudget: 0 을 넣는다', /thinkingConfig:\s*\{\s*thinkingBudget:\s*0\s*\}/.test(src));
   ok('잘린 응답(MAX_TOKENS)을 감지한다', /finishReason === 'MAX_TOKENS'/.test(src));
   ok('잘려도 거기까지는 보여준다', /e\.partial/.test(src));
-  ok('뜯어보기 예산이 넉넉하다', /maxTokens:\s*1[2-9]\d\d/.test(src),
-    (src.match(/maxTokens:\s*\d+/g) || []).join(' '));
+  // 예산은 "짧을수록 빠르다"와 "잘리면 안 된다" 사이에서 잡는다(2026-10-10: 1600 → 1100).
+  // 잘려도 거기까지 보여주므로 조금 빡빡하게 잡는 게 낫다.
+  const budgets = (src.match(/maxTokens:\s*(\d+)/g) || []).map((x) => Number(x.match(/\d+/)[0]));
+  ok('뜯어보기 예산이 적당하다(900~1400)', budgets.some((n) => n >= 900 && n <= 1400), budgets.join(' '));
+  ok('잘려도 거기까지는 보여준다', /e\.partial/.test(src));
 }
 
 

@@ -1433,6 +1433,83 @@ await run('스트리밍', async () => {
   return out;
 });
 
+// ══════════ 5p. 느린 모델을 알아서 피한다 (2026-10-10) ══════════
+// "느리다"가 한도(429) 문제인지 응답 속도 문제인지는 전혀 다르다.
+// 키를 더 넣으면 한도는 늘지만 한 번의 응답이 빨라지진 않는다 — 속도는 모델이 좌우한다.
+await run('응답 속도', async () => {
+  const out = [];
+  const G = await import('/js/gemini.js');
+  const { kvSet } = await import('/js/db.js');
+  const realFetch = window.fetch;
+  try {
+    G.resetSpeed();
+    await kvSet('models_available', [
+      'models/gemini-2.5-flash', 'models/gemini-2.5-flash-lite', 'models/gemini-2.0-flash',
+    ]);
+    await G.setModel('gemini-2.5-flash');
+
+    // 아직 재본 적이 없으면 사용자가 고른 모델을 쓴다
+    out.push({ name: '측정 전에는 고른 모델을 쓴다', ok: (await G.modelFor()) === 'gemini-2.5-flash' });
+    // 뜯어보기는 처음부터 가벼운 모델
+    out.push({ name: '뜯어보기는 가벼운 모델을 고른다',
+      ok: (await G.modelFor({ light: true })) === 'gemini-2.5-flash-lite',
+      detail: await G.modelFor({ light: true }) });
+
+    // flash가 느리다고 측정되면 가벼운 쪽으로 내려간다
+    for (let i = 0; i < 3; i++) G.recordLatency('gemini-2.5-flash', 14000);
+    const demoted = await G.modelFor();
+    out.push({ name: '느리면 가벼운 모델로 내려간다', ok: demoted !== 'gemini-2.5-flash', detail: demoted });
+
+    // 가벼운 쪽도 느리면 더는 안 내려간다(무한 강등 없음)
+    for (let i = 0; i < 3; i++) G.recordLatency(demoted, 15000);
+    const d2 = await G.modelFor();
+    out.push({ name: '전부 느리면 그냥 쓴다(무한 강등 없음)', ok: typeof d2 === 'string' && d2.length > 3, detail: d2 });
+
+    // 측정값이 쌓이고 중앙값으로 보고된다
+    G.resetSpeed();
+    [1000, 2000, 3000, 9000].forEach((ms) => G.recordLatency('gemini-2.5-flash-lite', ms));
+    out.push({ name: '중앙값으로 센다(튀는 값에 안 흔들린다)',
+      ok: G.medianLatency('gemini-2.5-flash-lite') === 3000,
+      detail: `${G.medianLatency('gemini-2.5-flash-lite')}ms` });
+    const rep = G.speedReport();
+    out.push({ name: '설정에 보여줄 보고서가 나온다', ok: rep.length === 1 && rep[0].n === 4 });
+    out.push({ name: '느림 여부를 표시한다', ok: rep[0].slow === false });
+
+    // 쓸 수 없는 모델은 고르지 않는다
+    await kvSet('models_available', ['models/gemini-2.5-flash']);
+    G.resetSpeed();
+    out.push({ name: '계정에 없는 모델은 안 고른다',
+      ok: (await G.modelFor({ light: true })) === 'gemini-2.5-flash',
+      detail: await G.modelFor({ light: true }) });
+
+    // 실제 호출에서 시간이 기록되는가
+    await kvSet('models_available', null);
+    G.resetSpeed();
+    G.resetLimiter();
+    await G.setKeys(['AIza_SPEED']);
+    window.fetch = async () => {
+      await new Promise((r) => setTimeout(r, 60));
+      const enc = new TextEncoder();
+      let sent = false;
+      const chunk = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: '[인상]\n빠름' }] } }] })}\n\n`;
+      return { ok: true, body: { getReader: () => ({ read: async () => (sent ? { done: true } : (sent = true, { done: false, value: enc.encode(chunk) })) }) } };
+    };
+    await G.breakdown({ q: '속도 측정용 지문', opts: ['가', '나'] });
+    const after = G.speedReport();
+    out.push({ name: '실제 호출 시간이 기록된다', ok: after.length === 1 && after[0].median >= 50,
+      detail: after[0] ? `${after[0].model} ${after[0].median}ms` : '없음' });
+    await G.setKeys([]);
+    G.resetLimiter();
+    G.resetSpeed();
+  } finally { window.fetch = realFetch; }
+
+  const src = await fetch('/js/gemini.js').then((r) => r.text());
+  out.push({ name: '뜯어보기 출력 예산을 줄였다(짧을수록 빠르다)', ok: /maxTokens: 11\d\d/.test(src),
+    detail: (src.match(/maxTokens: \d+/g) || []).join(' ') });
+  out.push({ name: '설정에 속도 표시 자리가 있다', ok: !!document.getElementById('speedBox') });
+  return out;
+});
+
 // ══════════ 6. 좁은 화면(아이패드 세로) ══════════
 await page.setViewport({ width: 820, height: 1180 });
 await new Promise((r) => setTimeout(r, 120));

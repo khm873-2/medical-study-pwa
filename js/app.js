@@ -60,6 +60,7 @@ async function openSetup() {
   updateStorageInfo();
   refreshBackupInfo();
   renderKeyList();
+  renderSpeed();
   runningVersion().then((v) => {
     const el = document.getElementById('appVersion');
     if (el) el.textContent = `앱 버전 ${v}`;
@@ -227,6 +228,37 @@ document.getElementById('saveGeminiBtn').onclick = async () => {
     : `연결됐습니다 (모델: ${r.model}). 밑줄을 그으면 옆에 바로 답변이 뜹니다.`;
   renderKeyList();
 };
+
+/** 실측 응답 속도 — "느리다"가 한도 문제인지 모델 문제인지 눈으로 가른다. */
+function renderSpeed() {
+  const box = document.getElementById('speedBox');
+  if (!box) return;
+  const rows = gem.speedReport();
+  box.innerHTML = '';
+  if (!rows.length) {
+    box.innerHTML = '<p class="muted">아직 측정된 응답 속도가 없습니다 — 몇 번 써보면 여기에 쌓입니다.</p>';
+    return;
+  }
+  const head = document.createElement('p');
+  head.className = 'muted';
+  head.textContent = '이 기기에서 실제로 걸린 시간(중앙값). 느린 모델은 자동으로 피합니다.';
+  box.appendChild(head);
+  for (const r of rows) {
+    const row = document.createElement('div');
+    row.className = 'speed-row';
+    const nm = document.createElement('span');
+    nm.className = 'speed-name';
+    nm.textContent = r.model;
+    const ms = document.createElement('span');
+    ms.className = `speed-ms${r.slow ? ' slow' : ''}`;
+    ms.textContent = `${(r.median / 1000).toFixed(1)}초`;
+    const n = document.createElement('span');
+    n.className = 'speed-n';
+    n.textContent = `${r.n}회`;
+    row.append(nm, ms, n);
+    box.appendChild(row);
+  }
+}
 
 /** 넣어둔 키 목록 — 어느 키가 쉬는 중인지까지 보여준다. */
 async function renderKeyList() {

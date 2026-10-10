@@ -1410,3 +1410,15 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
 .icon-btn.active .ic, .tool.active .ic { stroke-width: 2.1; }
 /* 별·북마크는 켜지면 채워진다 */
 #cardStar.active .ic, #bookmarkBtn.active .ic { fill: currentColor; }
+
+/* 응답 속도 실측 — "느리다"가 한도 문제인지 모델 문제인지 가른다 (2026-10-10) */
+.speed-box { margin-top: 12px; }
+.speed-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; margin-bottom: 5px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-1);
+}
+.speed-name { flex: 1; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.speed-ms { font-size: 13px; font-weight: 700; color: var(--correct); font-variant-numeric: tabular-nums; }
+.speed-ms.slow { color: var(--warn); }
+.speed-n { font-size: 11px; color: var(--sub); font-variant-numeric: tabular-nums; }

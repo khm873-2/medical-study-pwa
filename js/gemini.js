@@ -24,6 +24,74 @@ const PREFERRED = [
   /^models\/gemini-pro-latest$/,
 ];
 
+// ───────────── 속도 (2026-10-10) ─────────────
+//
+// 느리다는 게 **한도(429)** 문제인지 **응답 속도** 문제인지는 전혀 다르다.
+// 키를 더 넣으면 한도는 늘지만 한 번의 응답이 빨라지지는 않는다.
+// 속도를 좌우하는 건 ① 어떤 모델을 쓰는가 ② 답을 얼마나 길게 받는가 둘뿐이다.
+//
+// 그래서 **실제 걸린 시간을 재서** 느린 모델을 피한다. 광고된 수치를 믿지 않고
+// 이 기기·이 계정에서 실측한 값을 쓴다.
+
+/** 가벼운 것부터 무거운 것 순. 뜯어보기처럼 형식이 정해진 변환은 가벼운 쪽이 맞다. */
+const SPEED_ORDER = [
+  'gemini-2.5-flash-lite',
+  'gemini-flash-lite-latest',
+  'gemini-2.0-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-flash-latest',
+  'gemini-2.0-flash',
+];
+
+const SLOW_MS = 9000;          // 이보다 오래 걸리면 "느리다"고 본다
+const latency = new Map();     // 모델 → 최근 소요시간(ms) 배열
+
+export function recordLatency(model, ms) {
+  if (!latency.has(model)) latency.set(model, []);
+  const a = latency.get(model);
+  a.push(ms);
+  if (a.length > 8) a.shift();
+}
+
+/** 이 모델의 중앙값 소요시간(ms). 아직 안 써봤으면 null. */
+export function medianLatency(model) {
+  const a = latency.get(model);
+  if (!a || !a.length) return null;
+  const t = [...a].sort((x, y) => x - y);
+  return t[Math.floor(t.length / 2)];
+}
+
+export function speedReport() {
+  return [...latency.entries()].map(([model, a]) => ({
+    model, n: a.length, median: medianLatency(model), slow: medianLatency(model) > SLOW_MS,
+  })).sort((x, y) => (x.median || 0) - (y.median || 0));
+}
+
+export function resetSpeed() { latency.clear(); }
+
+/**
+ * 이 작업에 쓸 모델을 고른다.
+ * `light`면 가벼운 모델부터, 아니면 사용자가 고른 모델을 쓰되
+ * **그 모델이 실측으로 느리면 더 가벼운 쪽으로 내려간다.**
+ */
+export async function modelFor({ light = false } = {}) {
+  const chosen = await getModel();
+  const avail = (await kvGet('models_available')) || null;   // 마지막 ListModels 결과
+  const canUse = (m) => !avail || avail.includes(`models/${m}`);
+
+  if (light) {
+    const fast = SPEED_ORDER.find((m) => canUse(m) && (medianLatency(m) === null || medianLatency(m) <= SLOW_MS));
+    if (fast) return fast;
+  }
+  const mine = medianLatency(chosen);
+  if (mine !== null && mine > SLOW_MS) {
+    const lighter = SPEED_ORDER.find((m) => m !== chosen && canUse(m)
+      && (medianLatency(m) === null || medianLatency(m) < mine));
+    if (lighter) return lighter;
+  }
+  return chosen;
+}
+
 /** 이 키로 generateContent가 가능한 모델 목록. */
 export async function listModels(key) {
   const k = key || (await getKey());
@@ -36,9 +104,11 @@ export async function listModels(key) {
     throw new Error(`모델 목록을 못 받았습니다 (${res.status})${t ? ' — ' + t.slice(0, 120) : ''}`);
   }
   const json = await res.json();
-  return (json.models || [])
+  const names = (json.models || [])
     .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
     .map((m) => m.name); // "models/gemini-2.5-flash"
+  kvSet('models_available', names).catch(() => {});
+  return names;
 }
 
 /** 쓸 수 있는 모델 중 가장 선호하는 걸 고른다(없으면 첫 번째). */
@@ -120,7 +190,7 @@ const SYSTEM = `당신은 의대생의 시험 공부를 돕는 튜터다. 한국
  */
 export async function ask({ term, question, noteText, subject, lecture, onProgress }, retried = false) {
   if (!(await hasKey())) throw new Error('NO_KEY');
-  const model = await getModel();
+  const model = await modelFor();          // 실측이 느리면 알아서 가벼운 쪽으로
 
   // 같은 걸 또 물으면 보내지 않는다(한도 절약)
   const cacheKey = `${term}|${question ? question.num : ''}`;
@@ -223,6 +293,7 @@ async function streamOnce({ key, model, system, text: userText, maxTokens, tempe
     generationConfig: { temperature, maxOutputTokens: maxTokens, thinkingConfig: { thinkingBudget: 0 } },
   };
   logOf(key).push(Date.now());
+  const t0 = Date.now();
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
     { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body) }
@@ -257,6 +328,7 @@ async function streamOnce({ key, model, system, text: userText, maxTokens, tempe
       if (piece) { full += piece; if (onChunk) onChunk(piece, full); }
     }
   }
+  recordLatency(model, Date.now() - t0);
   if (!full) throw new Error(finish ? `답변을 받지 못했습니다(${finish}).` : '빈 응답을 받았습니다.');
   if (finish === 'MAX_TOKENS') { const e = new Error('TRUNCATED'); e.partial = full.trim(); throw e; }
   return full.trim();
@@ -497,7 +569,8 @@ const BREAK_SYSTEM = `당신은 의대생에게 임상 vignette 푸는 법을 �
  */
 export async function breakdown(question, retried = false, onProgress = null) {
   if (!(await hasKey())) throw new Error('NO_KEY');
-  const model = await getModel();
+  // 형식이 정해진 변환이라 큰 모델이 필요 없다 — 가벼운 쪽이 몇 배 빠르다
+  const model = await modelFor({ light: true });
 
   const cacheKey = `BD2|${question.q.slice(0, 80)}`;
   if (!retried && answerCache.has(cacheKey)) {
@@ -512,7 +585,7 @@ export async function breakdown(question, retried = false, onProgress = null) {
   try {
     // 스트리밍 — 줄이 완성되는 대로 바로 보여준다(다 기다리면 40초가 걸린다)
     const text = await callGeminiStream({
-      model, system: BREAK_SYSTEM, maxTokens: 1600, temperature: 0.2,
+      model, system: BREAK_SYSTEM, maxTokens: 1100, temperature: 0.2,
       text: `[지문]\n${question.q}\n\n[선지]\n${opts}`,
       onChunk: onProgress ? (_piece, full) => onProgress(parseBreakdown(full, question)) : null,
     });
