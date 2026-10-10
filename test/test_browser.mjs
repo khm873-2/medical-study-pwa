@@ -1589,6 +1589,80 @@ await run('키 자동 전환', async () => {
   return out;
 });
 
+// ══════════ 5r. 404·503을 사용자에게 안 보이게 (2026-10-10) ══════════
+// 화면에 "MODEL_404"가 그대로 샜다. 404난 모델을 기억하지 않아 재시도 때 또 골랐기 때문이다.
+await run('모델 오류', async () => {
+  const out = [];
+  const G = await import('/js/gemini.js');
+  const { kvSet } = await import('/js/db.js');
+  const realFetch = window.fetch;
+  const sse = (t) => {
+    const enc = new TextEncoder(); let sent = false;
+    const c = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: t }] } }] })}\n\n`;
+    return { ok: true, body: { getReader: () => ({ read: async () => (sent ? { done: true } : (sent = true, { done: false, value: enc.encode(c) })) }) } };
+  };
+  try {
+    G.resetLimiter(); G.resetModels(); G.resetSpeed();
+    await G.setKeys(['K']);
+    await kvSet('models_available', null);
+    await kvSet('dead_models', null);
+
+    // 404난 모델은 기억했다가 다시는 안 고른다
+    const tried = [];
+    window.fetch = async (url) => {
+      const m = String(url).match(/models\/([^:]+):/)[1];
+      tried.push(m);
+      if (m === 'gemini-2.5-flash-lite') return { ok: false, status: 404, text: async () => 'not found' };
+      return sse('[인상]\n다른 모델로 성공');
+    };
+    const r = await G.breakdown({ q: '404 확인용 지문', opts: ['가', '나'] });
+    out.push({ name: '404여도 다른 모델로 답을 받는다', ok: r.impression === '다른 모델로 성공',
+      detail: tried.join(' → ') });
+    out.push({ name: '죽은 모델을 기억한다', ok: !G.isModelUsable('gemini-2.5-flash-lite') });
+    tried.length = 0;
+    await G.breakdown({ q: '두 번째 지문', opts: ['가', '나'] });
+    out.push({ name: '다음부터는 죽은 모델을 아예 안 고른다',
+      ok: !tried.includes('gemini-2.5-flash-lite'), detail: tried.join(' → ') });
+
+    // 503은 잠깐 쉬었다가 다시 쓴다(영구 제외가 아니다)
+    G.resetModels(); G.resetLimiter();
+    const t2 = [];
+    window.fetch = async (url) => {
+      const m = String(url).match(/models\/([^:]+):/)[1];
+      t2.push(m);
+      if (t2.length === 1) return { ok: false, status: 503, text: async () => '{"error":{"code":503,"message":"high demand"}}' };
+      return sse('[인상]\n붐빔 우회');
+    };
+    const r2 = await G.breakdown({ q: '503 확인용 지문', opts: ['가', '나'] });
+    out.push({ name: '503이어도 다른 모델로 답을 받는다', ok: r2.impression === '붐빔 우회', detail: t2.join(' → ') });
+    out.push({ name: '503 모델은 잠시 쉬게 할 뿐 영구 제외가 아니다',
+      ok: !G.isModelUsable(t2[0]) && !(await G.breakdown({ q: 'x', opts: ['가', '나'] }).catch(() => null)) === false });
+
+    // 내부 코드가 화면에 새지 않는다
+    out.push({ name: '404 메시지가 사람 말이다',
+      ok: !/MODEL_404/.test(G.friendlyModelError('MODEL_404', 'm')) && /설정/.test(G.friendlyModelError('MODEL_404', 'm')) });
+    out.push({ name: '503 메시지가 사람 말이다',
+      ok: !/MODEL_BUSY/.test(G.friendlyModelError('MODEL_BUSY', 'm')) && /붐빕니다/.test(G.friendlyModelError('MODEL_BUSY', 'm')) });
+
+    // 전부 죽으면 그래도 메시지는 사람 말
+    G.resetModels(); G.resetLimiter();
+    window.fetch = async () => ({ ok: false, status: 404, text: async () => 'gone' });
+    let msg = '';
+    try { await G.breakdown({ q: 'all dead', opts: ['가', '나'] }); } catch (e) { msg = e.message; }
+    out.push({ name: '전부 404여도 내부 코드가 안 샌다', ok: !/MODEL_404|MODEL_BUSY/.test(msg), detail: msg.slice(0, 50) });
+
+    await G.setKeys([]); G.resetLimiter(); G.resetModels();
+  } finally { window.fetch = realFetch; }
+
+  // ── 미리 만들어둔 뜯어보기 ──
+  const appSrc = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '미리 만든 파일을 먼저 찾는다', ok: /prebuiltBreakdown\(q\)/.test(appSrc) });
+  out.push({ name: '파일 이름 규칙이 있다', ok: /_뜯어보기\.json/.test(appSrc) });
+  out.push({ name: '없으면 AI로 떨어진다', ok: /catch \{ \/\* 없으면 아래에서 AI로 \*\/ \}/.test(appSrc) });
+  out.push({ name: '미리 준비된 것임을 표시한다', ok: /미리 준비됨/.test(appSrc) });
+  return out;
+});
+
 // ══════════ 6. 좁은 화면(아이패드 세로) ══════════
 await page.setViewport({ width: 820, height: 1180 });
 await new Promise((r) => setTimeout(r, 120));

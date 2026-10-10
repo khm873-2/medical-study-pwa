@@ -172,27 +172,34 @@ queue = [resp(200, MODELS), resp(429, 'quota')];
 const v6 = await G.verifyKey('k');
 ok('429면 즉시 중단', v6.ok === false && /할당량/.test(v6.error), v6.error);
 
-// ask()가 404를 만나면 다시 찾아 한 번 재시도
+// 404: 그 모델을 **기억해두고** 다른 모델로 바로 다시 시도한다(2026-10-10).
+// 예전엔 ListModels부터 다시 불러서 느렸고, 재시도 때 같은 모델을 또 골라
+// 화면에 MODEL_404가 그대로 샜다.
 G.resetLimiter();
+G.resetModels();
 await G.setKey('AIzaTEST');
 await G.setModel('gemini-ancient');
+// 앞선 테스트가 남긴 모델 목록 때문에 실제로 쓰이는 모델이 다를 수 있다 — 먼저 확인한다
+const firstModel = await G.modelFor();
 queue = [
-  resp(404, GONE),                       // 첫 시도
-  resp(200, MODELS),                     // verifyKey: ListModels
-  resp(200, { candidates: [] }),         // verifyKey: probe 성공 → 2.5-flash
-  resp(200, { candidates: [{ content: { parts: [{ text: '재시도 성공' }] } }] }),
+  resp(404, GONE),                                                              // 첫 모델 → 404
+  resp(200, { candidates: [{ content: { parts: [{ text: '재시도 성공' }] } }] }),  // 다른 모델 → 성공
 ];
 const a2 = await G.ask({ term: 't' });
-ok('404 → 모델 교체 후 재시도 성공', a2 === '재시도 성공', a2);
-ok('교체된 모델이 저장됨', (await G.getModel()) === 'gemini-2.5-flash', await G.getModel());
+ok('404 → 다른 모델로 바로 재시도', a2 === '재시도 성공', a2);
+ok('404난 모델을 기억한다', !G.isModelUsable(firstModel), firstModel);
+ok('ListModels를 다시 부르지 않는다(빠르다)', queue.length === 0, `남은 응답 ${queue.length}개`);
 
-// 재시도 경로에서도 전부 실패하면 에러(무한루프 없음)
+// 전부 404여도 내부 코드가 새지 않고 무한루프도 없다
 G.resetLimiter();
+G.resetModels();
 await G.setModel('gemini-ancient');
-queue = [resp(404, GONE), resp(200, MODELS), resp(404, GONE), resp(404, GONE)];
+queue = [resp(404, GONE), resp(404, GONE), resp(404, GONE), resp(404, GONE)];
 let e404 = null;
-try { await G.ask({ term: 't' }); } catch (e) { e404 = e.message; }
-ok('전부 실패하면 에러', /찾지 못했|404|쓸 수 없/.test(e404 || ''), e404);
+try { await G.ask({ term: 't2' }); } catch (e) { e404 = e.message; }
+ok('전부 실패하면 사람이 읽는 에러', /쓸 수 없습니다/.test(e404 || ''), e404);
+ok('내부 코드가 안 샌다', !/MODEL_404|MODEL_BUSY/.test(e404 || ''), e404);
+G.resetModels();
 
 queue = [resp(400, 'API key not valid')];
 const v = await G.verifyKey('bad');

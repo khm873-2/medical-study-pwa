@@ -46,11 +46,38 @@ const SPEED_ORDER = [
 const SLOW_MS = 9000;          // 이보다 오래 걸리면 "느리다"고 본다
 const latency = new Map();     // 모델 → 최근 소요시간(ms) 배열
 
+// 404(이 계정엔 없는 모델)와 503(지금 과부하)은 다르다.
+//   · 404 → 영영 못 쓴다. 기억해뒀다가 **다시는 고르지 않는다.**
+//   · 503 → 잠깐 붐빌 뿐이다. 몇 분 쉬었다가 다시 쓴다.
+// 이걸 구분 안 해서 404난 모델을 재시도 때 또 골라 MODEL_404가 화면에 샜다(2026-10-10).
+const deadModels = new Set();          // 404
+const busyUntil = new Map();           // 모델 → 이 시각까지 쉰다(503)
+
+export function markDead(model) { deadModels.add(model); kvSet('dead_models', [...deadModels]).catch(() => {}); }
+export function markBusy(model, ms = 180000) { busyUntil.set(model, Date.now() + ms); }
+export function isModelUsable(m) {
+  return !deadModels.has(m) && !((busyUntil.get(m) || 0) > Date.now());
+}
+export function resetModels() { deadModels.clear(); busyUntil.clear(); }
+/** 앱 시작 때 지난번에 죽은 모델을 불러온다. */
+export async function loadDeadModels() {
+  const saved = await kvGet('dead_models');
+  if (Array.isArray(saved)) saved.forEach((m) => deadModels.add(m));
+}
+
 export function recordLatency(model, ms) {
   if (!latency.has(model)) latency.set(model, []);
   const a = latency.get(model);
   a.push(ms);
   if (a.length > 8) a.shift();
+}
+
+/** 내부 오류 코드가 화면에 새지 않게. */
+export function friendlyModelError(code, model) {
+  if (code === 'MODEL_BUSY') {
+    return 'Gemini가 지금 붐빕니다. 잠시 뒤 다시 눌러주세요 — 다른 모델로도 시도했습니다.';
+  }
+  return `이 계정에서 "${model}" 모델을 쓸 수 없습니다. 설정에서 "쓸 수 있는 모델 보기"로 바꿔주세요.`;
 }
 
 /** 이 모델의 중앙값 소요시간(ms). 아직 안 써봤으면 null. */
@@ -77,19 +104,23 @@ export function resetSpeed() { latency.clear(); }
 export async function modelFor({ light = false } = {}) {
   const chosen = await getModel();
   const avail = (await kvGet('models_available')) || null;   // 마지막 ListModels 결과
-  const canUse = (m) => !avail || avail.includes(`models/${m}`);
+  const canUse = (m) => (!avail || avail.includes(`models/${m}`)) && isModelUsable(m);
 
   if (light) {
     const fast = SPEED_ORDER.find((m) => canUse(m) && (medianLatency(m) === null || medianLatency(m) <= SLOW_MS));
     if (fast) return fast;
   }
-  const mine = medianLatency(chosen);
-  if (mine !== null && mine > SLOW_MS) {
-    const lighter = SPEED_ORDER.find((m) => m !== chosen && canUse(m)
-      && (medianLatency(m) === null || medianLatency(m) < mine));
-    if (lighter) return lighter;
+  if (canUse(chosen)) {
+    const mine = medianLatency(chosen);
+    if (mine !== null && mine > SLOW_MS) {
+      const lighter = SPEED_ORDER.find((m) => m !== chosen && canUse(m)
+        && (medianLatency(m) === null || medianLatency(m) < mine));
+      if (lighter) return lighter;
+    }
+    return chosen;
   }
-  return chosen;
+  // 고른 모델이 죽었거나 붐빈다 → 쓸 수 있는 것 중 아무거나
+  return SPEED_ORDER.find(canUse) || chosen;
 }
 
 /** 이 키로 generateContent가 가능한 모델 목록. */
@@ -217,10 +248,13 @@ export async function ask({ term, question, noteText, subject, lecture, onProgre
       return text;
     })
     .catch(async (e) => {
-      if (/^MODEL_404$/.test(e.message) && !retried) {
-        const v = await verifyKey(await getKey());
-        if (v.ok && v.model !== model) return ask({ term, question, noteText, subject, lecture, onProgress }, true);
-        throw new Error(v.ok ? `모델 "${model}"을 쓸 수 없습니다(404).` : v.error);
+      if ((e.message === 'MODEL_404' || e.message === 'MODEL_BUSY')) {
+        if (e.message === 'MODEL_404') markDead(model); else markBusy(model);
+        if (!retried) {
+          const next = await modelFor();
+          if (next !== model) return ask({ term, question, noteText, subject, lecture, onProgress }, true);
+        }
+        throw new Error(friendlyModelError(e.message, model));
       }
       throw e;
     });
@@ -356,6 +390,8 @@ function handleHttpError(status, text, key) {
     throw new Error('KEY_RATE');
   }
   if (status === 404) throw new Error('MODEL_404');
+  // 503/500/502 = 구글 쪽이 붐비는 것. 모델을 바꾸거나 잠깐 뒤 다시 하면 된다.
+  if (status === 503 || status === 500 || status === 502) throw new Error('MODEL_BUSY');
   throw new Error(`Gemini 오류 ${status}${text ? ' — ' + text.slice(0, 120) : ''}`);
 }
 
@@ -618,10 +654,17 @@ export async function breakdown(question, retried = false, onProgress = null) {
     if (answerCache.size > 80) answerCache.delete(answerCache.keys().next().value);
     return parseBreakdown(text, question);
   } catch (e) {
-    if (e.message === 'MODEL_404' && !retried) {
-      const v = await verifyKey(await getKey());
-      if (v.ok && v.model !== model) return breakdown(question, true, onProgress);
-      throw new Error(v.ok ? `모델 "${model}"을 쓸 수 없습니다(404).` : v.error);
+    // 404: 이 모델은 이 계정에 없다 → 기억해두고 다른 모델로 다시
+    // 503: 지금 붐빈다 → 잠깐 쉬게 하고 다른 모델로 다시
+    if ((e.message === 'MODEL_404' || e.message === 'MODEL_BUSY') && !retried) {
+      if (e.message === 'MODEL_404') markDead(model); else markBusy(model);
+      const next = await modelFor({ light: true });
+      if (next !== model) return breakdown(question, true, onProgress);
+      throw new Error(friendlyModelError(e.message, model));
+    }
+    if (e.message === 'MODEL_404' || e.message === 'MODEL_BUSY') {
+      if (e.message === 'MODEL_404') markDead(model); else markBusy(model);
+      throw new Error(friendlyModelError(e.message, model));
     }
     // 잘렸어도 거기까지는 보여준다 — 아무것도 없는 것보다 낫다
     if (e.message === 'TRUNCATED' && e.partial) {

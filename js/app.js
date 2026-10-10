@@ -1044,13 +1044,25 @@ async function runBreakdown() {
     document.getElementById('toolBreak').classList.remove('active');
     return;
   }
-  if (!(await gem.hasKey())) { askNoKey(q.q); return; }
-
   breakdownBusy = true;
   el.dataset.forNum = String(q.num);
   el.classList.remove('hidden');
-  el.innerHTML = '<div class="bd-loading">지문을 뜯어보는 중…</div>';
   document.getElementById('toolBreak').classList.add('active');
+
+  // ① 미리 만들어둔 게 있으면 그걸 쓴다 — 0초, 할당량 0, 오프라인에서도 된다.
+  //    모의고사 문제는 **고정된 콘텐츠**다. 매번 AI를 부를 이유가 없다(2026-10-10).
+  try {
+    const pre = await prebuiltBreakdown(q);
+    if (pre) {
+      renderBreakdown(el, pre, q);
+      breakdownBusy = false;
+      if (pen) requestAnimationFrame(() => pen.resize());
+      return;
+    }
+  } catch { /* 없으면 아래에서 AI로 */ }
+
+  el.innerHTML = '<div class="bd-loading">지문을 뜯어보는 중…</div>';
+  if (!(await gem.hasKey())) { askNoKey(q.q); breakdownBusy = false; return; }
   try {
     // 스트리밍 — 줄이 오는 대로 다시 그린다. 다 기다리면 40초가 걸렸다(2026-10-10).
     let painted = false;
@@ -1073,6 +1085,36 @@ async function runBreakdown() {
   }
 }
 
+/**
+ * 미리 만들어둔 뜯어보기를 vault에서 찾는다.
+ *
+ * `06_모의고사/{과목}/{시험}_뜯어보기.json` — 문항 번호를 키로 한 객체.
+ * 모의고사는 내용이 바뀌지 않으므로 한 번 만들어두면 그만이다.
+ * 파일이 없으면 null을 돌려주고, 그때만 AI를 부른다.
+ */
+const preCache = new Map();
+async function prebuiltBreakdown(q) {
+  if (!currentExam) return null;
+  const path = currentExam.path.replace(/\.html$/, '_뜯어보기.json');
+  if (!preCache.has(path)) {
+    try {
+      preCache.set(path, JSON.parse(await getText(path)));
+    } catch {
+      preCache.set(path, null);          // 없는 파일을 매번 다시 찾지 않는다
+    }
+  }
+  const all = preCache.get(path);
+  const hit = all && all[String(q.num)];
+  if (!hit) return null;
+  return {
+    clues: Array.isArray(hit.clues) ? hit.clues.filter((c) => c && c.frag && c.note) : [],
+    impression: hit.impression || '',
+    options: Array.isArray(hit.options) ? hit.options : [],
+    truncated: false,
+    prebuilt: true,
+  };
+}
+
 function renderBreakdown(el, data, q) {
   el.innerHTML = '';
   const { clues, impression, options, truncated } = data;
@@ -1083,7 +1125,7 @@ function renderBreakdown(el, data, q) {
 
   const head = document.createElement('div');
   head.className = 'bd-head';
-  head.innerHTML = '<span>🔍 지문 뜯어보기</span>';
+  head.innerHTML = `<span>🔍 지문 뜯어보기${data.prebuilt ? ' · 미리 준비됨' : ''}</span>`;
   const close = document.createElement('button');
   close.className = 'bd-close';
   close.textContent = '✕';
@@ -2428,6 +2470,7 @@ function hideSplash() {
   window.__t0 = Date.now();
   await applyTheme();
   initServiceWorker();
+  gem.loadDeadModels().catch(() => {});
   initResizers();
   refreshSyncBar();
   flushOutbox();
