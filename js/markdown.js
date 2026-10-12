@@ -134,8 +134,47 @@ function splitRow(l) {
 }
 
 /** 인라인 문법 — 반드시 escape 먼저 하고 치환한다. */
+// ───────────── MarginNote 슬라이드 링크 (2026-10-12) ─────────────
+//
+// 위키 노트에는 `[슬라이드 p.12]` 표기가 1,400개 넘게 이미 깔려 있다(/lecture-integrate가
+// 붙인다). 이걸 눌러서 MarginNote의 그 페이지로 바로 넘어가게 한다.
+//
+// 스킴은 MarginNote 4가 실제로 등록·문서화한 것이다(앱 바이너리에서 확인, 2026-10-12):
+//     marginnote4app://page/{md5}/p12     특정 문서 12쪽
+//     marginnote4app://page/0/p12         **지금 열려 있는 문서**의 12쪽
+//     marginnote4app://page/{md5}/p10-15  범위
+//
+// `{md5}`는 파일의 MD5가 아니라 MarginNote 내부 ID라 계산으로는 못 구한다.
+// 맥에서 `.claude/scripts/export_marginnote_map.py`가 뽑아 vault에 넣어둔 걸 쓴다.
+// 그게 없거나 이 노트의 PDF를 못 찾으면 `0`(현재 문서)으로 떨어진다 — 맞는 슬라이드를
+// 열어둔 상태면 여전히 동작하고, 아니면 MarginNote만 뜬다. 어느 쪽이든 안 깨진다.
+
+let slideDocMd5 = null;     // 지금 보고 있는 노트의 문서 ID(모르면 null)
+
+/** 노트를 열 때 한 번 불러준다. */
+export function setSlideDoc(md5) { slideDocMd5 = md5 || null; }
+
+/** `p.12` · `p.10~15` · `p.4,7` 를 MarginNote가 받는 꼴로. */
+function slidePages(raw) {
+  const t = String(raw).replace(/\s/g, '');
+  if (/^\d+$/.test(t)) return `p${t}`;
+  const range = t.match(/^(\d+)[~\-–](\d+)$/);
+  if (range) return `p${range[1]}-${range[2]}`;
+  const list = t.split(',').map((x) => x.trim()).filter((x) => /^\d+$/.test(x));
+  return list.length ? `p${list.join(',')}` : null;
+}
+
 function inline(s) {
   let t = escapeHtml(s);
+
+  // [슬라이드 p.12] → 누르면 MarginNote의 그 쪽으로
+  t = t.replace(/\[슬라이드\s*p\.\s*([\d\s,~\-–]+)\]/g, (whole, pages) => {
+    const p = slidePages(pages);
+    if (!p) return whole;
+    const doc = slideDocMd5 || '0';
+    return `<a class="slide-link" href="marginnote4app://page/${doc}/${p}"`
+      + ` title="MarginNote에서 열기">📄 ${escapeHtml(whole.slice(1, -1))}</a>`;
+  });
 
   // 이미지 임베드 ![[파일명]] — src는 나중에 채운다(지연 로딩)
   t = t.replace(/!\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]/g, (_, f) =>

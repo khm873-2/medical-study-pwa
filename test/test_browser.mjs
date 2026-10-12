@@ -2781,6 +2781,164 @@ await run('카드 미리보기 창', async () => {
   f.classList.add('hidden');
   return out;
 });
+
+// ══════════ 모아두기 — 공부 중 알게 된 것 모으기 (2026-10-12) ══════════
+// vault의 `00_Raw_Text/AI대화로그`에 넣는다 — CLAUDE.md상 "읽기 전용 원본 소스이며
+// 다음 /lecture-integrate 때 자동 반영 후보"라, 맥에서 git pull만 하면 기존 흐름이
+// 위키·최종정리에 알아서 흡수한다.
+await page.setViewport({ width: 1366, height: 1024 });
+await run('모아두기 창', async () => {
+  const out = [];
+  out.push({ name: '노트 읽기·문제 풀이 양쪽에 버튼이 있다',
+    ok: !!document.getElementById('readScrap') && !!document.getElementById('toolScrap') });
+  out.push({ name: '두 버튼이 같은 창을 연다',
+    ok: document.getElementById('readScrap').onclick === document.getElementById('toolScrap').onclick });
+
+  // 노트를 읽는 중이라 치고 연다
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  document.getElementById('readScrap').click();
+  await new Promise((r) => setTimeout(r, 120));
+
+  const f = document.getElementById('scrapFloat');
+  out.push({ name: '창이 열린다', ok: !f.classList.contains('hidden') });
+  out.push({ name: '떠 있는 창이다(화면 전환 아님)', ok: getComputedStyle(f).position === 'fixed' });
+  const r = f.getBoundingClientRect();
+  out.push({ name: '화면 안에 들어온다', ok: r.right <= innerWidth + 1 && r.bottom <= innerHeight + 1 });
+  out.push({ name: '지금 뭘 보고 있는지 알려준다', ok: !!document.getElementById('scWhere').textContent.trim(),
+    detail: document.getElementById('scWhere').textContent });
+  out.push({ name: '글 상자와 붙여넣기·저장 버튼이 있다',
+    ok: ['scText', 'scPaste', 'scSave'].every((id) => !!document.getElementById(id)) });
+  out.push({ name: '펜이 이 창도 UI로 인식한다',
+    ok: !!document.getElementById('scText').closest('.ask-float') });
+
+  // 아무것도 없이 저장하면 막는다
+  document.getElementById('scSave').click();
+  await new Promise((r2) => setTimeout(r2, 60));
+  out.push({ name: '빈 채로 저장하면 알려준다',
+    ok: /아직 아무것도/.test(document.getElementById('scStatus').textContent),
+    detail: document.getElementById('scStatus').textContent });
+  return out;
+});
+
+// 그림 붙여넣기 — 진짜 PNG 바이트로
+{
+  const pasted = await page.evaluate(async () => {
+    // 1×1 투명 PNG
+    const b64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: 'image/png' });
+    const dt = new DataTransfer();
+    dt.items.add(new File([blob], 'shot.png', { type: 'image/png' }));
+    const ta = document.getElementById('scText');
+    ta.value = '2025 AHA에서 바뀐 부분 — 생존사슬이 6고리로 단일화됐다.';
+    ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 200));
+    return {
+      shots: document.querySelectorAll('.sc-shot img').length,
+      status: document.getElementById('scStatus').textContent,
+      text: document.getElementById('scText').value,
+    };
+  });
+  results.push({ name: '그림을 붙여넣으면 창에 뜬다', ok: pasted.shots === 1, detail: JSON.stringify(pasted) });
+  results.push({ name: '글은 그대로 남는다', ok: /생존사슬/.test(pasted.text) });
+  results.push({ name: '몇 장인지 알려준다', ok: /1장/.test(pasted.status), detail: pasted.status });
+
+  // 뺄 수 있어야 한다
+  const removed = await page.evaluate(async () => {
+    document.querySelector('.sc-shot-del').click();
+    await new Promise((r) => setTimeout(r, 80));
+    return document.querySelectorAll('.sc-shot img').length;
+  });
+  results.push({ name: '잘못 넣은 그림은 뺄 수 있다', ok: removed === 0 });
+}
+
+// 저장 — GitHub 쓰기를 가로채 무엇이 올라가는지 본다
+{
+  const saved = await page.evaluate(async () => {
+    const G = await import('/js/github.js');
+    const A = await import('/js/auth.js');
+    await A.setToken('fake'); await A.setRepo('me/vault');
+    const sent = [];
+    const realFetch = window.fetch;
+    window.fetch = async (url, init) => {
+      if (String(url).includes('api.github.com') && init?.method === 'PUT') {
+        sent.push({ url: decodeURIComponent(String(url).split('/contents/')[1] || ''),
+          body: JSON.parse(init.body) });
+        return { ok: true, status: 201, json: async () => ({}), text: async () => '' };
+      }
+      return realFetch(url, init);
+    };
+    try {
+      // 글 + 그림 한 장
+      const b64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const dt = new DataTransfer();
+      dt.items.add(new File([new Blob([bytes], { type: 'image/png' })], 's.png', { type: 'image/png' }));
+      const ta = document.getElementById('scText');
+      ta.value = '생존사슬 6고리 단일화';
+      ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+      await new Promise((r) => setTimeout(r, 200));
+      document.getElementById('scSave').click();
+      await new Promise((r) => setTimeout(r, 500));
+      return { sent, status: document.getElementById('scStatus').textContent };
+    } finally {
+      window.fetch = realFetch;
+      await A.clearToken();
+    }
+  });
+  const paths = saved.sent.map((x) => x.url);
+  results.push({ name: '그림은 attachments/로 간다',
+    ok: paths.some((p) => p.startsWith('attachments/') && /\.png$/.test(p)), detail: paths.join(' | ') });
+  results.push({ name: '글은 AI대화로그로 간다(=/lecture-integrate가 읽는 곳)',
+    ok: paths.some((p) => p.startsWith('00_Raw_Text/AI대화로그/') && p.endsWith('_모아두기.md')),
+    detail: paths.join(' | ') });
+
+  const mdItem = saved.sent.find((x) => x.url.endsWith('.md'));
+  const md = mdItem ? atob(mdItem.body.content.replace(/\s/g, '')) : '';
+  const text = new TextDecoder().decode(Uint8Array.from(md, (c) => c.charCodeAt(0)));
+  results.push({ name: '본문에 내가 쓴 글이 들어간다', ok: /생존사슬 6고리 단일화/.test(text) });
+  results.push({ name: '그림이 Obsidian 임베드로 걸린다', ok: /!\[\[모아두기_[\d_]+_1\.png\]\]/.test(text),
+    detail: (text.match(/!\[\[[^\]]+\]\]/) || ['없음'])[0] });
+  results.push({ name: '어디서 모았는지 머리에 남는다', ok: /출처: 아이패드 "모아두기"/.test(text) });
+  results.push({ name: '아직 정리 안 됐다고 표시한다', ok: /아직 정리 안 된 수집물/.test(text) });
+  results.push({ name: 'Obsidian 태그가 붙는다', ok: /tags: \[달모\/모아두기\]/.test(text) });
+  results.push({ name: '저장했다고 알려준다', ok: /vault에 모았습니다/.test(saved.status), detail: saved.status });
+
+  // 그림 바이트가 안 깨지고 그대로 올라가는가 — UTF-8 인코딩을 타면 깨진다
+  const img = saved.sent.find((x) => x.url.startsWith('attachments/'));
+  results.push({ name: '그림이 깨지지 않고 올라간다(PNG 머리 그대로)',
+    ok: !!img && img.body.content.startsWith('iVBORw0KGgo'), detail: (img?.body.content || '').slice(0, 16) });
+
+  await page.evaluate(() => document.getElementById('scrapFloat').classList.add('hidden'));
+}
+
+// ══════════ MarginNote 슬라이드 링크가 화면에서 눌리는가 ══════════
+await run('슬라이드 링크', async () => {
+  const out = [];
+  const { renderMarkdown, setSlideDoc } = await import('/js/markdown.js');
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  setSlideDoc('ff004e7d');
+  document.getElementById('readBody').innerHTML =
+    renderMarkdown('가슴압박 깊이는 5~6cm다. [슬라이드 p.12] 이어지는 문장이 더 있다.');
+  const a = document.querySelector('#readBody .slide-link');
+  out.push({ name: '본문 안에 링크가 생긴다', ok: !!a });
+  out.push({ name: 'MarginNote 스킴으로 간다', ok: /^marginnote4app:\/\/page\/ff004e7d\/p12$/.test(a.getAttribute('href')),
+    detail: a.getAttribute('href') });
+  const r = a.getBoundingClientRect();
+  out.push({ name: '본문 흐름을 깨지 않는다(한 줄 안에 들어간다)', ok: r.height < 40, detail: `${Math.round(r.height)}px` });
+  out.push({ name: '눌릴 만한 크기다', ok: r.width >= 40, detail: `${Math.round(r.width)}px` });
+  out.push({ name: '펜이 링크를 UI로 인식한다(그림이 안 그려진다)', ok: !!a.closest('a') });
+  setSlideDoc(null);
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════

@@ -1810,3 +1810,45 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
   :root:not([data-theme="light"]) .set-preview mark { background: #78350f; color: #fde68a; }
 }
 :root[data-theme="dark"] .set-preview mark { background: #78350f; color: #fde68a; }
+
+/* ── MarginNote 슬라이드 링크 ── (2026-10-12)
+   노트의 `[슬라이드 p.12]`를 누르면 MarginNote의 그 쪽이 열린다. 본문에 1,400개 넘게
+   깔려 있어서 요란하면 글이 안 읽힌다 — 평소엔 조용하고, 누를 수 있다는 것만 알린다. */
+.slide-link {
+  display: inline-block; text-decoration: none;
+  padding: 0 6px; border-radius: 6px;
+  background: var(--badge-bg); border: 1px solid var(--border);
+  color: var(--sub); font-size: .82em; font-weight: 600;
+  white-space: nowrap; vertical-align: baseline;
+}
+.slide-link:active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ── 모아두기 창 ── (2026-10-12)
+   공부하다 알게 된 것(AI 답변·찾아본 그림)을 그 자리에서 담는다. */
+.sc-where {
+  flex: 0 0 auto; padding: 8px 14px; background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; font-weight: 600; color: var(--accent);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sc-body { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+#scText {
+  flex: 1 1 auto; min-height: 110px; width: 100%; resize: none;
+  border: 1px solid var(--border); border-radius: var(--r-2);
+  padding: 11px 12px; font-family: inherit;
+  font-size: calc(15px * var(--ui-scale)); line-height: var(--read-line);
+  background: var(--bg); color: var(--text);
+}
+#scText:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.sc-shots { flex: 0 0 auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.sc-shot { position: relative; width: 92px; height: 92px; }
+.sc-shot img {
+  width: 100%; height: 100%; object-fit: cover;
+  border: 1px solid var(--border); border-radius: var(--r-1);
+}
+.sc-shot-del {
+  position: absolute; top: -6px; right: -6px;
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--card); color: var(--wrong);
+  font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}

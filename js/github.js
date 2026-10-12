@@ -104,10 +104,14 @@ export async function getBlobUrl(path) {
 /**
  * 새 파일 생성(append-only). 같은 경로가 이미 있으면 파일명에 -2, -3... 을 붙여 피한다
  * — 덮어쓰기를 아예 하지 않는 게 이 설계의 핵심이라 sha를 다루지 않는다.
+ * @param {string|{base64:string}} content 글이면 그대로, 이미지는 {base64}로 넘긴다
+ *   (스크랩의 붙여넣은 그림 — 바이너리는 UTF-8 인코딩을 거치면 깨진다, 2026-10-12)
  */
 export async function createFile(path, content, message) {
   const repo = await getRepo();
-  const b64 = base64EncodeUtf8(content);
+  const b64 = (content && typeof content === 'object' && content.base64)
+    ? content.base64
+    : base64EncodeUtf8(content);
   let target = path;
   for (let attempt = 0; attempt < 5; attempt++) {
     const res = await fetch(`${API}/repos/${repo}/contents/${encPath(target)}`, {

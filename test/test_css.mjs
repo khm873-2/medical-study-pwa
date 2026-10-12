@@ -12,7 +12,7 @@
 import { readFileSync } from 'fs';
 
 const CSS = '/Users/hyunminkang/Documents/medical-study-pwa/css/app.css';
-const BUDGET = 61;          // 2026-10-12 기준. 줄이는 건 환영, 늘리는 건 금지.
+const BUDGET = 60;          // 2026-10-12 기준. 줄이는 건 환영, 늘리는 건 금지.
 // 86 → 61: `카드 관리` 블록 76줄이 통째로 두 번 들어가 있던 걸 지웠다(앞 복사본은
 // 캐스케이드로 아예 안 쓰이고 있었다 — 고쳐도 아무 일도 안 일어나는 죽은 코드였다).
 

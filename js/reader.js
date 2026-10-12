@@ -63,7 +63,62 @@ export async function loadNote(path) {
   const secs = splitSections(md);
   // ## 가 아예 없는 노트는 통째로 한 섹션으로
   const sections = secs.length ? secs : [{ heading: '전문', text: md }];
-  return { path, sections, raw: md, title: frontTitle(md) || path.split('/').pop().replace(/\.md$/, '') };
+  return {
+    path, sections, raw: md,
+    title: frontTitle(md) || path.split('/').pop().replace(/\.md$/, ''),
+    pdf: sourcePdf(md),
+  };
+}
+
+// ───────────── 노트 ↔ MarginNote 문서 (2026-10-12) ─────────────
+//
+// 노트 frontmatter의 `source:`에 원본 슬라이드 PDF 이름이 이미 적혀 있다:
+//     source:
+//       - "260914_Gen. P. Tumors_정환용.pdf (00_Raw_Text/강의자료/, 원본 69p)"
+// 이 이름으로 MarginNote 문서 ID를 찾아 `[슬라이드 p.N]`을 링크로 만든다.
+
+/** frontmatter에서 첫 번째 PDF 이름. 없으면 null. */
+export function sourcePdf(md) {
+  const fm = String(md).match(/^---\n([\s\S]*?)\n---/);
+  if (!fm) return null;
+  // 파일명에 공백이 흔하다 — 따옴표·괄호 경계까지 통째로 잡는다
+  const m = fm[1].match(/["'\-\s]([^"'(\n]+?\.pdf)/);
+  return m ? m[1].trim().normalize('NFC') : null;
+}
+
+let _mnDocs = null;         // {파일명: md5}
+
+/** vault의 MarginNote 문서 맵. 없으면 빈 객체(링크는 "현재 문서"로 떨어진다). */
+export async function marginNoteDocs() {
+  if (_mnDocs) return _mnDocs;
+  const cached = await kvGet('mn_docs');
+  if (cached) { _mnDocs = cached; return _mnDocs; }
+  try {
+    const j = JSON.parse(await getText('.medstudy/marginnote_docs.json'));
+    _mnDocs = j.docs || {};
+  } catch {
+    _mnDocs = {};           // 맥에서 export를 아직 안 돌렸다 — 조용히 넘어간다
+  }
+  await kvSet('mn_docs', _mnDocs);
+  return _mnDocs;
+}
+
+/**
+ * PDF 이름 → MarginNote 문서 ID.
+ *
+ * iCloud가 같은 파일을 "… 2.pdf"로 하나 더 만드는 일이 잦아서(실측 56개 중 22개),
+ * 정확히 안 맞으면 그 접미사만 떼고 한 번 더 본다.
+ */
+export function findMnDoc(docs, pdfName) {
+  if (!docs || !pdfName) return null;
+  const want = String(pdfName).normalize('NFC');
+  if (docs[want]) return docs[want];
+  const stem = want.replace(/\.pdf$/i, '');
+  for (const [name, md5] of Object.entries(docs)) {
+    const s = name.replace(/\.pdf$/i, '').replace(/\s+\d+$/, '');   // "… 2.pdf" → "…"
+    if (s === stem || s === stem.replace(/\s+\d+$/, '')) return md5;
+  }
+  return null;
 }
 
 function frontTitle(md) {

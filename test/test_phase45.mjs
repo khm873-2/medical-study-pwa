@@ -284,6 +284,96 @@ ok('1글자는 검색 안 함', empty.length === 0);
   ok('groups가 없어도 터지지 않는다', R.findNoteInGroups(undefined, '아무거나') === null);
 }
 
+// ── MarginNote 슬라이드 링크 (2026-10-12) ──
+// 위키에 이미 깔린 `[슬라이드 p.12]` 1,400여 개를 눌러서 MarginNote의 그 쪽으로 간다.
+// 스킴은 MarginNote 4 앱 바이너리에 문서화된 것을 그대로 쓴다:
+//   marginnote4app://page/{md5}/p12 · /p10-15 · /p4,7 · md5가 '0'이면 "지금 열린 문서"
+{
+  const { renderMarkdown, setSlideDoc } = await import(`${PWA}/js/markdown.js`);
+
+  setSlideDoc(null);
+  const plain = renderMarkdown('가슴압박 깊이는 5~6cm다. [슬라이드 p.12]');
+  ok('슬라이드 표기가 링크가 된다', /<a class="slide-link"/.test(plain), plain.slice(0, 80));
+  ok('문서를 모르면 "현재 열린 문서"(0)로', /marginnote4app:\/\/page\/0\/p12/.test(plain), plain);
+  ok('표기 글자는 그대로 보인다', /슬라이드 p\.12/.test(plain));
+
+  setSlideDoc('ff004e7d1234');
+  ok('문서를 알면 그 문서로 간다',
+    /marginnote4app:\/\/page\/ff004e7d1234\/p12/.test(renderMarkdown('[슬라이드 p.12]')));
+  ok('범위도 받는다(p10-15)',
+    /page\/ff004e7d1234\/p10-15/.test(renderMarkdown('[슬라이드 p.10~15]')),
+    renderMarkdown('[슬라이드 p.10~15]'));
+  ok('여러 쪽도 받는다(p4,7)', /page\/ff004e7d1234\/p4,7/.test(renderMarkdown('[슬라이드 p.4,7]')));
+  ok('숫자가 아니면 건드리지 않는다',
+    !/slide-link/.test(renderMarkdown('[슬라이드 p.뒤쪽]')), renderMarkdown('[슬라이드 p.뒤쪽]'));
+  setSlideDoc(null);
+
+  // frontmatter에서 PDF 이름 뽑기 — 공백이 들어간 이름이 흔하다
+  ok('frontmatter의 PDF 이름을 읽는다',
+    R.sourcePdf('---\nsource:\n  - "260914_Gen. P. Tumors_정환용.pdf (원본 69p)"\n---\n# 제목')
+      === '260914_Gen. P. Tumors_정환용.pdf');
+  ok('PDF가 없으면 null', R.sourcePdf('---\ntags: [a]\n---\n본문') === null);
+  ok('frontmatter가 없어도 안 터진다', R.sourcePdf('그냥 본문') === null);
+
+  // iCloud가 만드는 "… 2.pdf" 중복까지 찾아낸다(실측 56개 중 22개가 이 꼴)
+  const docs = {
+    '260914_Gen. P. Tumors_정환용.pdf': 'aaa111',
+    '260911_근골격계_임상미생물_260911_강의용_김자영 2.pdf': 'bbb222',
+  };
+  ok('이름이 똑같으면 찾는다', R.findMnDoc(docs, '260914_Gen. P. Tumors_정환용.pdf') === 'aaa111');
+  ok('iCloud "… 2.pdf" 중복도 찾는다',
+    R.findMnDoc(docs, '260911_근골격계_임상미생물_260911_강의용_김자영.pdf') === 'bbb222');
+  ok('없으면 null(엉뚱한 문서를 열지 않는다)', R.findMnDoc(docs, '전혀다른강의.pdf') === null);
+  ok('맵이 비어도 안 터진다', R.findMnDoc({}, 'x.pdf') === null && R.findMnDoc(null, 'x.pdf') === null);
+}
+
+// ── 실제 vault로: 슬라이드 표기가 정말 링크가 되는가 ──
+{
+  const { renderMarkdown, setSlideDoc } = await import(`${PWA}/js/markdown.js`);
+  const mapPath = `${VAULT}/.medstudy/marginnote_docs.json`;
+  let docs = null;
+  if (existsSync(mapPath)) docs = JSON.parse(readFileSync(mapPath, 'utf8')).docs;
+  ok('vault에 MarginNote 문서 맵이 있다(맥에서 export 실행됨)', !!docs && Object.keys(docs).length > 0,
+    docs ? `${Object.keys(docs).length}건` : '없음 — export_marginnote_map.py를 돌릴 것');
+
+  if (docs) {
+    const notes = [];
+    for (const root of ['02_Wiki', '98_예습노트_보관']) {
+      const base = `${VAULT}/${root}`;
+      if (!existsSync(base)) continue;
+      for (const sub of readdirSync(base)) {
+        const dir = `${base}/${sub}`;
+        let files;
+        try { files = readdirSync(dir); } catch { continue; }
+        for (const f of files) if (f.endsWith('.md')) notes.push(`${dir}/${f}`);
+      }
+    }
+    let withSlides = 0, linked = 0, marks = 0;
+    for (const p of notes) {
+      const md = readFileSync(p, 'utf8');
+      if (!md.includes('[슬라이드 p.')) continue;
+      withSlides++;
+      marks += (md.match(/\[슬라이드\s*p\./g) || []).length;
+      if (R.findMnDoc(docs, R.sourcePdf(md))) linked++;
+    }
+    ok('슬라이드 표기가 있는 노트가 여럿이다', withSlides >= 20, `${withSlides}개`);
+    ok('표기가 1,000개 넘게 쌓여 있다(새로 넣을 필요 없다)', marks >= 1000, `${marks}개`);
+    ok('절반 이상이 MarginNote 문서로 이어진다', linked >= withSlides / 2,
+      `${linked}/${withSlides}개`);
+    console.log(`  슬라이드 표기 ${marks}개 · 노트 ${withSlides}개 중 ${linked}개가 MarginNote로 연결`);
+
+    // 실제 노트 한 줄이 제대로 링크로 변하는지
+    const sample = notes.find((p) => readFileSync(p, 'utf8').includes('[슬라이드 p.'));
+    const md = readFileSync(sample, 'utf8');
+    setSlideDoc(R.findMnDoc(docs, R.sourcePdf(md)));
+    const line = md.split('\n').find((l) => /\[슬라이드\s*p\.\s*\d/.test(l));
+    const html = renderMarkdown(line);
+    ok('실제 노트 줄이 눌리는 링크가 된다', /href="marginnote4app:\/\/page\/[^/]+\/p\d/.test(html),
+      (html.match(/href="[^"]+"/) || ['?'])[0]);
+    setSlideDoc(null);
+  }
+}
+
 console.log(`\n통과 ${pass}건`);
 if (fail.length) { console.log(`실패 ${fail.length}건:`); fail.forEach((f) => console.log('  ✗ ' + f)); process.exit(1); }
 console.log('✅ 전부 통과');

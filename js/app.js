@@ -9,10 +9,11 @@ import * as gem from './gemini.js';
 import { wikiFor, fitLabel } from './wiki.js';
 import * as backup from './backup.js';
 import { captureRect, canvasToBlob, copyBlobToClipboard } from './capture.js';
-import { renderMarkdown, hydrateEmbeds } from './markdown.js';
+import { renderMarkdown, hydrateEmbeds, setSlideDoc } from './markdown.js';
 import { buildPrompt, appList, sendTo, share, buildQaMarkdown } from './ask.js';
 import {
   noteList, loadNote, renderSection, extractCards, findNoteInGroups,
+  marginNoteDocs, findMnDoc,
   loadSrs, saveSrs, dueCards, gradeCard, srsStats, keepAwake, cardsFromBox,
   studyQueue, groupCards, suspendCard, unsuspendCard, buryCard, toggleStar,
   deckTree, cardsInDeck, liveCards, isArchivedCard, deckOf, subKey, noteKey,
@@ -2143,6 +2144,9 @@ async function openNote(path) {
   body.innerHTML = '<p class="muted">노트를 여는 중…</p>';
   try {
     const note = await loadNote(path);
+    // 이 노트의 슬라이드 PDF가 MarginNote에 있으면 `[슬라이드 p.N]`이 그 문서로 바로 간다.
+    // 못 찾으면 "현재 열린 문서"로 떨어진다 — 어느 쪽이든 안 깨진다(2026-10-12).
+    try { setSlideDoc(findMnDoc(await marginNoteDocs(), note.pdf)); } catch { setSlideDoc(null); }
     reader = { note, secIdx: 0 };
     show('readScreen');
     // 넓은 화면은 목차를 펴놓고, 좁은 화면은 본문을 가리지 않게 접어둔다(기억값 우선)
@@ -2296,6 +2300,199 @@ function makeCardsFromBox(box) {
   // "바로 외우기"를 고를 때만 카드 화면으로 간다(2026-10-12 요청).
   openCardFloat(cards);
 }
+
+// ---- 모아두기: 공부하다 알게 된 것 (2026-10-12) ----
+//
+// 왜 필요한가: 문제를 풀거나 노트를 읽다 보면 "따로 찾아본 AI 답변", "어디서 본 그림"처럼
+// **노트에 아직 없는 것**이 생긴다. 지금은 그걸 담아둘 자리가 없어서 흘려보내거나
+// 다른 앱에 적어두고 잊는다.
+//
+// vault 파이프라인에 그대로 얹는다 — `00_Raw_Text/AI대화로그`는 CLAUDE.md상
+// "읽기 전용 원본 소스이며 다음 /lecture-integrate 때 자동 반영 후보"다. 여기에 넣으면
+// 맥에서 git pull만 해도 기존 흐름이 위키·최종정리에 알아서 흡수한다.
+// 그림은 `attachments/`에 올리고 `![[파일명]]`으로 임베드한다(Obsidian 문법 그대로).
+
+let scrapFloat = null;
+let scrapShots = [];        // 붙여넣은 그림들 {name, mime, base64, url}
+
+/** 지금 뭘 보고 있나 — 나중에 정리할 때 맥락이 있어야 쓸모가 있다. */
+function scrapContext() {
+  if (reader && reader.note) {
+    const sec = reader.note.sections[reader.secIdx];
+    return { kind: '노트', subject: reader.note.path.split('/')[1] || '',
+      title: reader.note.title, where: sec ? sec.heading : '', path: reader.note.path };
+  }
+  if (quiz && currentExam) {
+    const q = quiz.all[quiz.qIndex];
+    return { kind: currentExam.kind || '모의고사', subject: currentExam.subject,
+      title: currentExam.title, where: q ? `${q.num}번` : '', path: currentExam.path };
+  }
+  return { kind: '메모', subject: '', title: '', where: '', path: '' };
+}
+
+function openScrap() {
+  const ctx = scrapContext();
+  const w = document.getElementById('scWhere');
+  w.textContent = [ctx.title, ctx.where].filter(Boolean).join('  ›  ') || '어디에도 묶이지 않은 메모';
+  document.getElementById('scStatus').textContent = '';
+  document.getElementById('scrapFloat').classList.remove('hidden');
+  if (scrapFloat) scrapFloat.place();
+  setTimeout(() => document.getElementById('scText').focus(), 60);
+}
+function closeScrap() { document.getElementById('scrapFloat').classList.add('hidden'); }
+
+function renderShots() {
+  const box = document.getElementById('scShots');
+  box.innerHTML = '';
+  scrapShots.forEach((sh, i) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'sc-shot';
+    const im = document.createElement('img');
+    im.src = sh.url;
+    const del = document.createElement('button');
+    del.className = 'sc-shot-del';
+    del.textContent = '✕';
+    del.title = '빼기';
+    del.onclick = () => {
+      URL.revokeObjectURL(scrapShots[i].url);
+      scrapShots.splice(i, 1);
+      renderShots();
+    };
+    wrap.append(im, del);
+    box.appendChild(wrap);
+  });
+}
+
+/** 클립보드 항목에서 그림을 꺼낸다. 붙여넣기·버튼 둘 다 여기로 온다. */
+async function addShot(blob) {
+  if (!blob || !/^image\//.test(blob.type)) return false;
+  const buf = await blob.arrayBuffer();
+  // 큰 파일은 한 번에 base64로 바꾸면 스택이 터진다 — 쪼개서 넣는다
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  scrapShots.push({
+    mime: blob.type,
+    ext: (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg'),
+    base64: btoa(bin),
+    url: URL.createObjectURL(blob),
+  });
+  renderShots();
+  return true;
+}
+
+function initScrap() {
+  scrapFloat = makeFloat({
+    panel: 'scrapFloat', head: 'scHead', grip: 'scResize', key: 'scrap_float_box',
+    def: { w: Math.min(560, innerWidth * 0.92), h: Math.min(520, innerHeight * 0.66) },
+  });
+  document.getElementById('scClose').onclick = closeScrap;
+
+  // 붙여넣기 — 글은 그대로 들어가고, 그림은 따로 모은다
+  document.getElementById('scText').addEventListener('paste', async (e) => {
+    const items = [...(e.clipboardData?.items || [])];
+    const imgs = items.filter((it) => it.kind === 'file' && /^image\//.test(it.type));
+    if (!imgs.length) return;                  // 글은 브라우저 기본 동작에 맡긴다
+    e.preventDefault();
+    for (const it of imgs) await addShot(it.getAsFile());
+    document.getElementById('scStatus').textContent = `그림 ${scrapShots.length}장`;
+  });
+
+  // 아이패드는 붙여넣기 메뉴가 안 뜰 때가 있다 — 버튼으로도 읽는다
+  document.getElementById('scPaste').onclick = async () => {
+    const st = document.getElementById('scStatus');
+    try {
+      const items = await navigator.clipboard.read();
+      let n = 0;
+      for (const it of items) {
+        const type = it.types.find((t) => /^image\//.test(t));
+        if (type) { await addShot(await it.getType(type)); n++; continue; }
+        if (it.types.includes('text/plain')) {
+          const t = await (await it.getType('text/plain')).text();
+          const ta = document.getElementById('scText');
+          ta.value = ta.value ? `${ta.value}\n\n${t}` : t;
+          n++;
+        }
+      }
+      st.textContent = n ? `${n}건 붙여넣었습니다` : '클립보드가 비어 있습니다';
+    } catch {
+      st.textContent = '클립보드를 못 읽었습니다 — 글 상자를 길게 눌러 붙여넣기 하세요.';
+    }
+  };
+
+  document.getElementById('scSave').onclick = saveScrap;
+}
+
+async function saveScrap() {
+  const ta = document.getElementById('scText');
+  const st = document.getElementById('scStatus');
+  const text = ta.value.trim();
+  if (!text && !scrapShots.length) { st.textContent = '아직 아무것도 없습니다.'; return; }
+
+  st.textContent = '저장 중…';
+  const ctx = scrapContext();
+  const now = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const yy = String(now.getFullYear()).slice(2);
+  const stamp = `${yy}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}`;
+  const uniq = `${stamp.replace(/-/g, '')}_${p2(now.getHours())}${p2(now.getMinutes())}${p2(now.getSeconds())}`;
+  const slug = (ctx.title || '메모').replace(/[\/\\:*?"<>|\s]+/g, '_').slice(0, 40);
+
+  // ① 그림부터 — attachments/에 올리고 임베드 이름을 받는다
+  const payloads = [];
+  const embeds = [];
+  scrapShots.forEach((sh, i) => {
+    const name = `모아두기_${uniq}_${i + 1}.${sh.ext}`;
+    payloads.push({ path: `attachments/${name}`, content: { base64: sh.base64 },
+      message: `iPad 모아두기 그림: ${name}` });
+    embeds.push(name);
+  });
+
+  // ② 본문 — /lecture-integrate가 읽을 수 있게 출처·맥락을 머리에 박아둔다
+  const lines = ['---'];
+  lines.push('출처: 아이패드 "모아두기"(공부 중 직접 수집)');
+  if (ctx.subject) lines.push(`과목: ${ctx.subject}`);
+  if (ctx.title) lines.push(`관련: ${ctx.title}${ctx.where ? ` · ${ctx.where}` : ''}`);
+  if (ctx.path) lines.push(`원본: ${ctx.path}`);
+  lines.push(`수집일시: 20${stamp} ${p2(now.getHours())}:${p2(now.getMinutes())}`);
+  lines.push('tags: [달모/모아두기]');
+  lines.push('---', '');
+  lines.push(`# ${ctx.title || '모아둔 메모'}${ctx.where ? ` — ${ctx.where}` : ''}`, '');
+  lines.push('> [!note] 아직 정리 안 된 수집물');
+  lines.push('> 공부하다 그 자리에서 모아둔 것이다. 다음 `/lecture-integrate` 때');
+  lines.push('> 위키·최종정리에 반영할지 판단한다.', '');
+  if (text) lines.push(text, '');
+  embeds.forEach((n) => lines.push(`![[${n}]]`, ''));
+
+  payloads.push({
+    path: `${LOG_DIR}/${ctx.subject ? `${ctx.subject}_` : ''}${stamp}_${slug}_모아두기.md`,
+    content: lines.join('\n'),
+    message: `iPad 모아두기: ${ctx.title || '메모'}`,
+  });
+
+  // 네트워크가 없으면 아웃박스로 — 모아둔 게 사라지면 안 된다
+  let ok = 0;
+  let queued = 0;
+  for (const p of payloads) {
+    try { await createFile(p.path, p.content, p.message); ok++; }
+    catch { await enqueue(p); queued++; }
+  }
+  st.textContent = queued
+    ? `⚠️ ${ok}건 저장, ${queued}건은 대기열로 (네트워크 복구 시 자동 전송)`
+    : `✅ vault에 모았습니다 (${ok}건)`;
+  if (queued) refreshSyncBar();
+
+  ta.value = '';
+  scrapShots.forEach((sh) => URL.revokeObjectURL(sh.url));
+  scrapShots = [];
+  renderShots();
+  setTimeout(closeScrap, queued ? 2600 : 1100);
+}
+
+document.getElementById('readScrap').onclick = openScrap;
+document.getElementById('toolScrap').onclick = openScrap;
 
 // ---- 만든 카드 미리보기 창 (2026-10-12) ----
 // 네모 한 번에 보통 1~4장이 나온다. 뭐가 만들어졌는지 눈으로 보고 넘어가야
@@ -3885,6 +4082,7 @@ function hideSplash() {
   initResizers();
   initAskFloat();
   initCardFloat();
+  initScrap();
   initDisplayUI();
   refreshSyncBar();
   flushOutbox();
