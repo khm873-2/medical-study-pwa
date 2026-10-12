@@ -14,6 +14,12 @@
 
   /* 모서리 — 작은 것부터 큰 것까지 한 계단씩 */
   --r-1: 8px; --r-2: 11px; --r-3: 15px; --r-4: 20px;
+
+  /* 표시 설정(설정 → 표시). JS가 이 셋만 바꾸면 읽는 화면 전체가 따라온다 —
+     화면마다 따로 손대면 어딘가는 반드시 빠진다(2026-10-12). */
+  --ui-scale: 1;          /* 글자 크기 배율 */
+  --read-line: 1.75;      /* 줄 간격 */
+  --read-measure: 86ch;   /* 글줄 최대 너비(none이면 제한 없음) */
   --ease: cubic-bezier(.2, .8, .3, 1);
 }
 @media (prefers-color-scheme: dark) {
@@ -109,7 +115,7 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 /* ---- 퀴즈 ---- */
 #qnum { font-size: 13px; color: var(--sub); margin-bottom: 6px; font-weight: 600; }
 #qsource { font-size: 12px; color: var(--sub); margin-bottom: 10px; padding: 5px 11px; background: var(--badge-bg); border-radius: 6px; display: inline-block; line-height: 1.5; }
-#qtext { font-size: 18px; line-height: 1.6; margin-bottom: 18px; white-space: pre-wrap; }
+#qtext { font-size: calc(18px * var(--ui-scale)); line-height: 1.6; margin-bottom: 18px; white-space: pre-wrap; }
 #qimgContainer { display: none; margin-bottom: 18px; }
 #qimgContainer img { display: block; max-width: 100%; max-height: 42vh; border-radius: 10px; margin-bottom: 10px; border: 1px solid var(--border); }
 #qimgContainer img:last-child { margin-bottom: 0; }
@@ -124,7 +130,7 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
   width: 32px; height: 32px; min-width: 32px; border-radius: 50%; border: 2px solid #cbd5e1;
   display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; color: #475569;
 }
-.opt-text { flex: 1; font-size: 16px; line-height: 1.45; }
+.opt-text { flex: 1; font-size: calc(16px * var(--ui-scale)); line-height: 1.45; }
 .opt-explain { font-size: 13px; color: var(--sub); margin-top: 3px; line-height: 1.5; }
 .strike .opt-text { text-decoration: line-through; opacity: .45; }
 .eliminate { font-size: 15px; color: #cbd5e1; cursor: pointer; padding: 8px 10px; }
@@ -141,7 +147,7 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 .ox-btn.correct { background: var(--correct); border-color: var(--correct); color: #fff; }
 .ox-btn.wrong { background: var(--wrong); border-color: var(--wrong); color: #fff; }
 
-#explainBox { display: none; margin-top: 14px; padding: 15px; background: var(--badge-bg); border-radius: 10px; font-size: 15px; line-height: 1.65; }
+#explainBox { display: none; margin-top: 14px; padding: 15px; background: var(--badge-bg); border-radius: 10px; font-size: calc(15px * var(--ui-scale)); line-height: 1.65; }
 #explainBox .line { margin-bottom: 7px; white-space: pre-wrap; }
 #explainBox b.opt-num { color: var(--accent); }
 
@@ -182,7 +188,7 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 /* ---- 가로모드(누워서 볼 때 포함) ---- */
 @media (orientation: landscape) and (min-width: 900px) {
   #quizScreen .card { padding: 20px 22px; }
-  #qtext { font-size: 19px; }
+  #qtext { font-size: calc(19px * var(--ui-scale)); }
 }
 
 /* 스크롤 영역이 하단 네비에 가리지 않게 */
@@ -224,7 +230,10 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 .wiki-sub { font-size: 11px; color: var(--sub); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wiki-lock { padding: 18px 16px; text-align: center; }
 .wiki-lock .btn { margin-top: 10px; }
-.wiki-body { padding: 14px 16px; max-height: 52vh; overflow-y: auto; font-size: 15px; line-height: 1.65; }
+.wiki-body {
+  padding: 14px 16px; max-height: 52vh; overflow-y: auto;
+  font-size: calc(15px * var(--ui-scale)); line-height: var(--read-line);
+}
 .wiki-body h4, .wiki-body h5, .wiki-body h6 { margin: 14px 0 6px; font-size: 15px; }
 .wiki-body p { margin: 8px 0; }
 .wiki-body ul, .wiki-body ol { margin: 8px 0; padding-left: 22px; }
@@ -298,22 +307,27 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 /* ---- 읽기 모드 ---- */
 #readCard { position: relative; }
 .read-heading { font-size: 17px; font-weight: 700; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-.read-body { max-height: none; padding: 0; font-size: 17px; line-height: 1.75; }
+.read-body {
+  max-height: none; padding: 0;
+  font-size: calc(17px * var(--ui-scale));
+  line-height: var(--read-line);
+}
 .read-body h4, .read-body h5, .read-body h6 { margin: 18px 0 8px; }
 /* 선택 가능하게 — 올가미 대신 네이티브 선택을 쓴다 */
 .read-body, .read-body * { -webkit-user-select: text; user-select: text; }
 #readScreen .icon-btn.active { color: var(--accent); background: var(--badge-bg); }
 
-/* 누운 자세: 가로모드에서 글줄 길이를 읽기 좋게 제한하고 여백을 키운다 */
+/* 누운 자세: 가로모드에서 글줄 길이를 읽기 좋게 제한하고 여백을 키운다.
+   72ch로 박아뒀던 것을 설정값(--read-measure)으로 바꿨다 — "읽기 화면이 좁다"는
+   지적이 있었고, 적당한 글줄 길이는 사람마다 다르다(2026-10-12). */
 @media (orientation: landscape) {
-  #readScreen #app, #readScreen { }
-  .read-body { max-width: 72ch; margin: 0 auto; }
+  .read-body { max-width: var(--read-measure); margin: 0 auto; }
   #readCard { padding: 26px 30px; }
 }
 
 /* ---- 플래시카드 ---- */
 .card-face { min-height: 46vh; display: flex; flex-direction: column; justify-content: center; text-align: center; }
-.card-context { font-size: 20px; line-height: 1.65; margin: 18px 0; }
+.card-context { font-size: calc(20px * var(--ui-scale)); line-height: 1.65; margin: 18px 0; }
 .card-answer {
   font-size: 20px; font-weight: 700; color: var(--correct);
   padding: 16px; background: var(--badge-bg); border-radius: 12px; margin-top: 12px; line-height: 1.6;
@@ -406,7 +420,14 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 .wiki-head { padding: 8px 6px 8px 10px; }
 #wikiHeading, #aiTerm { font-size: 13px; }
 .wiki-sub { font-size: 10.5px; }
-.wiki-body, #aiBody { padding: 10px 12px; font-size: 14.5px; }
+/* ⚠️ `.read-body`는 class가 `wiki-body read-body` 둘 다라, 여기서 그냥 `.wiki-body`로
+   잡으면 **노트 본문까지 14.5px로 깎인다** — 위(.read-body의 17px)와 명시도가 같은데
+   이 줄이 뒤에 있어서 이긴다. 실제로 노트가 계속 14.5px로 나오고 있었다(2026-10-12 발견:
+   "읽기 화면이 좁다"의 숨은 절반). 사이드 패널만 좁히도록 :not()으로 뺀다. */
+.wiki-body:not(.read-body), #aiBody {
+  padding: 10px 12px;
+  font-size: calc(14.5px * var(--ui-scale));
+}
 .ai-foot { padding: 8px 10px; }
 .ai-foot .btn { min-height: 36px; padding: 7px 10px; font-size: 12.5px; }
 
@@ -1691,7 +1712,7 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
 .af-body {
   flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
   max-height: none;                          /* .wiki-body의 52vh 상한을 푼다 */
-  padding: 14px 16px; font-size: 15.5px;
+  padding: 14px 16px; font-size: calc(15.5px * var(--ui-scale));
 }
 .af-foot {
   flex: 0 0 auto; display: flex; gap: 8px; padding: 10px 12px;
@@ -1705,3 +1726,87 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
     linear-gradient(135deg, transparent 50%, var(--border) 50%, var(--border) 62%, transparent 62%,
                     transparent 72%, var(--border) 72%, var(--border) 84%, transparent 84%);
 }
+
+/* ═══════════ 좁은 폭에서 도구가 화면 밖으로 밀려나던 것 (2026-10-12) ═══════════
+   아이패드 분할뷰(Slide Over 320px, Split View 375px)에서 머리줄이 한 줄에 안 들어가
+   **오른쪽 도구가 통째로 화면 밖으로 밀려났다**. 아이콘 버튼은 min-width 40px라
+   더 줄지 못하고, 머리줄은 nowrap이라 넘친 만큼 잘려 나간 것.
+   실측(2026-10-12): 320px에서 풀이 화면 109px 넘침 → AI·뜯어보기·전체보기 셋을 못 눌렀다.
+   읽기 화면도 40px 넘쳐 카드 만들기를 못 눌렀다.
+
+   고치는 방법: 좁으면 **두 줄로 접는다**. 첫 줄은 "뒤로 + 제목"으로 고정하고
+   (돌아갈 길은 어떤 폭에서도 맨 앞에 있어야 한다) 나머지 도구는 아랫줄로 내려보낸다.
+   스크롤로 숨기지 않는 이유: 숨은 도구는 있는 줄도 모른다. */
+
+@media (max-width: 460px) {
+  header, .quiz-head { flex-wrap: wrap; row-gap: 4px; }
+
+  /* 줄바꿈을 **제목 바로 뒤**에서 강제한다.
+     header의 ::after도 flex 항목이므로, order로 제목과 도구 사이에 끼워 넣으면
+     폭 100%짜리 투명한 칸이 되어 그 뒤를 다음 줄로 민다.
+     이렇게 안 하면 줄바꿈 자리가 폭에 따라 춤춰서 제목이 도구들 사이에 끼거나
+     "뒤로" 버튼만 한 줄을 차지한다(2026-10-12 실측으로 셋 다 겪음).
+
+     DOM 순서가 모든 화면에서 [뒤로] [제목] [도구들]이라 `h1 ~ *`로 도구만 집을 수 있다. */
+  header::after, .quiz-head::after {
+    content: ''; flex: 0 0 100%; height: 0; order: 1;
+  }
+  header h1 ~ *, .quiz-head h1 ~ * { order: 2; }
+
+  /* basis를 0으로 — auto면 제목의 natural width(300px+)가 기준이 돼서 제목 혼자
+     다음 줄로 밀려난다. 0이면 "뒤로"와 같은 줄에서 남는 폭만큼만 쓰고 말줄임표가 된다. */
+  header h1, .quiz-head h1 { flex: 1 1 0; min-width: 0; }
+
+  /* 돌아갈 길은 절대 줄거나 밀리지 않는다 */
+  #readBack, #cardBack, #deckBack, #backToListBtn, #resultBackBtn { flex: 0 0 auto; }
+
+  /* 아랫줄로 내려간 도구는 왼쪽부터 채운다 — 엄지로 닿는 자리다 */
+  .quiz-head .badge-pill { margin-right: auto; }
+  .quiz-head .tool-sep { display: none; }       /* 줄이 나뉘었으니 구분선은 필요 없다 */
+}
+
+/* 아주 좁으면(320px 안팎) 버튼을 조금 줄여 두 줄 안에 들어오게 */
+@media (max-width: 360px) {
+  .icon-btn { min-width: 36px; min-height: 36px; padding: 6px; }
+  .quiz-head .tool { min-width: 34px; min-height: 34px; padding: 5px 6px; }
+}
+
+/* ── 만든 카드 미리보기 창 ── (.ask-float의 틀을 그대로 쓴다) */
+.cf-body { display: flex; flex-direction: column; gap: 12px; justify-content: center; }
+.cf-topic { font-size: 11.5px; font-weight: 700; color: var(--accent); line-height: 1.5; }
+.cf-q { font-size: calc(17px * var(--ui-scale)); line-height: var(--read-line); word-break: keep-all; }
+.cf-q .cloze {
+  display: inline-block; min-width: 54px; border-bottom: 2px solid var(--accent);
+  color: transparent; vertical-align: baseline;
+}
+.cf-q .cloze.filled {
+  background: color-mix(in srgb, var(--correct) 16%, transparent);
+  border-bottom-color: var(--correct); color: var(--text); font-weight: 700;
+}
+.cf-q table { border-collapse: collapse; font-size: 13.5px; }
+.cf-q th, .cf-q td { border: 1px solid var(--border); padding: 6px 8px; }
+.cf-a {
+  font-size: 16px; font-weight: 700; color: var(--correct);
+  padding-top: 11px; border-top: 1px solid var(--border);
+}
+.ask-float .af-foot .btn:disabled { opacity: .35; }
+
+/* ── 설정: 표시 ── */
+.set-row { margin-top: 16px; }
+.set-row:first-of-type { margin-top: 0; }
+.set-label { font-size: 13px; font-weight: 700; margin-bottom: 8px; display: flex; gap: 8px; align-items: baseline; }
+.set-val { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+.set-hint { font-size: 12px; margin: 7px 0 0; }
+.seg { display: flex; gap: 8px; flex-wrap: wrap; }
+.seg .btn { flex: 1 1 auto; min-width: 72px; }
+#fontRange { width: 100%; accent-color: var(--accent); height: 36px; }
+.set-preview {
+  margin-top: 18px; padding: 14px 16px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-2);
+  font-size: calc(17px * var(--ui-scale)); line-height: var(--read-line); word-break: keep-all;
+}
+.set-preview mark { background: #fde68a; color: #78350f; padding: 0 3px; border-radius: 3px; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .set-preview mark { background: #78350f; color: #fde68a; }
+}
+:root[data-theme="dark"] .set-preview mark { background: #78350f; color: #fde68a; }

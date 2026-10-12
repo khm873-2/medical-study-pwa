@@ -2624,6 +2624,163 @@ await run('색상 → Obsidian 태그', async () => {
     ok: /colors: this\.colors/.test(quiz) && /s\.colors\.length === this\.all\.length/.test(quiz) });
   return out;
 });
+
+// ══════════ 좁은 폭에서 도구가 밀려나지 않는가 (2026-10-12) ══════════
+// 실제 증상: "노트 보기에서 뒤로가기가 안 됨 — 홈으로 나가는 버튼이 없다".
+// 분할뷰(320·375px)에서 머리줄이 한 줄에 안 들어가 오른쪽 도구가 통째로
+// 화면 밖으로 잘려 나갔다. 이제는 두 줄로 접히고, 돌아갈 길은 늘 맨 앞에 있다.
+for (const w of [320, 375, 430, 820, 1366]) {
+  await page.setViewport({ width: w, height: 900 });
+  const bad = await page.evaluate(() => {
+    const out = [];
+    for (const id of ['listScreen', 'readScreen', 'quizScreen', 'cardScreen', 'deckScreen', 'resultScreen']) {
+      document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+      const sec = document.getElementById(id);
+      sec.classList.remove('hidden');
+      document.body.dataset.screen = id;
+      const h1 = sec.querySelector('h1');
+      if (h1 && !h1.textContent.trim()) h1.textContent = '응급_중환자 — 기본소생술(BLS) (곽세정 교수)';
+      const head = sec.querySelector('header');
+      if (!head) continue;
+      const btns = [...head.querySelectorAll('button')].filter((b) => b.offsetParent !== null);
+      const off = btns.filter((b) => {
+        const r = b.getBoundingClientRect();
+        return r.right > innerWidth + 0.5 || r.left < -0.5 || r.width < 20;
+      }).map((b) => b.id || b.title || '?');
+      if (head.scrollWidth - head.clientWidth > 1 || off.length) {
+        out.push(`${id}(넘침 ${Math.round(head.scrollWidth - head.clientWidth)}px, 밀림 [${off.join(',')}])`);
+      }
+    }
+    return out;
+  });
+  results.push({ name: `${w}px에서 머리줄 도구가 안 잘린다`, ok: bad.length === 0, detail: bad.join(' / ') });
+}
+// 돌아갈 길은 어느 폭에서도 맨 앞에 있어야 한다
+await page.setViewport({ width: 320, height: 900 });
+await run('돌아갈 길', () => {
+  const out = [];
+  for (const [screen, back] of [['readScreen', 'readBack'], ['quizScreen', 'backToListBtn'],
+    ['cardScreen', 'cardBack'], ['deckScreen', 'deckBack'], ['resultScreen', 'resultBackBtn']]) {
+    document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+    document.getElementById(screen).classList.remove('hidden');
+    document.body.dataset.screen = screen;
+    const b = document.getElementById(back);
+    const r = b.getBoundingClientRect();
+    const others = [...document.getElementById(screen).querySelectorAll('header button')]
+      .filter((x) => x !== b && x.offsetParent !== null);
+    out.push({ name: `${screen}: 뒤로 버튼이 보이고 눌린다`,
+      ok: r.width >= 30 && r.height >= 30 && r.left >= -0.5 && r.right <= innerWidth + 0.5,
+      detail: `${Math.round(r.width)}×${Math.round(r.height)} @${Math.round(r.left)}` });
+    out.push({ name: `${screen}: 뒤로 버튼이 다른 도구보다 앞/위에 있다`,
+      ok: others.every((x) => {
+        const o = x.getBoundingClientRect();
+        return o.top > r.top + 4 || o.left >= r.left - 0.5;
+      }) });
+    out.push({ name: `${screen}: 뒤로 버튼에 핸들러가 걸려 있다`, ok: typeof b.onclick === 'function' });
+  }
+  return out;
+});
+await page.setViewport({ width: 1366, height: 1024 });
+
+// ══════════ 표시 설정 — 글자·줄간격·글줄 너비 (2026-10-12) ══════════
+await run('표시 설정', async () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('setupScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'setupScreen';
+
+  const root = document.documentElement;
+  const read = () => getComputedStyle(root).getPropertyValue('--ui-scale').trim();
+  out.push({ name: '설정 화면에 글자 크기 슬라이더가 있다', ok: !!document.getElementById('fontRange') });
+  out.push({ name: '줄 간격·글줄 너비도 고를 수 있다',
+    ok: document.querySelectorAll('#lineSeg .btn').length === 3
+      && document.querySelectorAll('#widthSeg .btn').length === 4 });
+  out.push({ name: '미리보기가 있다(바꾸면 바로 보인다)', ok: !!document.getElementById('setPreview') });
+
+  // 글자 크기를 키우면 실제 글자가 커져야 한다 — 변수만 바뀌고 끝나면 소용없다
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.getElementById('readBody').innerHTML = '<p id="szProbe">성인 가슴압박 깊이는 5~6cm다.</p>';
+  const before = parseFloat(getComputedStyle(document.getElementById('szProbe')).fontSize);
+  root.style.setProperty('--ui-scale', '1.4');
+  const after = parseFloat(getComputedStyle(document.getElementById('szProbe')).fontSize);
+  out.push({ name: '글자 크기를 키우면 노트 본문이 실제로 커진다', ok: after > before * 1.3,
+    detail: `${before.toFixed(1)}px → ${after.toFixed(1)}px` });
+
+  // 문제 지문·선지·해설·AI 답변도 같이 따라와야 한다(한 군데라도 빠지면 들쭉날쭉해진다)
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+  document.getElementById('qtext').textContent = '지문';
+  document.getElementById('optsContainer').innerHTML = '<div class="opt-row"><div class="opt-text">선지</div></div>';
+  const qs = parseFloat(getComputedStyle(document.getElementById('qtext')).fontSize);
+  const os = parseFloat(getComputedStyle(document.querySelector('.opt-text')).fontSize);
+  root.style.setProperty('--ui-scale', '1');
+  const qs1 = parseFloat(getComputedStyle(document.getElementById('qtext')).fontSize);
+  const os1 = parseFloat(getComputedStyle(document.querySelector('.opt-text')).fontSize);
+  out.push({ name: '문제 지문도 따라 커진다', ok: qs > qs1 * 1.3, detail: `${qs1}→${qs}` });
+  out.push({ name: '선지도 따라 커진다', ok: os > os1 * 1.3, detail: `${os1}→${os}` });
+
+  // 글줄 너비 — 0이면 제한 없음
+  root.style.setProperty('--read-measure', '68ch');
+  out.push({ name: '글줄 너비가 변수로 조절된다',
+    ok: getComputedStyle(root).getPropertyValue('--read-measure').trim() === '68ch' });
+  root.style.setProperty('--read-measure', 'none');
+  out.push({ name: '"꽉 채움"이면 제한이 풀린다',
+    ok: getComputedStyle(root).getPropertyValue('--read-measure').trim() === 'none' });
+
+  // 노트 본문은 class가 `wiki-body read-body` 둘 다라, 사이드 패널용 `.wiki-body` 규칙이
+  // 뒤에 오면 조용히 이긴다 — 실제로 17px이어야 할 본문이 14.5px로 나오고 있었다.
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.getElementById('readBody').innerHTML = '<p id="szProbe2">본문</p>';
+  const base = parseFloat(getComputedStyle(document.getElementById('szProbe2')).fontSize);
+  out.push({ name: '노트 본문이 사이드 패널 크기(14.5px)로 깎이지 않는다',
+    ok: base >= 16.5, detail: `${base}px` });
+
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '설정이 기기에 저장된다', ok: /kvSet\('display', displayPrefs\)/.test(app) });
+  out.push({ name: '앱을 켤 때 불러온다', ok: /await loadDisplay\(\)/.test(app) });
+  out.push({ name: '기본값으로 되돌릴 수 있다', ok: !!document.getElementById('resetDisplay') });
+
+  root.style.removeProperty('--ui-scale');
+  root.style.removeProperty('--read-measure');
+  return out;
+});
+
+// ══════════ 카드 만들기 — 화면 전환 대신 뜨는 창 (2026-10-12) ══════════
+await run('카드 미리보기 창', async () => {
+  const out = [];
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '네모 치면 화면을 안 떠나고 창으로 보여준다',
+    ok: /openCardFloat\(cards\)/.test(app) && !/startDeck\(cards, reader\.note\.title, \{ backTo: 'reader' \}\);\n\}/.test(app) });
+  out.push({ name: '질문 답변 창과 같은 틀(끌기·크기조절)을 쓴다',
+    ok: /panel: 'cardFloat', head: 'cfHead', grip: 'cfResize'/.test(app) });
+  out.push({ name: '위치·크기를 따로 기억한다', ok: /key: 'card_float_box'/.test(app) });
+
+  // 실제로 띄워본다
+  const f = document.getElementById('cardFloat');
+  out.push({ name: '카드 창이 있다', ok: !!f });
+  f.classList.remove('hidden');
+  document.getElementById('cfStatus').textContent = '1/3 · 카드 관리에 저장됐습니다';
+  document.getElementById('cfBody').innerHTML =
+    '<div class="cf-topic">심폐소생술 › 가슴압박</div>'
+    + '<div class="cf-q">성인 가슴압박 깊이는 <span class="cloze">____</span>다.</div>';
+  await new Promise((r) => setTimeout(r, 50));
+  const r2 = f.getBoundingClientRect();
+  out.push({ name: '화면에 떠 있다(전환 아님)', ok: getComputedStyle(f).position === 'fixed' });
+  out.push({ name: '읽을 만한 크기다', ok: r2.width >= 280 && r2.height >= 200,
+    detail: `${Math.round(r2.width)}×${Math.round(r2.height)}` });
+  out.push({ name: '화면 안에 들어온다',
+    ok: r2.right <= innerWidth + 1 && r2.bottom <= innerHeight + 1 });
+  out.push({ name: '빈칸이 가려져 있다',
+    ok: getComputedStyle(document.querySelector('.cf-q .cloze')).color === 'rgba(0, 0, 0, 0)' });
+  out.push({ name: '넘기기·답보기·바로외우기 버튼이 있다',
+    ok: ['cfPrev', 'cfNext', 'cfReveal', 'cfStudy'].every((id) => !!document.getElementById(id)) });
+  out.push({ name: '펜이 이 창도 UI로 인식한다',
+    ok: !!document.getElementById('cfBody').closest('.ask-float') });
+  f.classList.add('hidden');
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════

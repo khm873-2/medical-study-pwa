@@ -154,11 +154,46 @@
 
     <div class="card">
       <h2>표시</h2>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn" data-theme-set="auto">자동</button>
-        <button class="btn" data-theme-set="light">밝게</button>
-        <button class="btn" data-theme-set="dark">어둡게</button>
+      <div class="set-row">
+        <div class="set-label">테마</div>
+        <div class="seg" id="themeSeg">
+          <button class="btn" data-theme-set="auto">자동</button>
+          <button class="btn" data-theme-set="light">밝게</button>
+          <button class="btn" data-theme-set="dark">어둡게</button>
+        </div>
       </div>
+
+      <div class="set-row">
+        <div class="set-label">글자 크기 <span class="set-val" id="fontVal">100%</span></div>
+        <input type="range" id="fontRange" min="85" max="150" step="5" value="100">
+      </div>
+
+      <div class="set-row">
+        <div class="set-label">줄 간격 <span class="set-val" id="lineVal">보통</span></div>
+        <div class="seg" id="lineSeg">
+          <button class="btn" data-line="1.55">좁게</button>
+          <button class="btn" data-line="1.75">보통</button>
+          <button class="btn" data-line="2">넓게</button>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <div class="set-label">노트 읽기 글줄 너비 <span class="set-val" id="widthVal">보통</span></div>
+        <div class="seg" id="widthSeg">
+          <button class="btn" data-width="68">좁게</button>
+          <button class="btn" data-width="86">보통</button>
+          <button class="btn" data-width="110">넓게</button>
+          <button class="btn" data-width="0">꽉 채움</button>
+        </div>
+        <p class="muted set-hint">한 줄이 너무 길면 눈이 다음 줄을 못 찾습니다. 넓은 화면에서만 적용됩니다.</p>
+      </div>
+
+      <div class="set-preview" id="setPreview">
+        <b>미리보기</b> — 성인 가슴압박은 깊이 <mark>5cm 이상 6cm 이하</mark>,
+        속도 100~120회/분으로 시행하며, 압박:환기 비율은 30:2다.
+      </div>
+
+      <button class="btn" id="resetDisplay" style="margin-top:12px">기본값으로</button>
     </div>
   </section>
 
@@ -449,6 +484,24 @@
     <button class="btn primary" id="afSave">답변 저장</button>
   </div>
   <div class="af-resize" id="afResize" title="끌어서 크기 조절"></div>
+</div>
+
+<!-- 노트에서 펜으로 네모 쳐 카드를 만들었을 때 — 화면을 떠나지 않고 그 자리에서 확인한다 -->
+<div id="cardFloat" class="ask-float hidden">
+  <div class="af-head" id="cfHead">
+    <span class="af-grip" aria-hidden="true"></span>
+    <b class="af-title">새 카드</b>
+    <span class="af-status" id="cfStatus"></span>
+    <button class="icon-btn" id="cfClose" title="닫기">✕</button>
+  </div>
+  <div class="af-body cf-body" id="cfBody"></div>
+  <div class="af-foot">
+    <button class="btn" id="cfPrev">‹ 이전</button>
+    <button class="btn" id="cfReveal">답 보기</button>
+    <button class="btn" id="cfNext">다음 ›</button>
+    <button class="btn primary" id="cfStudy">바로 외우기</button>
+  </div>
+  <div class="af-resize" id="cfResize" title="끌어서 크기 조절"></div>
 </div>
 
 <!-- 동그라미 → 질문 시트 -->

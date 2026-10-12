@@ -60,11 +60,77 @@ function show(id) {
   window.scrollTo(0, 0);
 }
 
-// ---------- 테마 ----------
+// ---------- 테마 · 표시 설정 ----------
 async function applyTheme() {
   const t = (await kvGet('theme')) || 'auto';
   if (t === 'auto') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', t);
+}
+
+// 글자 크기·줄 간격·글줄 너비. CSS 변수 세 개로만 움직이게 해뒀다 —
+// 화면마다 따로 손대면 어딘가는 반드시 빠지기 때문(2026-10-12 요청).
+const DISPLAY_DEFAULT = { font: 100, line: 1.75, width: 86 };
+const LINE_LABEL = { 1.55: '좁게', 1.75: '보통', 2: '넓게' };
+const WIDTH_LABEL = { 0: '꽉 채움', 68: '좁게', 86: '보통', 110: '넓게' };
+let displayPrefs = { ...DISPLAY_DEFAULT };
+
+function applyDisplay(d = displayPrefs) {
+  const root = document.documentElement.style;
+  root.setProperty('--ui-scale', String(d.font / 100));
+  root.setProperty('--read-line', String(d.line));
+  // 0 = 제한 없음. ch는 글자 크기를 따라가므로 글자를 키우면 폭도 같이 늘어난다.
+  root.setProperty('--read-measure', d.width ? `${d.width}ch` : 'none');
+}
+
+async function loadDisplay() {
+  const saved = (await kvGet('display')) || {};
+  displayPrefs = { ...DISPLAY_DEFAULT, ...saved };
+  applyDisplay();
+}
+
+async function setDisplay(patch) {
+  displayPrefs = { ...displayPrefs, ...patch };
+  applyDisplay();
+  await kvSet('display', displayPrefs);
+  paintDisplayUI();
+  // 읽기 화면이 열려 있으면 펜 레이어 크기가 어긋난다 — 다시 맞춘다
+  if (readerPen) requestAnimationFrame(() => readerPen.resize());
+  if (pen) requestAnimationFrame(() => pen.resize());
+}
+
+/** 설정 화면의 버튼·슬라이더를 지금 값에 맞춘다. */
+function paintDisplayUI() {
+  const d = displayPrefs;
+  const r = document.getElementById('fontRange');
+  if (!r) return;
+  r.value = String(d.font);
+  document.getElementById('fontVal').textContent = `${d.font}%`;
+  document.getElementById('lineVal').textContent = LINE_LABEL[d.line] || d.line;
+  document.getElementById('widthVal').textContent = WIDTH_LABEL[d.width] ?? `${d.width}자`;
+  document.querySelectorAll('#lineSeg .btn').forEach((b) =>
+    b.classList.toggle('primary', Number(b.dataset.line) === d.line));
+  document.querySelectorAll('#widthSeg .btn').forEach((b) =>
+    b.classList.toggle('primary', Number(b.dataset.width) === d.width));
+}
+
+function initDisplayUI() {
+  const r = document.getElementById('fontRange');
+  if (!r) return;
+  // input은 끄는 동안 계속 온다 — 미리보기는 바로 바꾸고 저장만 묶는다
+  r.oninput = () => {
+    displayPrefs.font = Number(r.value);
+    applyDisplay();
+    document.getElementById('fontVal').textContent = `${r.value}%`;
+  };
+  r.onchange = () => setDisplay({ font: Number(r.value) });
+  document.querySelectorAll('#lineSeg .btn').forEach((b) => {
+    b.onclick = () => setDisplay({ line: Number(b.dataset.line) });
+  });
+  document.querySelectorAll('#widthSeg .btn').forEach((b) => {
+    b.onclick = () => setDisplay({ width: Number(b.dataset.width) });
+  });
+  document.getElementById('resetDisplay').onclick = () => setDisplay({ ...DISPLAY_DEFAULT });
+  paintDisplayUI();
 }
 
 // ---------- 설정 화면 ----------
@@ -2226,8 +2292,87 @@ function makeCardsFromBox(box) {
   readerCardMode(false);
   saveCards(cards).catch(() => {});      // 나중에 관리 화면에서 다시 볼 수 있게
   backup.scheduleBackup();
-  startDeck(cards, reader.note.title, { backTo: 'reader' });
-  capToast(`카드 ${cards.length}장을 만들었습니다`);
+  // 화면을 통째로 바꾸면 읽던 자리를 잃는다 — 만든 카드를 그 자리에서 확인하고
+  // "바로 외우기"를 고를 때만 카드 화면으로 간다(2026-10-12 요청).
+  openCardFloat(cards);
+}
+
+// ---- 만든 카드 미리보기 창 (2026-10-12) ----
+// 네모 한 번에 보통 1~4장이 나온다. 뭐가 만들어졌는지 눈으로 보고 넘어가야
+// "이게 외울 만한 카드인가"를 바로 판단할 수 있다.
+let cardFloat = null;
+let cfDeck = null;          // {cards, idx, shown}
+
+function openCardFloat(cards) {
+  cfDeck = { cards, idx: 0, shown: false };
+  document.getElementById('cardFloat').classList.remove('hidden');
+  if (cardFloat) cardFloat.place();
+  renderCardFloat();
+}
+function closeCardFloat() {
+  document.getElementById('cardFloat').classList.add('hidden');
+  cfDeck = null;
+}
+
+function renderCardFloat() {
+  if (!cfDeck) return;
+  const { cards, idx, shown } = cfDeck;
+  const c = cards[idx];
+  document.getElementById('cfStatus').textContent =
+    `${idx + 1}/${cards.length} · 카드 관리에 저장됐습니다`;
+
+  const body = document.getElementById('cfBody');
+  body.innerHTML = '';
+  if (c.topic) {
+    const t = document.createElement('div');
+    t.className = 'cf-topic';
+    t.textContent = c.topic;
+    body.appendChild(t);
+  }
+  const q = document.createElement('div');
+  q.className = 'cf-q';
+  q.innerHTML = c.contextHtml || '';
+  // 답 자리는 가려두고, "답 보기"를 눌러야 드러난다
+  q.querySelectorAll('.cloze').forEach((el) => {
+    if (shown) el.classList.add('filled');
+    else el.textContent = '____';
+  });
+  body.appendChild(q);
+
+  if (shown && (c.answers || []).length) {
+    const a = document.createElement('div');
+    a.className = 'cf-a';
+    a.textContent = (c.answers || []).join('  /  ');
+    body.appendChild(a);
+  }
+
+  const one = cards.length <= 1;
+  document.getElementById('cfPrev').disabled = one || idx === 0;
+  document.getElementById('cfNext').disabled = one || idx === cards.length - 1;
+  document.getElementById('cfReveal').textContent = shown ? '답 가리기' : '답 보기';
+}
+
+function initCardFloat() {
+  cardFloat = makeFloat({
+    panel: 'cardFloat', head: 'cfHead', grip: 'cfResize', key: 'card_float_box',
+    def: { w: Math.min(520, innerWidth * 0.92), h: Math.min(420, innerHeight * 0.55) },
+  });
+  document.getElementById('cfClose').onclick = closeCardFloat;
+  document.getElementById('cfPrev').onclick = () => {
+    if (cfDeck && cfDeck.idx > 0) { cfDeck.idx--; cfDeck.shown = false; renderCardFloat(); }
+  };
+  document.getElementById('cfNext').onclick = () => {
+    if (cfDeck && cfDeck.idx < cfDeck.cards.length - 1) { cfDeck.idx++; cfDeck.shown = false; renderCardFloat(); }
+  };
+  document.getElementById('cfReveal').onclick = () => {
+    if (cfDeck) { cfDeck.shown = !cfDeck.shown; renderCardFloat(); }
+  };
+  document.getElementById('cfStudy').onclick = () => {
+    if (!cfDeck) return;
+    const cards = cfDeck.cards;
+    closeCardFloat();
+    startDeck(cards, reader ? reader.note.title : '새 카드', { backTo: 'reader' });
+  };
 }
 
 /** 카드 묶음을 띄운다. 돌아갈 곳을 기억해 읽던 자리로 복귀한다. */
@@ -2301,6 +2446,74 @@ function openAskFromReader(term, info) {
 
 function afEl(id) { return document.getElementById(id); }
 
+/**
+ * 떠 있는 창을 "끌어 옮기고 크기 조절되는" 물건으로 만든다.
+ *
+ * 질문 답변 창과 카드 만들기 창이 같은 동작을 쓴다 — 한 군데서만 고치게 묶어둔다.
+ * @param {object} p
+ * @param {string} p.panel  창 요소 id
+ * @param {string} p.head   끌어서 옮기는 손잡이 id
+ * @param {string} p.grip   끌어서 크기 바꾸는 모서리 id
+ * @param {string} p.key    위치·크기를 기억할 localStorage 키
+ * @param {object} [p.def]  기본 크기 {w, h}
+ */
+function makeFloat({ panel, head, grip, key, def = {} }) {
+  const f = document.getElementById(panel);
+
+  const place = () => {
+    let box = null;
+    try { box = JSON.parse(localStorage.getItem(key) || 'null'); } catch {}
+    const w = Math.min(box?.w || def.w || Math.min(560, innerWidth * 0.92), innerWidth - 16);
+    const h = Math.min(box?.h || def.h || Math.min(innerHeight * 0.62, 560), innerHeight - 16);
+    const x = Math.max(8, Math.min(box?.x ?? (innerWidth - w) / 2, innerWidth - w - 8));
+    const y = Math.max(8, Math.min(box?.y ?? innerHeight * 0.12, innerHeight - h - 8));
+    f.style.setProperty('--af-w', `${w}px`);
+    f.style.setProperty('--af-h', `${h}px`);
+    f.style.setProperty('--af-x', `${x}px`);
+    f.style.setProperty('--af-y', `${y}px`);
+  };
+  const save = () => {
+    const r = f.getBoundingClientRect();
+    localStorage.setItem(key, JSON.stringify({
+      x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height),
+    }));
+  };
+
+  const drag = (handle, onMove) => {
+    if (!handle) return;
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('button')) return;      // 닫기·다시묻기는 버튼이다
+      const r = f.getBoundingClientRect();
+      const sx = e.clientX, sy = e.clientY;
+      handle.setPointerCapture(e.pointerId);
+      const move = (ev) => onMove(ev.clientX - sx, ev.clientY - sy, r);
+      const up = () => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', up);
+        handle.removeEventListener('pointercancel', up);
+        save();
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', up);
+      handle.addEventListener('pointercancel', up);
+      e.preventDefault();
+    });
+  };
+  drag(document.getElementById(head), (dx, dy, r) => {
+    // 화면 밖으로 완전히 나가면 되찾을 수가 없다 — 머리 부분은 항상 남겨둔다
+    const x = Math.max(8 - r.width + 60, Math.min(r.left + dx, innerWidth - 60));
+    const y = Math.max(8, Math.min(r.top + dy, innerHeight - 44));
+    f.style.setProperty('--af-x', `${x}px`);
+    f.style.setProperty('--af-y', `${y}px`);
+  });
+  drag(document.getElementById(grip), (dx, dy, r) => {
+    f.style.setProperty('--af-w', `${Math.max(280, Math.min(r.width + dx, innerWidth - r.left - 8))}px`);
+    f.style.setProperty('--af-h', `${Math.max(200, Math.min(r.height + dy, innerHeight - r.top - 8))}px`);
+  });
+
+  return { place, save };
+}
+
 function openAskFloat(term) {
   const f = afEl('askFloat');
   afEl('afQ').textContent = term;
@@ -2313,58 +2526,12 @@ function openAskFloat(term) {
 }
 function closeAskFloat() { afEl('askFloat').classList.add('hidden'); }
 
-/** 기억해둔 위치·크기를 되살리되, 화면 밖으로 나가 있으면 끌어온다. */
-function restoreFloatBox() {
-  const f = afEl('askFloat');
-  let box = null;
-  try { box = JSON.parse(localStorage.getItem('ask_float_box') || 'null'); } catch {}
-  const w = Math.min(box?.w || Math.min(560, innerWidth * 0.92), innerWidth - 16);
-  const h = Math.min(box?.h || Math.min(innerHeight * 0.62, 560), innerHeight - 16);
-  const x = Math.max(8, Math.min(box?.x ?? (innerWidth - w) / 2, innerWidth - w - 8));
-  const y = Math.max(8, Math.min(box?.y ?? innerHeight * 0.12, innerHeight - h - 8));
-  f.style.setProperty('--af-w', `${w}px`);
-  f.style.setProperty('--af-h', `${h}px`);
-  f.style.setProperty('--af-x', `${x}px`);
-  f.style.setProperty('--af-y', `${y}px`);
-}
-function saveFloatBox() {
-  const r = afEl('askFloat').getBoundingClientRect();
-  localStorage.setItem('ask_float_box',
-    JSON.stringify({ x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }));
-}
+let askFloat = null;
+function restoreFloatBox() { if (askFloat) askFloat.place(); }
 
-/** 머리를 끌면 옮기고, 오른쪽 아래 모서리를 끌면 크기를 바꾼다. */
 function initAskFloat() {
-  const f = afEl('askFloat');
-  const drag = (handle, onMove) => {
-    handle.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('button')) return;      // 닫기·다시묻기는 버튼이다
-      const r = f.getBoundingClientRect();
-      const sx = e.clientX, sy = e.clientY;
-      handle.setPointerCapture(e.pointerId);
-      const move = (ev) => onMove(ev.clientX - sx, ev.clientY - sy, r);
-      const up = () => {
-        handle.removeEventListener('pointermove', move);
-        handle.removeEventListener('pointerup', up);
-        handle.removeEventListener('pointercancel', up);
-        saveFloatBox();
-      };
-      handle.addEventListener('pointermove', move);
-      handle.addEventListener('pointerup', up);
-      handle.addEventListener('pointercancel', up);
-      e.preventDefault();
-    });
-  };
-  drag(afEl('afHead'), (dx, dy, r) => {
-    // 화면 밖으로 완전히 나가면 되찾을 수가 없다 — 머리 부분은 항상 남겨둔다
-    const x = Math.max(8 - r.width + 60, Math.min(r.left + dx, innerWidth - 60));
-    const y = Math.max(8, Math.min(r.top + dy, innerHeight - 44));
-    f.style.setProperty('--af-x', `${x}px`);
-    f.style.setProperty('--af-y', `${y}px`);
-  });
-  drag(afEl('afResize'), (dx, dy, r) => {
-    f.style.setProperty('--af-w', `${Math.max(280, Math.min(r.width + dx, innerWidth - r.left - 8))}px`);
-    f.style.setProperty('--af-h', `${Math.max(200, Math.min(r.height + dy, innerHeight - r.top - 8))}px`);
+  askFloat = makeFloat({
+    panel: 'askFloat', head: 'afHead', grip: 'afResize', key: 'ask_float_box',
   });
 
   afEl('afClose').onclick = closeAskFloat;
@@ -3711,11 +3878,14 @@ function hideSplash() {
 (async function init() {
   window.__t0 = Date.now();
   await applyTheme();
+  await loadDisplay();
   initServiceWorker();
   gem.loadDeadModels().catch(() => {});
   gem.loadBodyTiers().catch(() => {});   // 어떤 모델에 어떤 본문이 통했는지 기억해둔 것
   initResizers();
   initAskFloat();
+  initCardFloat();
+  initDisplayUI();
   refreshSyncBar();
   flushOutbox();
   try {
