@@ -7,6 +7,7 @@
 import { listDir, getText } from './github.js';
 import { cacheGet, cacheSet, kvGet, kvSet } from './db.js';
 import { parseExamHtml, prettyExamName } from './parser.js';
+import { resolveNotePath } from './wiki.js';
 
 /** 캐시에 들어있는 경로 목록(= 검색 가능 범위). */
 async function cachedPaths() {
@@ -39,20 +40,12 @@ export async function cacheSubject(subject, onProgress = () => {}) {
     done++;
     onProgress(done, files.length + notes.size, f.name);
   }
-  // 연계노트도 같이 받아둔다 — 위키 패널이 오프라인에서도 뜨게
-  const roots = ['98_예습노트_보관', '02_Wiki'];
+  // 연계노트도 같이 받아둔다 — 위키 패널이 오프라인에서도 뜨게.
+  // 경로는 wiki.js가 쓰는 것과 **같은 규칙**으로 찾는다. 따로 적어두면 한쪽만 고쳐져서
+  // "앱에선 보이는데 오프라인으로는 안 받아지는" 노트가 생긴다(2026-10-12).
   for (const n of notes) {
-    for (const r of roots) {
-      let found = false;
-      try {
-        const subs = await listDir(r);
-        for (const s of subs.filter((e) => e.type === 'dir')) {
-          const p = `${s.path}/${n}.md`;
-          try { await getText(p); await addCachedPath(p); found = true; break; } catch {}
-        }
-      } catch {}
-      if (found) break;
-    }
+    const p = await resolveNotePath(n);
+    if (p) { try { await getText(p); await addCachedPath(p); } catch {} }
     done++;
     onProgress(done, files.length + notes.size, n);
   }

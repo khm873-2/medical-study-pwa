@@ -126,7 +126,11 @@ export class Quiz {
   get q() { return this.all[this.order[this.cur]]; }
   get qIndex() { return this.order[this.cur]; }
 
+  /** 채점 대상인가 — 'open'(서술형 복원)은 정답이 없어 점수에 넣지 않는다. */
+  isGraded(i) { return this.all[i] && this.all[i].type !== 'open'; }
+
   isCorrect(i) {
+    if (!this.isGraded(i)) return false;
     const a = this.answers[i];
     return a !== null && a === this.all[i].ans;
   }
@@ -160,7 +164,8 @@ export class Quiz {
     this.el.prev.disabled = this.cur === 0;
     this.el.next.disabled = this.cur === this.order.length - 1;
 
-    if (q.type === 'mc') this._renderMC(q, idx);
+    if (q.type === 'open') this._renderOpen(q, idx);
+    else if (q.type === 'mc') this._renderMC(q, idx);
     else this._renderOX(q, idx);
 
     const answered = this.answers[idx] !== null;
@@ -190,7 +195,9 @@ export class Quiz {
     if (!answered) {
       const hint = document.createElement('span');
       hint.className = 'muted';
-      hint.textContent = '선지를 고르면 해설이 나옵니다';
+      hint.textContent = this.q.type === 'open'
+        ? '선지가 없는 복원 문항입니다 — 해설만 읽고 넘어가세요'
+        : '선지를 고르면 해설이 나옵니다';
       bar.appendChild(hint);
     }
     const btn = document.createElement('button');
@@ -246,6 +253,31 @@ export class Quiz {
       }
       this.el.opts.appendChild(row);
     });
+  }
+
+  /**
+   * 채점할 수 없는 문항 — 족보에 "복원 x", "답이었던거같습니다"처럼 **서술로만** 남은 것들
+   * (응급_중환자 658블록 중 180개). 버리면 실제 시험장 정보를 버리는 거라 살려두되,
+   * 선지가 없으니 점수에서 빼고 "읽고 넘기는 카드"로 보여준다(2026-10-12).
+   */
+  _renderOpen(q, idx) {
+    this.el.ox.classList.add('hidden');
+    this.el.opts.style.display = 'block';
+    this.el.opts.innerHTML = '';
+    const seen = this.answers[idx] !== null;
+
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = '선지 없이 서술로만 복원된 문항입니다 — 점수에 들어가지 않습니다.';
+    this.el.opts.appendChild(note);
+
+    if (!seen) {
+      const b = document.createElement('button');
+      b.className = 'btn primary full';
+      b.textContent = '정답·해설 보기';
+      b.onclick = () => this.select(0);
+      this.el.opts.appendChild(b);
+    }
   }
 
   _renderOX(q, idx) {
@@ -324,7 +356,7 @@ export class Quiz {
    */
   _record(idx) {
     const q = this.all[idx];
-    if (!q) return;
+    if (!q || q.type === 'open') return;   // 채점할 수 없는 문항은 약점 통계를 오염시킨다
     this._recorded.add(idx);
     recordAttempt({
       // 모아 풀기에서는 문항마다 원래 시험이 다르다 — 이력은 원본 시험에 쌓아야 한다
@@ -364,9 +396,13 @@ export class Quiz {
     this.el.expText.innerHTML = '';
     const mk = (html) => { const d = document.createElement('div'); d.className = 'line'; d.innerHTML = html; return d; };
 
-    const correct = this.answers[idx] === q.ans;
+    // 'open'은 맞고 틀림이 없다 — ❌로 띄우면 틀린 줄 안다
+    const open = q.type === 'open';
+    const correct = !open && this.answers[idx] === q.ans;
     const ansLabel = q.type === 'ox' ? (q.ans === 0 ? 'O' : 'X') : (CIRCLED[q.ans] || q.ans + 1);
-    const head = mk(`${correct ? '✅ 정답' : '❌ 오답'} — 정답 <b class="opt-num">${ansLabel}</b>`);
+    const head = mk(open
+      ? '📖 족보 원문 — 정답은 아래 해설에 있습니다'
+      : `${correct ? '✅ 정답' : '❌ 오답'} — 정답 <b class="opt-num">${ansLabel}</b>`);
     // 선지를 잘못 눌렀을 때 되돌릴 수 있게(실수로 탭하는 경우가 잦다)
     const retry = document.createElement('button');
     retry.className = 'retry-one';
@@ -375,12 +411,16 @@ export class Quiz {
     head.appendChild(retry);
 
     // 찍어서 맞춘 문항이 "정답"으로만 남으면 약점이 숨는다 — 눌러서 다시 볼 큐에 넣는다.
-    const unsure = document.createElement('button');
-    unsure.className = 'unsure-btn' + (this.unsure[idx] ? ' on' : '');
-    unsure.textContent = this.unsure[idx] ? '🎲 찍었음 ✓' : '🎲 찍었음';
-    unsure.title = '확신 없이 골랐다면 눌러두세요 — 맞았어도 다시 볼 목록에 들어갑니다';
-    unsure.onclick = () => this.toggleUnsure();
-    head.appendChild(unsure);
+    // 'open'에는 "찍었음"이 뜻이 없다. `hidden` 속성은 .unsure-btn의 display가
+    // 덮어써버리므로(UA 스타일보다 클래스가 세다) 아예 붙이지 않는다.
+    if (!open) {
+      const unsure = document.createElement('button');
+      unsure.className = 'unsure-btn' + (this.unsure[idx] ? ' on' : '');
+      unsure.textContent = this.unsure[idx] ? '🎲 찍었음 ✓' : '🎲 찍었음';
+      unsure.title = '확신 없이 골랐다면 눌러두세요 — 맞았어도 다시 볼 목록에 들어갑니다';
+      unsure.onclick = () => this.toggleUnsure();
+      head.appendChild(unsure);
+    }
     this.el.expText.appendChild(head);
     if (correct && this.unsure[idx]) {
       this.el.expText.appendChild(mk('<span class="muted">맞았지만 <b>다시 볼 목록</b>에 넣었습니다.</span>'));
@@ -397,6 +437,7 @@ export class Quiz {
   _updateScore() {
     let correct = 0, answered = 0;
     this.order.forEach((i) => {
+      if (!this.isGraded(i)) return;
       if (this.answers[i] !== null) { answered++; if (this.isCorrect(i)) correct++; }
     });
     this.el.score.textContent = `${correct}/${answered}`;
@@ -421,16 +462,20 @@ export class Quiz {
       bookmarked: !!this.bookmarks[i],
       unsure: !!this.unsure[i],
     }));
-    const answered = items.filter((x) => x.picked !== null);
+    const graded = items.filter((x) => this.isGraded(x.i));
+    const answered = graded.filter((x) => x.picked !== null);
     const correct = answered.filter((x) => x.correct);
     return {
-      total: this.order.length,
+      total: graded.length,
+      // 서술형 복원 문항은 점수에서 빼되, 몇 개를 읽었는지는 따로 보여준다
+      read: items.filter((x) => !this.isGraded(x.i) && x.picked !== null).length,
+      openTotal: items.length - graded.length,
       answered: answered.length,
       correct: correct.length,
       wrong: answered.filter((x) => !x.correct),
       // 맞았지만 찍은 것 — 점수에는 안 들어가지만 다시 봐야 한다
-      lucky: answered.filter((x) => x.correct && x.unsure),
-      unanswered: items.filter((x) => x.picked === null),
+      lucky: answered.filter((x) => x.correct && x.unsure),   // 맞았지만 찍은 것
+      unanswered: graded.filter((x) => x.picked === null),
       items,
     };
   }
@@ -456,7 +501,7 @@ export class Quiz {
    */
   retryWrong() {
     const wrongIdx = this.order.filter(
-      (i) => this.answers[i] !== null && (!this.isCorrect(i) || this.unsure[i]));
+      (i) => this.isGraded(i) && this.answers[i] !== null && (!this.isCorrect(i) || this.unsure[i]));
     if (!wrongIdx.length) return false;
     wrongIdx.forEach((i) => {
       this.answers[i] = null;

@@ -13,7 +13,9 @@ let pass = 0; const fail = [];
 const ok = (n, c, d) => { if (c) pass++; else fail.push(`${n}${d ? ' — ' + d : ''}`); };
 
 const src = readFileSync(`${PWA}/js/wiki.js`, 'utf8')
-  .replace("import { listDir, getText } from './github.js';", 'const listDir=async()=>[],getText=async()=>"";')
+  // github.js를 가짜 파일시스템으로 바꾼다 — globalThis.__FS/__TXT로 조종한다
+  .replace("import { listDir, getText } from './github.js';",
+    'const listDir=async(p)=>((globalThis.__FS||{})[p]||[]),getText=async(p)=>((globalThis.__TXT||{})[p]||"");')
   .replace("import { linkedNoteFromMd } from './parser.js';", 'const linkedNoteFromMd=()=>null;');
 const shim = `${PWA}/js/__tm.mjs`;
 writeFileSync(shim, src);
@@ -164,6 +166,43 @@ ok('족보 오답 선지가 매칭을 끌고 가지 않는다',
   ok('그래도 wikiRefs로 지정하면 찾아진다', picked.length === 1, ref.heading);
   const extra = all.filter((s) => !body.some((b) => b.heading === s.heading));
   ok('참고 섹션(목차·Cheat Sheet·Advanced)이 목록 끝에 남는다', extra.length >= 2, `${extra.length}개`);
+}
+
+// ── 노트 탐색 범위 (2026-10-12) ──
+// /lecture-integrate는 위키를 만들 때마다 Q&A 보조본을 `02_Wiki/{과목}/QA/`에 같이 만든다.
+// 2단만 훑으면 그 폴더가 통째로 안 보여서 앞으로 만드는 위키의 절반이 앱에 안 올라온다.
+{
+  const dir = (n, p) => ({ type: 'dir', name: n, path: p });
+  const file = (n, p) => ({ type: 'file', name: n, path: p });
+  globalThis.__FS = {
+    '98_예습노트_보관': [dir('응급_중환자', '98_예습노트_보관/응급_중환자')],
+    '98_예습노트_보관/응급_중환자': [file('1021_응급중환자_ECMO.md', '98_예습노트_보관/응급_중환자/1021_응급중환자_ECMO.md')],
+    '02_Wiki': [dir('두경부_피부', '02_Wiki/두경부_피부')],
+    '02_Wiki/두경부_피부': [
+      file('두경부피부_중이염.md', '02_Wiki/두경부_피부/두경부피부_중이염.md'),
+      dir('QA', '02_Wiki/두경부_피부/QA'),
+    ],
+    '02_Wiki/두경부_피부/QA': [file('두경부피부_중이염_QA.md', '02_Wiki/두경부_피부/QA/두경부피부_중이염_QA.md')],
+    '01_임종평_전범위': [dir('05_순환기', '01_임종평_전범위/05_순환기')],
+    '01_임종평_전범위/05_순환기': [file('심근염.md', '01_임종평_전범위/05_순환기/심근염.md')],
+  };
+  const wiki = await W.listNoteFiles('02_Wiki');
+  ok('산문 노트를 찾는다', wiki.some((f) => f.name === '두경부피부_중이염' && !f.group));
+  ok('QA 하위 폴더까지 찾는다',
+    wiki.some((f) => f.name === '두경부피부_중이염_QA' && f.group === 'QA'),
+    JSON.stringify(wiki.map((f) => `${f.group || '-'}/${f.name}`)));
+
+  ok('연계노트가 QA본도 가리킬 수 있다',
+    (await W.resolveNotePath('두경부피부_중이염_QA')) === '02_Wiki/두경부_피부/QA/두경부피부_중이염_QA.md');
+  // build_mock_exam_html.py는 01_임종평_전범위까지 뒤져서 wikiRefs를 검증한다.
+  // 앱이 안 보면 빌드는 통과하는데 화면에선 조용히 자동매칭으로 떨어진다.
+  ok('01_임종평_전범위도 탐색 범위에 있다(빌드 검증과 같은 범위)',
+    (await W.resolveNotePath('심근염')) === '01_임종평_전범위/05_순환기/심근염.md');
+  ok('없는 노트는 null', (await W.resolveNotePath('없는노트')) === null);
+  // 자소 분리형(NFD)으로 적힌 연계노트도 같은 노트로 본다 — 눈에는 똑같은데 문자열은 다르다
+  ok('NFD로 적힌 이름도 찾는다',
+    (await W.resolveNotePath('두경부피부_중이염'.normalize('NFD'))) === '02_Wiki/두경부_피부/두경부피부_중이염.md');
+  delete globalThis.__FS;
 }
 
 console.log(`\n통과 ${pass}건`);

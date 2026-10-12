@@ -15,10 +15,12 @@ import {
   noteList, loadNote, renderSection, extractCards,
   loadSrs, saveSrs, dueCards, gradeCard, srsStats, keepAwake, cardsFromBox,
   studyQueue, groupCards, suspendCard, unsuspendCard, buryCard, toggleStar,
+  deckTree, cardsInDeck, liveCards, isArchivedCard, deckOf, subKey, noteKey,
   isStarred, isSuspended, isLeech, LEECH_AT, retrievability, parseExamDates, nextExam,
   parseSchedule, lecturesFor, dayKey, qaCards, dueToday,
 } from './reader.js';
 import { search, cacheSubject, storageInfo } from './search.js';
+import { JOKBO_ROOT, parseJokbo, chapterTitle } from './jokbo.js';
 import {
   kvGet, kvSet, cacheClear, enqueue, listOutbox, dequeue, bumpTries,
   saveCards, allCards, deleteCard,
@@ -31,6 +33,9 @@ import { weakQueue, weakBySubject, examProgress } from './attempts.js';
 const EXAM_ROOTS = [
   { root: '06_모의고사', kind: '모의고사' },
   { root: '05_퀴즈', kind: '퀴즈' },
+  // 족보(학교 기출)는 HTML이 아니라 **가공된 마크다운**이고 과목별 가공 상태가 제각각이다.
+  // 지금 가공이 끝난 응급_중환자만 연다(2026-10-12 요청) — `only`를 늘리면 과목이 늘어난다.
+  { root: JOKBO_ROOT, kind: '족보', ext: '.md', only: ['응급_중환자'] },
 ];
 const LOG_DIR = '00_Raw_Text/AI대화로그';
 // 여러 시험에서 끌어모아 푸는 "다시 볼 문항"의 이어풀기 키 — 실제 파일 경로와 겹치지 않게 한다
@@ -49,6 +54,9 @@ let currentExam = null; // {subject, file, path, title}
 // ---------- 화면 전환 ----------
 function show(id) {
   screens.forEach((s) => document.getElementById(s).classList.toggle('hidden', s !== id));
+  // CSS가 "지금 어느 화면인가"를 알아야 한다 — 읽기 화면만 페이지 스크롤을 끄고
+  // 목차·본문을 각자 스크롤시키기 때문(2026-10-12).
+  document.body.dataset.screen = id;
   window.scrollTo(0, 0);
 }
 
@@ -326,6 +334,9 @@ document.getElementById('listModelsBtn').onclick = async () => {
       const b = document.createElement('button');
       b.textContent = '이걸로';
       b.onclick = async () => {
+        // 손으로 고른 건 "이걸 써라"는 뜻이다 — 예전에 죽었다고 기억해둔 걸 풀어준다.
+        // (안 풀면 modelFor가 조용히 다른 모델로 바꿔버려서 고른 게 무시된다)
+        gem.resetModels();
         await gem.setModel(name);
         msg.style.color = 'var(--correct)';
         msg.textContent = `모델을 ${name}(으)로 바꿨습니다.`;
@@ -369,13 +380,16 @@ async function loadList(force) {
   // 로딩·오류 문구는 **지금 보고 있는 탭**에 띄운다
   const active = document.querySelector('.tab.active')?.dataset.tab;
   const body = document.getElementById(TAB_BODY[active] || 'todayBody');
-  if (active === 'quizzes' || active === 'exams') body.innerHTML = '<p class="muted">불러오는 중…</p>';
+  if (active === 'quizzes' || active === 'exams' || active === 'jokbo') {
+    body.innerHTML = '<p class="muted">불러오는 중…</p>';
+  }
 
   try {
     const index = await buildExamIndex(force);
     const sessions = await allSessions();
     renderList(index, sessions, '퀴즈');
     renderList(index, sessions, '모의고사');
+    renderList(index, sessions, '족보');
   } catch (e) {
     body.innerHTML = '';
     const box = document.createElement('div');
@@ -411,19 +425,24 @@ async function buildExamIndex(force) {
 }
 
 async function _buildExamIndex(force) {
-  const cacheKey = 'exam_index_v2';     // 퀴즈가 들어오면서 구조가 바뀌어 키를 올린다
+  // v3: 정렬이 날짜 오름차순으로 바뀌었다. 키를 안 올리면 **이미 저장된 역순 목록**이
+  // 그대로 떠서 "안 고쳐졌다"가 된다(캐시가 정렬 결과까지 담고 있다).
+  const cacheKey = 'exam_index_v3';
   let index = force ? null : await kvGet(cacheKey);
   if (!index) {
     const byKey = new Map();            // "과목 · 종류" 단위로 묶는다
-    for (const { root, kind } of EXAM_ROOTS) {
+    for (const { root, kind, ext = '.html', only } of EXAM_ROOTS) {
       let subjects;
       try { subjects = (await listDir(root)).filter((e) => e.type === 'dir'); }
       catch { continue; }               // 폴더가 없는 과목도 있다 — 조용히 넘어간다
+      if (only) subjects = subjects.filter((e) => only.includes(e.name));
       for (const sub of subjects) {
         let files;
         try { files = await listDir(sub.path); } catch { continue; }
         const items = files
-          .filter((f) => f.type === 'file' && f.name.endsWith('.html') && !f.name.startsWith('_'))
+          .filter((f) => f.type === 'file' && f.name.endsWith(ext) && !f.name.startsWith('_')
+            // 족보는 `NN_챕터.md`만 문항이다 — `00_과목소개`는 총평이라 뺀다
+            && (kind !== '족보' || /^(?!00_)\d{2}_/.test(f.name)))
           .map((f) => ({ file: f.name, path: f.path, kind }));
         if (!items.length) continue;
         const k = `${sub.name}|${kind}`;
@@ -433,8 +452,9 @@ async function _buildExamIndex(force) {
     }
     index = [...byKey.values()];
     for (const g of index) {
-      // 날짜 **내림차순** — 최근에 배운 것부터 복습한다(2026-10-10 요청)
-      g.exams.sort((a, b) => examSortKey(b.file).localeCompare(examSortKey(a.file))
+      // 날짜 **오름차순** — 배운 순서대로 읽힌다(2026-10-12 요청: 역순이라 보기 나쁨).
+      // 날짜를 못 읽은 파일은 키가 '999999'라 자연히 맨 뒤로 간다.
+      g.exams.sort((a, b) => examSortKey(a.file).localeCompare(examSortKey(b.file))
         || a.file.localeCompare(b.file, 'ko'));
     }
     // 모의고사를 먼저, 그 다음 퀴즈. 같은 종류 안에서는 과목 이름순.
@@ -450,7 +470,7 @@ async function _buildExamIndex(force) {
  * @param {string} kind '모의고사' | '퀴즈'
  */
 function renderList(index, sessions, kind = '모의고사') {
-  const bodyId = kind === '퀴즈' ? 'quizBody' : 'listBody';
+  const bodyId = kind === '퀴즈' ? 'quizBody' : kind === '족보' ? 'jokboBody' : 'listBody';
   const body = document.getElementById(bodyId);
   body.innerHTML = '';
   index = index.filter((g) => (g.kind || '모의고사') === kind);
@@ -459,7 +479,8 @@ function renderList(index, sessions, kind = '모의고사') {
     // 안 보인다. 빈 화면에서 그걸 알려줘야 한다(2026-10-10).
     body.innerHTML = '';
     body.appendChild(muted(`${kind}를 찾지 못했습니다.`
-      + (kind === '퀴즈' ? ' vault의 05_퀴즈/{과목}/ 에 파일이 생기면 여기에 나옵니다.' : '')));
+      + (kind === '퀴즈' ? ' vault의 05_퀴즈/{과목}/ 에 파일이 생기면 여기에 나옵니다.' : '')
+      + (kind === '족보' ? ` vault의 ${JOKBO_ROOT}/{과목}/NN_챕터.md 를 읽습니다.` : '')));
     const b = document.createElement('button');
     b.className = 'btn full';
     b.style.marginTop = '10px';
@@ -492,14 +513,16 @@ function renderList(index, sessions, kind = '모의고사') {
       const btn = document.createElement('button');
       btn.className = 'exam-item';
 
+      // 족보는 날짜가 아니라 **강의 번호**로 묶인다(NN_챕터.md) — 그 번호를 날짜 자리에 쓴다
+      const isJokbo = (ex.kind || group.kind) === '족보';
       const d = document.createElement('span');
       d.className = 'exam-date';
-      d.textContent = examDate(ex.file);
+      d.textContent = isJokbo ? (ex.file.match(/^(\d{2})_/) || ['', ''])[1] : examDate(ex.file);
 
       const nameWrap = document.createElement('span');
       nameWrap.className = 'exam-name';
-      nameWrap.textContent = prettyExamName(ex.file);
-      const who = teacherName(ex.file);
+      nameWrap.textContent = isJokbo ? chapterTitle(ex.file) : prettyExamName(ex.file);
+      const who = isJokbo ? '' : teacherName(ex.file);
       if (who) {
         const t = document.createElement('span');
         t.className = 'teacher-tag';
@@ -529,15 +552,40 @@ function renderList(index, sessions, kind = '모의고사') {
   });
 }
 
+/** 이 강의가 어느 과목 폴더에 속하나 — 시간표의 과목명(응급중환자)과 폴더명(응급_중환자)이 다르다. */
+function subjectOfLecture(index, lecture) {
+  const norm = (x) => String(x || '').replace(/[_\s]/g, '');
+  const want = norm(lecture.src);
+  const g = index.find((x) => norm(x.subject) === want);
+  return g ? g.subject : '';
+}
+
+/** 시간표의 `가공족보` 칸(파일명)으로 족보 챕터를 찾는다. */
+function findJokboChapter(index, subject, file) {
+  for (const g of index) {
+    if (g.kind !== '족보') continue;
+    if (subject && g.subject !== subject) continue;
+    const ex = g.exams.find((e) => e.file === file);
+    if (ex) return { g, ex };
+  }
+  return null;
+}
+
 // ---------- 시험 열기 ----------
 async function openExam(subject, ex) {
   const body = document.getElementById('listBody');
   const prev = body.innerHTML;
   body.innerHTML = '<p class="muted">시험을 불러오는 중…</p>';
   try {
-    const html = await getText(ex.path);
-    const { questions, title } = parseExamHtml(html);
-    currentExam = { subject, file: ex.file, path: ex.path, title: title || prettyExamName(ex.file) };
+    const raw = await getText(ex.path);
+    // 족보는 HTML이 아니라 가공된 마크다운이다 — 파서만 갈아끼우면 나머지(펜·뜯어보기·
+    // 사이드 노트·이어풀기)는 그대로 돈다.
+    const isJokbo = (ex.kind || '') === '족보';
+    const { questions, title } = isJokbo ? parseJokbo(raw, ex.path) : parseExamHtml(raw);
+    if (!questions.length) throw new Error('이 파일에서 문항을 찾지 못했습니다.');
+    const fallbackTitle = isJokbo ? chapterTitle(ex.file) : prettyExamName(ex.file);
+    currentExam = { subject, file: ex.file, path: ex.path, title: title || fallbackTitle,
+      kind: ex.kind || '' };
 
     if (quiz) quiz.destroy();
     destroyPen();
@@ -1078,6 +1126,12 @@ async function runBreakdown() {
   if (!quiz || breakdownBusy) return;
   const q = quiz.all[quiz.order[quiz.cur]];
   const el = document.getElementById('breakdown');
+  // 뜯어보기는 "선지를 어떤 기준으로 쳐내는가"를 보여주는 기능이다 —
+  // 족보의 서술형 복원 문항처럼 선지가 없으면 보여줄 게 없다(2026-10-12).
+  if (!(q.opts && q.opts.length)) {
+    toast('선지가 없는 문항이라 뜯어볼 수 없습니다 — 해설을 보세요.');
+    return;
+  }
 
   // 이미 떠 있으면 토글로 닫는다
   if (!el.classList.contains('hidden') && el.dataset.forNum === String(q.num)) {
@@ -1136,7 +1190,8 @@ async function runBreakdown() {
 const preCache = new Map();
 async function prebuiltBreakdown(q) {
   if (!currentExam) return null;
-  const path = currentExam.path.replace(/\.html$/, '_뜯어보기.json');
+  // 족보는 `.md`라 `.html` 치환이 안 먹는다 — 확장자를 통째로 바꾼다
+  const path = currentExam.path.replace(/\.(html|md)$/, '_뜯어보기.json');
   if (!preCache.has(path)) {
     try {
       preCache.set(path, JSON.parse(await getText(path)));
@@ -1442,7 +1497,7 @@ let cardDeck = null;    // {cards, idx, srs, title}
 
 // ---- 탭 ----
 const TAB_BODY = {
-  today: 'todayBody', quizzes: 'quizBody', exams: 'listBody',
+  today: 'todayBody', quizzes: 'quizBody', exams: 'listBody', jokbo: 'jokboBody',
   notes: 'notesBody', cards: 'cardsBody',
 };
 
@@ -1590,13 +1645,27 @@ async function loadTodayTab(force) {
           + `<b>${escapeHtml(l.name)}</b>`
           + (l.teacher ? `<span class="muted"> ${escapeHtml(l.teacher)}</span>` : '');
         row.appendChild(head);
-        if (l.note) {
+
+        // 한 강의에 붙는 자료가 셋이다 — 예습노트(수업 전) · 실강노트(수업 후 정리) · 족보.
+        // 전에는 예습노트만 걸어둬서 **수업을 듣고 위키를 만들어도 계속 예습본만 떴다**
+        // (2026-10-12 지적). 시간표의 `실강(02_Wiki)`·`가공족보` 칸을 같이 읽는다.
+        const chips = document.createElement('div');
+        chips.className = 'today-chips';
+        const chip = (label, fn) => {
           const b = document.createElement('button');
           b.className = 'chip';
-          b.textContent = '📖 예습노트';
-          b.onclick = () => openNoteByName(l.note);
-          row.appendChild(b);
+          b.textContent = label;
+          b.onclick = fn;
+          chips.appendChild(b);
+        };
+        if (l.wiki) chip('📗 실강노트', () => openNoteByName(l.wiki));
+        if (l.note) chip('📖 예습노트', () => openNoteByName(l.note));
+        if (l.jokbo) {
+          const subject = subjectOfLecture(index, l) || '응급_중환자';
+          const hit = findJokboChapter(index, subject, l.jokbo);
+          if (hit) chip('📜 족보', () => openExam(hit.g.subject, hit.ex));
         }
+        if (chips.children.length) row.appendChild(chips);
         sec.appendChild(row);
       });
       // 같은 날짜의 모의고사·퀴즈 — 파일명 앞 MMDD가 강의일과 같은 것들
@@ -1619,13 +1688,18 @@ async function loadTodayTab(force) {
     }
 
     // ── 카드 ──
-    const due = dueToday(cards, srs);
+    // 보관한 과목(= 시험이 끝난 과목)은 빼고 센다 — 안 그러면 "오늘 4,716장"이 뜬다.
+    const archived = new Set((await kvGet(ARCHIVE_KEY)) || []);
+    const live = liveCards(cards, archived);
+    const hidden = cards.length - live.length;
+    const due = dueToday(live, srs);
     const cardSec = section(body, '카드');
     const cb = document.createElement('button');
     cb.className = 'exam-item';
     const cn = document.createElement('span');
     cn.className = 'exam-name';
-    cn.innerHTML = `<b>복습할 카드</b><span class="exam-meta">전체 ${cards.length}장</span>`;
+    cn.innerHTML = `<b>복습할 카드</b><span class="exam-meta">전체 ${live.length}장`
+      + (hidden ? ` · 보관 ${hidden}장은 빼고` : '') + '</span>';
     const ct = document.createElement('span');
     ct.className = 'exam-progress';
     ct.textContent = due.length ? `${due.length}장 ›` : '✓';
@@ -1864,8 +1938,31 @@ function renderToc() {
     li.appendChild(b);
     list.appendChild(li);
   });
-  const cur = list.querySelector('.toc-link.current');   // 긴 목차에서 현재 항목 끌어오기
-  if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
+  scrollTocToCurrent(list);
+}
+
+/** 넓은 화면에선 본문이 제 상자 안에서 스크롤된다 — 페이지가 아니라 그 상자를 올린다. */
+function scrollReadTop() {
+  const main = document.querySelector('#readScreen .read-main');
+  if (main) main.scrollTop = 0;
+  window.scrollTo(0, 0);
+}
+
+/**
+ * 긴 목차에서 현재 항목을 보이게 한다.
+ * scrollIntoView를 쓰면 목차뿐 아니라 **페이지까지 같이 스크롤돼** 본문이 튄다.
+ * 그래서 목차 상자의 scrollTop만 직접 건드린다.
+ */
+function scrollTocToCurrent(list) {
+  const cur = list.querySelector('.toc-link.current');
+  const box = document.getElementById('readToc');
+  if (!cur || !box) return;
+  // offsetTop은 position에 따라 기준이 바뀐다(넓은 화면 static ↔ 좁은 화면 fixed).
+  // 화면 좌표 차이로 계산하면 둘 다에서 맞는다.
+  const r = cur.getBoundingClientRect();
+  const br = box.getBoundingClientRect();
+  if (r.top < br.top) box.scrollTop += r.top - br.top - 8;
+  else if (r.bottom > br.bottom) box.scrollTop += r.bottom - br.bottom + 8;
 }
 
 document.getElementById('readTocBtn').onclick = () => tocOpen(!tocIsOpen());
@@ -1885,7 +1982,7 @@ function renderReader() {
   tokenizeTree(rb);   // 노트 본문도 밑줄로 긁을 수 있게
   document.getElementById('readPrev').disabled = secIdx === 0;
   document.getElementById('readNext').disabled = secIdx === note.sections.length - 1;
-  window.scrollTo(0, 0);
+  scrollReadTop();
   if (readerPen) requestAnimationFrame(() => readerPen.resize());
 }
 
@@ -2229,14 +2326,31 @@ const DECK_GROUPS = [
   ['suspended', '버린 것', '다시 안 나옵니다 — 되살릴 수 있습니다'],
 ];
 
-let deckView = { group: 'due', cards: [], srs: {}, exam: null };
+// deck  : 고른 덱 키(s:과목 / n:노트경로). null이면 전부.
+// sel   : 선택 모드. null이면 꺼짐, Set이면 켜짐(안에 고른 카드 id).
+// archived: 보관한 덱 키들 — 끝난 과목을 눈에서 치운다.
+let deckView = {
+  group: 'due', deck: null, cards: [], srs: {}, exam: null,
+  archived: new Set(), showArchived: false, sel: null, openSubs: new Set(), confirmDel: false,
+};
+
+const ARCHIVE_KEY = 'deck_archived';
+
+async function loadArchived() {
+  const saved = await kvGet(ARCHIVE_KEY);
+  deckView.archived = new Set(Array.isArray(saved) ? saved : []);
+}
+async function saveArchived() {
+  await kvSet(ARCHIVE_KEY, [...deckView.archived]);
+  backup.scheduleBackup();
+}
 
 async function openDeck(keep = false) {
   show('deckScreen');
   const body = document.getElementById('deckBody');
   if (!keep) body.innerHTML = '<p class="muted">불러오는 중…</p>';
   let cards, srs;
-  try { cards = await allCards(); srs = await loadSrs(); }
+  try { cards = await allCards(); srs = await loadSrs(); await loadArchived(); }
   catch (e) { body.innerHTML = `<div class="warn-box">${escapeText(e.message)}</div>`; return; }
   deckView.cards = cards;
   deckView.srs = srs;
@@ -2248,6 +2362,8 @@ async function openDeck(keep = false) {
   if (!cards.length) {
     document.getElementById('deckSide').innerHTML = '';
     document.getElementById('deckStats').innerHTML = '';
+    document.getElementById('deckSelBar').classList.add('hidden');
+    clearSel();
     body.innerHTML = '';
     body.appendChild(muted('아직 카드가 없습니다. 노트에 써둔 Q&A를 가져오거나, 노트 읽기에서 펜으로 네모를 쳐 만들 수 있습니다.'));
     const b = document.createElement('button');
@@ -2416,42 +2532,200 @@ async function importQa(group, row) {
   renderDeck();
 }
 
-function renderDeck() {
-  const { cards, srs } = deckView;
-  const g = groupCards(cards, srs);
-  const counts = { all: cards.length, ...Object.fromEntries(Object.entries(g).map(([k, v]) => [k, v.length])) };
+/** 지금 보고 있는 범위의 카드 — 보관된 과목은 "보관함 보기"를 켰을 때만 나온다. */
+function deckScope() {
+  const { cards, deck, archived, showArchived } = deckView;
+  const base = showArchived || (deck && archived.has(deck)) ? cards : liveCards(cards, archived);
+  return cardsInDeck(base, deck);
+}
 
-  // ── 왼쪽 탭 ──
+function renderDeck() {
+  renderDeckSide();
+  // 가져오기는 카드 목록이 아니라 "어느 노트에서 끌어올까"를 고르는 화면이다
+  if (deckView.group === 'import') {
+    document.getElementById('deckSelBar').classList.add('hidden');
+    renderQaImport();
+    return;
+  }
+  renderDeckMain();
+  renderSelBar();
+}
+
+// ── 왼쪽: 상태 탭 + 과목 트리 ──
+const DECK_TABS = [
+  ['due', '오늘 볼 것', '🗓'],
+  ['star', '중요', '★'],
+  ['leech', '자주 틀림', '⚠'],
+  ['later', '학습 중', '📘'],
+  ['mature', '익힘', '✓'],
+  ['suspended', '버림', '🗑'],
+  ['all', '전체', '📚'],
+  ['import', '가져오기', '📥'],
+];
+
+function renderDeckSide() {
   const side = document.getElementById('deckSide');
   side.innerHTML = '';
-  const TABS = [
-    ['due', '오늘 볼 것', '🗓'],
-    ['star', '중요', '★'],
-    ['leech', '자주 틀림', '⚠'],
-    ['later', '학습 중', '📘'],
-    ['mature', '익힘', '✓'],
-    ['suspended', '버림', '🗑'],
-    ['all', '전체', '📚'],
-    ['import', '가져오기', '📥'],
-  ];
-  for (const [key, label, icon] of TABS) {
-    const n = key === 'all' ? counts.all
-      : key === 'import' ? cards.filter((c) => c.kind === 'qa').length
-        : counts[key] || 0;
+  const { cards, srs, archived } = deckView;
+  const scoped = deckScope();
+  const g = groupCards(scoped, srs);
+
+  side.appendChild(sideHead('상태'));
+  const tabs = document.createElement('div');
+  tabs.className = 'deck-tabs';
+  for (const [key, label, icon] of DECK_TABS) {
+    const n = key === 'all' ? scoped.length
+      : key === 'import' ? scoped.filter((c) => c.kind === 'qa').length
+        : (g[key] || []).length;
     const b = document.createElement('button');
     b.className = `deck-tab${deckView.group === key ? ' active' : ''}`;
     b.innerHTML = `<span class="dt-ico">${icon}</span><span class="dt-l">${label}</span><span class="dt-n">${n}</span>`;
-    b.onclick = () => { deckView.group = key; renderDeck(); };
-    side.appendChild(b);
+    b.onclick = () => { deckView.group = key; clearSel(); renderDeck(); };
+    tabs.appendChild(b);
   }
+  side.appendChild(tabs);
 
-  // 가져오기는 카드 목록이 아니라 "어느 노트에서 끌어올까"를 고르는 화면이다
-  if (deckView.group === 'import') { renderQaImport(); return; }
+  // ── 과목 › 노트 트리 ──
+  const tree = deckTree(cards, srs, { archived });
+  const live = tree.filter((t) => !t.archived);
+  const gone = tree.filter((t) => t.archived);
 
-  // ── 요약 + 시작 ──
+  side.appendChild(sideHead('과목'));
+  const nodes = document.createElement('div');
+  nodes.className = 'deck-nodes';
+  nodes.appendChild(deckNodeAll(liveCards(cards, archived).length));
+  live.forEach((t) => appendSubject(nodes, t));
+  side.appendChild(nodes);
+
+  if (gone.length) {
+    const h = document.createElement('button');
+    h.className = `deck-arch-h${deckView.showArchived ? ' open' : ''}`;
+    const goneN = gone.reduce((a, t) => a + t.n, 0);
+    h.innerHTML = `<span>지난 과목 ${gone.length}개</span><span class="dt-n">${goneN}</span>`;
+    h.onclick = () => { deckView.showArchived = !deckView.showArchived; renderDeck(); };
+    side.appendChild(h);
+    if (deckView.showArchived) {
+      const box = document.createElement('div');
+      box.className = 'deck-nodes';
+      gone.forEach((t) => appendSubject(box, t));
+      side.appendChild(box);
+    }
+  }
+}
+
+function sideHead(text) {
+  const h = document.createElement('div');
+  h.className = 'deck-sec-h';
+  h.textContent = text;
+  return h;
+}
+
+function deckNodeAll(n) {
+  const b = document.createElement('button');
+  b.className = `deck-node${deckView.deck === null ? ' active' : ''}`;
+  b.innerHTML = `<span class="dn-caret"></span><span class="dn-name">전체</span><span class="dt-n">${n}</span>`;
+  b.onclick = () => { deckView.deck = null; clearSel(); renderDeck(); };
+  return b;
+}
+
+function appendSubject(host, t) {
+  const open = deckView.openSubs.has(t.key);
+  const row = document.createElement('div');
+  row.className = 'deck-node-row';
+
+  const b = document.createElement('button');
+  b.className = `deck-node${deckView.deck === t.key ? ' active' : ''}${t.archived ? ' archived' : ''}`;
+  const caret = t.notes.length > 1 ? (open ? '▾' : '▸') : '';
+  b.innerHTML = `<span class="dn-caret">${caret}</span><span class="dn-name"></span>${countHtml(t)}`;
+  b.querySelector('.dn-name').textContent = t.subject;
+  b.onclick = () => { deckView.deck = t.key; clearSel(); renderDeck(); };
+
+  if (t.notes.length > 1) {
+    const c = b.querySelector('.dn-caret');
+    c.classList.add('tap');
+    c.onclick = (e) => {
+      e.stopPropagation();
+      if (open) deckView.openSubs.delete(t.key); else deckView.openSubs.add(t.key);
+      renderDeck();
+    };
+  }
+  row.appendChild(b);
+  row.appendChild(archBtn(t.key, t.archived, t.subject));
+  host.appendChild(row);
+
+  if (!open) return;
+  for (const n of t.notes) {
+    const nrow = document.createElement('div');
+    nrow.className = 'deck-node-row';
+    const nb = document.createElement('button');
+    nb.className = `deck-node sub${deckView.deck === n.key ? ' active' : ''}${n.archived ? ' archived' : ''}`;
+    nb.innerHTML = `<span class="dn-caret"></span><span class="dn-name"></span>${countHtml(n)}`;
+    nb.querySelector('.dn-name').textContent = n.group ? `${n.name} (${n.group})` : n.name;
+    nb.onclick = () => { deckView.deck = n.key; clearSel(); renderDeck(); };
+    nrow.appendChild(nb);
+    nrow.appendChild(archBtn(n.key, n.archived, n.name));
+    host.appendChild(nrow);
+  }
+}
+
+/**
+ * 덱 한 칸의 숫자. 파란 알약이 **오늘 볼 장수**, 회색이 전체.
+ * 둘이 같으면(= 전부 새 카드) 같은 수가 두 번 찍혀서 지저분하다 — 하나만 쓴다.
+ */
+function countHtml(d) {
+  if (d.due && d.due === d.n) return `<span class="dn-due">${d.due}</span>`;
+  return (d.due ? `<span class="dn-due">${d.due}</span>` : '') + `<span class="dt-n">${d.n}</span>`;
+}
+
+/** 보관/되돌리기 — 지우는 게 아니라 숨기는 것이라 기록은 그대로 남는다. */
+function archBtn(key, archived, label) {
+  const a = document.createElement('button');
+  a.className = `deck-arch${archived ? ' on' : ''}`;
+  a.textContent = archived ? '복원' : '보관';
+  a.title = archived ? `${label} 되돌리기` : `${label} 보관 — 오늘 볼 것에서 빠집니다`;
+  a.onclick = async (e) => {
+    e.stopPropagation();
+    if (archived) deckView.archived.delete(key); else deckView.archived.add(key);
+    if (!archived && deckView.deck === key) deckView.deck = null;
+    await saveArchived();
+    toast(archived ? `${label}을(를) 되살렸습니다.` : `${label}을(를) 보관했습니다 — 오늘 볼 것에서 빠집니다.`);
+    renderDeck();
+  };
+  return a;
+}
+
+// ── 오른쪽: 요약 + 카드 ──
+function renderDeckMain() {
+  const { srs, archived } = deckView;
+  const scoped = deckScope();
+  const g = groupCards(scoped, srs);
   const stats = document.getElementById('deckStats');
   stats.innerHTML = '';
-  const startable = studyQueue(cards, srs);
+
+  // 어디를 보고 있는지 — 덱을 고르면 제목과 빠져나갈 길을 보여준다
+  if (deckView.deck) {
+    const crumb = document.createElement('div');
+    crumb.className = 'deck-crumb';
+    const name = document.createElement('b');
+    const t = deckView.deck.startsWith('s:')
+      ? deckView.deck.slice(2)
+      : (scoped[0] ? deckOf(scoped[0]).note : deckView.deck.slice(2));
+    name.textContent = t;
+    const up = document.createElement('button');
+    up.className = 'deck-btn';
+    up.textContent = '전체 보기';
+    up.onclick = () => { deckView.deck = null; clearSel(); renderDeck(); };
+    crumb.append(name, up);
+    if (archived.has(deckView.deck)) {
+      const tag = document.createElement('span');
+      tag.className = 'deck-arch-tag';
+      tag.textContent = '보관됨 — 오늘 볼 것에서 빠져 있습니다';
+      crumb.appendChild(tag);
+    }
+    stats.appendChild(crumb);
+  }
+
+  const startable = studyQueue(scoped, srs);
   if (startable.length) {
     const go = document.createElement('button');
     go.className = 'btn primary full';
@@ -2460,37 +2734,182 @@ function renderDeck() {
     go.onclick = () => startDeck(startable.slice(0, 40), '카드 복습', { backTo: 'deck' });
     stats.appendChild(go);
   } else {
-    const p2 = document.createElement('p');
-    p2.className = 'muted';
-    p2.textContent = '오늘 볼 카드가 없습니다 — 잘 하고 있습니다.';
-    stats.appendChild(p2);
+    stats.appendChild(muted('오늘 볼 카드가 없습니다 — 잘 하고 있습니다.'));
   }
 
-  // ── 카드 미리보기 목록 ──
   const body = document.getElementById('deckBody');
   body.innerHTML = '';
-  const list = deckView.group === 'all' ? cards : (g[deckView.group] || []);
+  const list = deckView.group === 'all' ? scoped : (g[deckView.group] || []);
+  deckView.list = list;                      // 전체 선택이 쓴다(화면에 그린 120장 말고 전부)
   if (!list.length) {
-    body.innerHTML = '<p class="muted">이 칸에는 카드가 없습니다.</p>';
+    body.appendChild(muted('이 칸에는 카드가 없습니다.'));
     return;
+  }
+  if (!deckView.sel) {
+    const hint = document.createElement('p');
+    hint.className = 'muted deck-hint';
+    hint.textContent = '카드를 길게 누르면 여러 장을 골라 한꺼번에 처리할 수 있습니다.';
+    body.appendChild(hint);
   }
   const grid = document.createElement('div');
   grid.className = 'deck-grid';
-  list.slice(0, 120).forEach((c) => grid.appendChild(deckCard(c, srs)));
+  list.slice(0, 120).forEach((c, i) => grid.appendChild(deckCard(c, srs, i)));
   body.appendChild(grid);
   if (list.length > 120) {
     const more = document.createElement('p');
     more.className = 'muted deck-hint';
-    more.textContent = `… 외 ${list.length - 120}장`;
+    more.textContent = `… 외 ${list.length - 120}장 (전체 선택은 ${list.length}장 모두에 적용됩니다)`;
     body.appendChild(more);
   }
 }
 
+// ── 여러 장 고르기 (2026-10-12) ──
+//
+// 한 장씩 ★·버리기를 누르는 건 카드가 20장일 때 이야기다. 수천 장에서는
+// "이 노트 카드 전부 버리기"가 필요하다. Anki의 카드 브라우저가 하는 일이다.
+// 아이패드에는 오른쪽 클릭이 없으니 **길게 누르기**로 들어간다.
+
+const LONG_PRESS_MS = 420;
+
+// 길게 누르면 손을 뗄 때 click이 따라온다 — 그대로 두면 "범위 선택" 직후에 그 카드가
+// 다시 토글돼 한 장이 빠진다. 게다가 길게 누르기 핸들러가 화면을 다시 그리므로
+// 그 click이 **새로 그려진 카드**에 떨어지기도 한다. 그래서 요소에 거는 대신
+// 잠깐 동안 탭 자체를 무시한다.
+let tapDeadline = 0;
+const swallowTap = () => { tapDeadline = Date.now() + 450; };
+const tapSwallowed = () => Date.now() < tapDeadline;
+
+function selOn() { return !!deckView.sel; }
+function clearSel() { deckView.sel = null; deckView.lastIdx = null; deckView.confirmDel = false; }
+
+function startSel(id, idx) {
+  deckView.sel = new Set(id ? [id] : []);
+  deckView.lastIdx = idx == null ? null : idx;
+  deckView.confirmDel = false;
+  renderDeck();
+}
+
+function toggleSel(id, idx) {
+  if (!deckView.sel || tapSwallowed()) return;
+  if (deckView.sel.has(id)) deckView.sel.delete(id); else deckView.sel.add(id);
+  deckView.lastIdx = idx;
+  deckView.confirmDel = false;
+  renderDeck();
+}
+
+/**
+ * 범위 선택 — 고르기 중에 다른 카드를 길게 누르면 **마지막으로 누른 것부터 거기까지** 전부.
+ * 아이패드에는 shift+클릭이 없어서(Anki 브라우저의 그 동작) 길게 누르기에 얹었다.
+ * 한 장씩 40번 두드리는 것과 두 번 누르는 것의 차이다.
+ */
+function selectRange(idx) {
+  const list = deckView.list || [];
+  const from = deckView.lastIdx == null ? idx : deckView.lastIdx;
+  const [a, b] = from <= idx ? [from, idx] : [idx, from];
+  for (let i = a; i <= b && i < list.length; i++) deckView.sel.add(list[i].id);
+  deckView.lastIdx = idx;
+  deckView.confirmDel = false;
+  toast(`${b - a + 1}장을 한 번에 골랐습니다.`);
+  renderDeck();
+}
+
+/** 길게 누르면 선택 모드. 손가락이 움직이면(스크롤) 취소한다. */
+function bindLongPress(el, onLong) {
+  let timer = null;
+  let sx = 0, sy = 0;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button != null && e.button !== 0) return;
+    sx = e.clientX; sy = e.clientY;
+    cancel();
+    timer = setTimeout(() => {
+      timer = null;
+      el.classList.remove('pressing');
+      swallowTap();
+      onLong();
+    }, LONG_PRESS_MS);
+    el.classList.add('pressing');
+  });
+  const stop = () => { cancel(); el.classList.remove('pressing'); };
+  el.addEventListener('pointerup', stop);
+  el.addEventListener('pointercancel', stop);
+  el.addEventListener('pointerleave', stop);
+  el.addEventListener('pointermove', (e) => {
+    if (timer && (Math.abs(e.clientX - sx) > 10 || Math.abs(e.clientY - sy) > 10)) stop();
+  });
+}
+
+function renderSelBar() {
+  const bar = document.getElementById('deckSelBar');
+  bar.innerHTML = '';
+  if (!selOn()) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  const ids = deckView.sel;
+  const list = deckView.list || [];
+  const allSelected = list.length > 0 && list.every((c) => ids.has(c.id));
+
+  const n = document.createElement('span');
+  n.className = 'sel-n';
+  n.textContent = `${ids.size}장 선택`;
+  bar.appendChild(n);
+
+  const btn = (label, fn, cls = '') => {
+    const b = document.createElement('button');
+    b.className = `sel-btn2${cls ? ' ' + cls : ''}`;
+    b.textContent = label;
+    b.disabled = !ids.size && !/전체|취소/.test(label);
+    b.onclick = fn;
+    bar.appendChild(b);
+    return b;
+  };
+
+  btn(allSelected ? '전체 해제' : `전체 선택 (${list.length})`, () => {
+    if (allSelected) deckView.sel = new Set();
+    else deckView.sel = new Set(list.map((c) => c.id));
+    deckView.confirmDel = false;
+    renderDeck();
+  });
+  btn('★ 중요', () => bulk((srs, id) => { if (!isStarred(srs, id)) toggleStar(srs, id); }, '중요 표시했습니다'));
+  btn('☆ 해제', () => bulk((srs, id) => { if (isStarred(srs, id)) toggleStar(srs, id); }, '중요 표시를 뺐습니다'));
+  btn('💤 내일로', () => bulk((srs, id) => buryCard(srs, id), '내일 다시 나옵니다'));
+  btn('🗑 버리기', () => bulk((srs, id) => suspendCard(srs, id), '버렸습니다 — 다시 안 나옵니다'));
+  btn('↩ 되살리기', () => bulk((srs, id) => unsuspendCard(srs, id), '되살렸습니다'));
+  btn('▶ 선택만 풀기', () => {
+    const picked = (deckView.cards || []).filter((c) => ids.has(c.id));
+    if (picked.length) startDeck(picked, `고른 카드 ${picked.length}장`, { backTo: 'deck' });
+  }, 'primary');
+
+  // 삭제는 되돌릴 수 없다 — 한 번 더 묻는다
+  btn(deckView.confirmDel ? `정말 삭제 (${ids.size}장)` : '삭제',
+    async () => {
+      if (!deckView.confirmDel) { deckView.confirmDel = true; renderSelBar(); return; }
+      const list2 = [...ids];
+      for (const id of list2) await deleteCard(id);
+      toast(`${list2.length}장을 삭제했습니다.`);
+      clearSel();
+      openDeck(true);
+    }, deckView.confirmDel ? 'danger on' : 'danger');
+
+  btn('취소', () => { clearSel(); renderDeck(); });
+}
+
+async function bulk(fn, msg) {
+  const { srs } = deckView;
+  const ids = [...deckView.sel];
+  ids.forEach((id) => fn(srs, id));
+  await saveSrs(srs);
+  backup.scheduleBackup();
+  toast(`${ids.length}장 — ${msg}.`);
+  clearSel();
+  renderDeck();
+}
+
 /** 카드 미리보기 한 장 — 눌러서 답을 열어보고, 거기서 바로 골라낸다. */
-function deckCard(c, srs) {
+function deckCard(c, srs, idx = 0) {
   const st = srs[c.id] || {};
   const card = document.createElement('div');
-  card.className = 'deck-card';
+  const picked = selOn() && deckView.sel.has(c.id);
+  card.className = `deck-card${selOn() ? ' selectable' : ''}${picked ? ' picked' : ''}`;
 
   const topic = document.createElement('div');
   topic.className = 'deck-topic';
@@ -2514,7 +2933,21 @@ function deckCard(c, srs) {
   } else bits.push('새 카드');
   if (st.S != null) bits.push(`기억 ${Math.round(retrievability(st) * 100)}%`);
   if (st.lapses) bits.push(`${st.lapses}번 틀림`);
+  // 어느 덱에서 왔는지 — 전체 보기에서 섞여 있으면 이게 없으면 분간이 안 된다
+  if (!deckView.deck) bits.push(deckOf(c).subject);
   meta.textContent = bits.join(' · ');
+
+  card.append(topic, q, a, meta);
+
+  if (selOn()) {
+    const tick = document.createElement('span');
+    tick.className = 'deck-tick';
+    tick.textContent = picked ? '✓' : '';
+    card.appendChild(tick);
+    card.onclick = () => toggleSel(c.id, idx);
+    bindLongPress(card, () => selectRange(idx));   // 길게 = 여기까지 한 번에
+    return card;
+  }
 
   const acts = document.createElement('div');
   acts.className = 'deck-acts';
@@ -2534,7 +2967,12 @@ function deckCard(c, srs) {
     if (dropped) unsuspendCard(srs, c.id); else suspendCard(srs, c.id);
     await saveSrs(srs); backup.scheduleBackup(); renderDeck();
   };
-  acts.append(peek, star, drop);
+  const pick = document.createElement('button');
+  pick.className = 'deck-btn';
+  pick.textContent = '선택';
+  pick.title = '여러 장 고르기 — 카드를 길게 눌러도 됩니다';
+  pick.onclick = () => startSel(c.id, idx);
+  acts.append(peek, star, drop, pick);
   if (dropped) {
     const del = document.createElement('button');
     del.className = 'deck-btn danger';
@@ -2543,12 +2981,17 @@ function deckCard(c, srs) {
     acts.appendChild(del);
   }
 
-  card.append(topic, q, a, meta, acts);
+  card.appendChild(acts);
+  bindLongPress(card, () => startSel(c.id, idx));
   return card;
 }
 
-document.getElementById('deckBack').onclick = () => show('listScreen');
-document.getElementById('deckRefresh').onclick = () => { deckView.exam = null; openDeck(); };
+document.getElementById('deckBack').onclick = () => {
+  // 고르던 중이면 먼저 고르기부터 빠져나온다 — 실수로 화면을 떠나지 않게
+  if (selOn()) { clearSel(); renderDeck(); return; }
+  show('listScreen');
+};
+document.getElementById('deckRefresh').onclick = () => { deckView.exam = null; clearSel(); openDeck(); };
 
 function shuffle(a) {
   for (let i = a.length - 1; i > 0; i--) {
@@ -2627,7 +3070,10 @@ function showResult(res) {
   document.getElementById('finalScore').textContent = `${res.correct}/${res.total}`;
   const pct = res.answered ? Math.round((res.correct / res.answered) * 100) : 0;
   document.getElementById('finalPct').textContent =
-    `푼 문항 ${res.answered}/${res.total}${res.answered ? ` · 정답률 ${pct}%` : ''}`;
+    `푼 문항 ${res.answered}/${res.total}${res.answered ? ` · 정답률 ${pct}%` : ''}`
+    // 족보에는 채점할 수 없는 서술형 복원 문항이 섞여 있다 — 점수 밖이라고 숨기면
+    // "40문항이라더니 왜 28문항이지?"가 된다
+    + (res.openTotal ? ` · 읽기 문항 ${res.read || 0}/${res.openTotal}` : '');
   document.getElementById('saveMsg').textContent = '';
 
   const wl = document.getElementById('wrongList');
@@ -2962,6 +3408,7 @@ function hideSplash() {
   await applyTheme();
   initServiceWorker();
   gem.loadDeadModels().catch(() => {});
+  gem.loadBodyTiers().catch(() => {});   // 어떤 모델에 어떤 본문이 통했는지 기억해둔 것
   initResizers();
   refreshSyncBar();
   flushOutbox();

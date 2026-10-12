@@ -174,12 +174,14 @@
       <button class="tab active" data-tab="today">오늘</button>
       <button class="tab" data-tab="quizzes">퀴즈</button>
       <button class="tab" data-tab="exams">모의고사</button>
+      <button class="tab" data-tab="jokbo">족보</button>
       <button class="tab" data-tab="notes">노트 읽기</button>
       <button class="tab" data-tab="cards">카드</button>
     </div>
     <div id="todayBody"></div>
     <div id="quizBody" class="hidden"></div>
     <div id="listBody" class="hidden"></div>
+    <div id="jokboBody" class="hidden"></div>
     <div id="notesBody" class="hidden"></div>
     <div id="cardsBody" class="hidden"></div>
   </section>
@@ -193,8 +195,8 @@
       <button class="icon-btn" id="readAwake" title="화면 켜두기"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2 12h2M20 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg></button>
       <button class="icon-btn" id="readTts" title="읽어주기"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H3v6h3l5 4z"/><path d="M16 9a4 4 0 0 1 0 6M19 6.5a8 8 0 0 1 0 11"/></svg></button>
       <button class="icon-btn" id="readPen" title="펜 / 지우개 전환"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/><path d="M14.5 5.5l3 3"/></svg></button>
-      <button class="icon-btn" id="readCapture" title="영역 복사 — 펜으로 네모를 치면 이미지로 복사됩니다"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/></svg></button>
-      <button class="icon-btn" id="readMakeCard" title="카드 만들기 — 펜으로 네모 치면 그 안의 강조를 가려 문제로"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="13" height="13" rx="2.2"/><path d="M7.5 4h11A2.5 2.5 0 0 1 21 6.5v11"/></svg></button>
+      <button class="icon-btn" id="readCapture" title="영역 복사 — 펜으로 네모를 치면 이미지로 복사됩니다"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.4"/><circle cx="8.6" cy="10.2" r="1.5"/><path d="M21 16.2l-4.3-4.1a1.7 1.7 0 0 0-2.3 0L6 19"/></svg></button>
+      <button class="icon-btn" id="readMakeCard" title="카드 만들기 — 펜으로 네모 치면 그 안의 강조를 가려 문제로"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2.4"/><path d="M6 9.8h4.8"/><rect x="12.9" y="8.5" width="5.6" height="2.6" rx="1.3" fill="currentColor" stroke="none"/><path d="M6 14.6h9"/></svg></button>
     </header>
     <!-- 목차 — 한 장씩 넘기지 않고 바로 건너뛰게(2026-10-09 요청) -->
     <div class="read-split" id="readSplit">
@@ -262,6 +264,8 @@
         <div id="deckBody"></div>
       </div>
     </div>
+    <!-- 여러 장 고르면 뜨는 작업 막대 — Anki 카드 브라우저의 일괄 처리에 해당한다 -->
+    <div id="deckSelBar" class="deck-selbar hidden"></div>
   </section>
 
   <!-- ======== 풀이 ======== -->
@@ -273,7 +277,7 @@
       <span class="badge-pill" id="scoreBadge">0/0</span>
       <span class="tool-sep"></span>
       <button class="tool" id="toolErase" title="지우개 — 켜고 손글씨 위를 지나가면 지워집니다"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 20H20"/><path d="M16.5 3.5l4 4a1.7 1.7 0 0 1 0 2.4L11 19.4a2 2 0 0 1-2.8 0l-3.6-3.6a2 2 0 0 1 0-2.8l9.5-9.5a1.7 1.7 0 0 1 2.4 0z"/><path d="M9 9l6 6"/></svg></button>
-      <button class="tool" id="toolCapture" title="영역 복사 — 펜으로 네모를 치면 이미지로 복사됩니다"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/></svg></button>
+      <button class="tool" id="toolCapture" title="영역 복사 — 펜으로 네모를 치면 이미지로 복사됩니다"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.4"/><circle cx="8.6" cy="10.2" r="1.5"/><path d="M21 16.2l-4.3-4.1a1.7 1.7 0 0 0-2.3 0L6 19"/></svg></button>
       <button class="tool" id="toolUndo" title="손글씨 한 획 되돌리기"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h11a5 5 0 0 1 0 10h-4"/><path d="M8 5L4 9l4 4"/></svg></button>
       <button class="tool" id="toolClear" title="이 문제의 손글씨 전부 지우기"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M10 11v6M14 11v6"/></svg></button>
       <button class="tool" id="toolWiki" title="관련 노트"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 18.5A2.5 2.5 0 0 1 6.5 16H19"/></svg></button>

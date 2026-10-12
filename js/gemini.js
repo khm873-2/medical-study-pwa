@@ -58,11 +58,86 @@ export function markBusy(model, ms = 180000) { busyUntil.set(model, Date.now() +
 export function isModelUsable(m) {
   return !deadModels.has(m) && !((busyUntil.get(m) || 0) > Date.now());
 }
-export function resetModels() { deadModels.clear(); busyUntil.clear(); }
+export function resetModels() {
+  deadModels.clear();
+  busyUntil.clear();
+  // 기기에 저장해둔 것도 같이 지운다 — 안 그러면 다음에 앱을 켤 때 되살아난다
+  kvSet('dead_models', []).catch(() => {});
+}
 /** 앱 시작 때 지난번에 죽은 모델을 불러온다. */
 export async function loadDeadModels() {
   const saved = await kvGet('dead_models');
   if (Array.isArray(saved)) saved.forEach((m) => deadModels.add(m));
+}
+
+// ───────────── 400 INVALID_ARGUMENT (2026-10-12) ─────────────
+//
+// 증상: 사이드 패널에 날것 그대로 떴다 —
+//   Gemini 오류 400 — {"error":{"code":400,"message":"Request contains an invalid
+//   argument.","status":"INVALID_ARGUMENT"}}
+//
+// 원인: `thinkingConfig`는 **2.5 이후 세대에만 있는 필드**다. 2.0·1.5 계열에 보내면
+// 구글이 필드 이름도 안 알려주고 저 한 줄로 거절한다. 그런데 modelFor()는 실측이
+// 느리면 SPEED_ORDER를 타고 **gemini-2.0-flash-lite 같은 구세대로 내려간다** —
+// 내려가는 순간 모든 호출이 400이 된다. 우리가 2.5에서 "생각 끄기"를 켜둔 대가다.
+//
+// 고치는 방법은 둘 다 쓴다:
+//   ① 보내기 전에 — 모델 이름으로 thinkingConfig 지원 여부를 판단해 아예 안 넣는다.
+//   ② 그래도 400이 오면 — 본문을 한 단계씩 깎아서 **자동으로 다시 보낸다**.
+//      ①의 판단이 틀려도(구글이 또 바꿔도) 사용자는 오류를 안 본다.
+// 그리고 배운 결과를 기기에 저장해 다음부터는 처음부터 맞는 본문을 보낸다.
+//
+//   tier 0 = systemInstruction + thinkingConfig   (2.5 이후)
+//   tier 1 = systemInstruction만                  (2.0·1.5)
+//   tier 2 = 아무 것도 없이, 시스템 지시를 사용자 글 앞에 붙여서 보낸다 (최후)
+
+const MAX_TIER = 2;
+const bodyTier = new Map();          // 모델 → 이 모델에 통하는 본문 등급
+
+/** 이 모델이 thinkingConfig를 받아주나? 2.5 이후 세대와 -latest 별칭만. */
+export function supportsThinking(model) {
+  const m = String(model || '');
+  return /gemini-(?:2\.5|[3-9](?:\.\d+)?)[-.]/.test(m) || /-latest$/.test(m);
+}
+
+/** 이 모델에 지금 쓸 본문 등급. 배운 값이 있으면 그걸, 없으면 이름으로 추측. */
+export function tierFor(model) {
+  const learnedTier = bodyTier.get(model);
+  if (learnedTier != null) return learnedTier;
+  return supportsThinking(model) ? 0 : 1;
+}
+
+/** 400을 맞았다 → 한 단계 깎아서 기억한다. 더 깎을 게 없으면 false. */
+export function demoteTier(model) {
+  const next = tierFor(model) + 1;
+  if (next > MAX_TIER) return false;
+  bodyTier.set(model, next);
+  kvSet('body_tiers', [...bodyTier.entries()]).catch(() => {});
+  return true;
+}
+
+/** 앱 시작 때 지난번에 배운 본문 등급을 불러온다. */
+export async function loadBodyTiers() {
+  const saved = await kvGet('body_tiers');
+  if (Array.isArray(saved)) saved.forEach(([m, t]) => bodyTier.set(m, t));
+}
+
+export function resetTiers() { bodyTier.clear(); }
+
+/** 요청 본문을 등급에 맞게 조립한다. 두 호출 경로가 같은 본문을 쓰게 한다. */
+export function buildBody({ model, system, text, maxTokens, temperature }) {
+  const tier = tierFor(model);
+  const userText = tier >= 2 && system ? `${system}\n\n---\n\n${text}` : text;
+  const body = {
+    contents: [{ role: 'user', parts: [{ text: userText }] }],
+    generationConfig: { temperature, maxOutputTokens: maxTokens },
+  };
+  if (tier < 2 && system) body.systemInstruction = { parts: [{ text: system }] };
+  // ★ 2.5 계열은 "생각" 토큰이 maxOutputTokens를 같이 먹는다. 끄지 않으면 예산을
+  //   거의 다 생각에 쓰고 **답이 한 줄 쓰다 잘린다**(2026-10-10 실제 버그).
+  //   우리 작업은 형식이 정해진 짧은 변환이라 생각이 필요 없다.
+  if (tier < 1) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  return body;
 }
 
 export function recordLatency(model, ms) {
@@ -76,6 +151,10 @@ export function recordLatency(model, ms) {
 export function friendlyModelError(code, model) {
   if (code === 'MODEL_BUSY') {
     return 'Gemini가 지금 붐빕니다. 잠시 뒤 다시 눌러주세요 — 다른 모델로도 시도했습니다.';
+  }
+  if (code === 'BAD_REQUEST') {
+    return `"${model}" 모델이 이 요청을 받지 않습니다. 다른 모델로도 시도했습니다 — `
+      + '설정에서 "쓸 수 있는 모델 보기"로 바꿔주세요.';
   }
   return `이 계정에서 "${model}" 모델을 쓸 수 없습니다. 설정에서 "쓸 수 있는 모델 보기"로 바꿔주세요.`;
 }
@@ -248,8 +327,9 @@ export async function ask({ term, question, noteText, subject, lecture, onProgre
       return text;
     })
     .catch(async (e) => {
-      if ((e.message === 'MODEL_404' || e.message === 'MODEL_BUSY')) {
-        if (e.message === 'MODEL_404') markDead(model); else markBusy(model);
+      // 400(BAD_REQUEST)도 같이 다룬다 — 본문을 끝까지 깎아도 거절한 모델은 못 쓰는 모델이다.
+      if (e.message === 'MODEL_404' || e.message === 'MODEL_BUSY' || e.message === 'BAD_REQUEST') {
+        if (e.message === 'MODEL_BUSY') markBusy(model); else markDead(model);
         if (!retried) {
           const next = await modelFor();
           if (next !== model) return ask({ term, question, noteText, subject, lecture, onProgress }, true);
@@ -321,18 +401,12 @@ async function callGeminiStream({ model, system, text: userText, maxTokens = 900
 }
 
 async function streamOnce({ key, model, system, text: userText, maxTokens, temperature, onChunk }) {
-  const body = {
-    systemInstruction: { parts: [{ text: system }] },
-    contents: [{ role: 'user', parts: [{ text: userText }] }],
-    generationConfig: { temperature, maxOutputTokens: maxTokens, thinkingConfig: { thinkingBudget: 0 } },
-  };
   logOf(key).push(Date.now());
   const t0 = Date.now();
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body) }
-  );
-  if (!res.ok) { handleHttpError(res.status, await res.text().catch(() => ''), key); }
+  const res = await sendWithFallback({
+    key, model, system, text: userText, maxTokens, temperature,
+    url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
+  });
   if (!res.body) {                       // 스트림을 못 쓰면 평소 방식으로
     return callOnce({ key, model, system, text: userText, maxTokens, temperature });
   }
@@ -368,6 +442,30 @@ async function streamOnce({ key, model, system, text: userText, maxTokens, tempe
   return full.trim();
 }
 
+/**
+ * 한 번 보낸다 — **400이면 본문을 깎아서 스스로 다시 보낸다.**
+ *
+ * 구글의 400 INVALID_ARGUMENT는 어느 필드가 문제인지 안 알려준다(실측: 메시지가
+ * "Request contains an invalid argument." 한 줄뿐). 그래서 추측으로 고치지 않고
+ * **선택적인 필드부터 차례로 떼어내며 통하는 본문을 찾는다**(tier 0→1→2).
+ * 통하면 그 등급을 기억해 다음부터는 한 번에 보낸다.
+ */
+async function sendWithFallback({ key, model, system, text, maxTokens, temperature, url }) {
+  for (;;) {
+    const body = buildBody({ model, system, text, maxTokens, temperature });
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) return res;
+    const detail = await res.text().catch(() => '');
+    // 400이고 키 문제가 아니라면 본문 문제다 — 한 단계 깎아서 즉시 다시 보낸다
+    if (res.status === 400 && !/API key not valid/i.test(detail) && demoteTier(model)) continue;
+    handleHttpError(res.status, detail, key);
+  }
+}
+
 /** HTTP 오류를 키 단위 오류로 바꾼다(두 호출 경로가 같은 규칙을 쓰게). */
 function handleHttpError(status, text, key) {
   if (status === 400 && /API key not valid/i.test(text)) {
@@ -390,6 +488,8 @@ function handleHttpError(status, text, key) {
     throw new Error('KEY_RATE');
   }
   if (status === 404) throw new Error('MODEL_404');
+  // 여기까지 온 400 = 본문을 끝까지 깎아도 거절당했다. 날것의 JSON을 화면에 흘리지 않는다.
+  if (status === 400) { const e = new Error('BAD_REQUEST'); e.detail = shortMsg(text); throw e; }
   // 503/500/502 = 구글 쪽이 붐비는 것. 모델을 바꾸거나 잠깐 뒤 다시 하면 된다.
   if (status === 503 || status === 500 || status === 502) throw new Error('MODEL_BUSY');
   throw new Error(`Gemini 오류 ${status}${text ? ' — ' + text.slice(0, 120) : ''}`);
@@ -397,29 +497,11 @@ function handleHttpError(status, text, key) {
 
 /** 키 하나로 한 번 호출. 이 키만의 문제는 KEY_RATE/KEY_BAD로 알린다. */
 async function callOnce({ key, model, system, text: userText, maxTokens, temperature }) {
-  const body = {
-    systemInstruction: { parts: [{ text: system }] },
-    contents: [{ role: 'user', parts: [{ text: userText }] }],
-    generationConfig: {
-      temperature,
-      maxOutputTokens: maxTokens,
-      // ★ 2.5 계열은 "생각" 토큰이 maxOutputTokens를 같이 먹는다. 끄지 않으면 예산을
-      //   거의 다 생각에 쓰고 **답이 한 줄 쓰다 잘린다**(2026-10-10 실제 버그).
-      //   우리 작업은 형식이 정해진 짧은 변환이라 생각이 필요 없다.
-      thinkingConfig: { thinkingBudget: 0 },
-    },
-  };
   logOf(key).push(Date.now());
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify(body),
-    }
-  );
-
-  if (!res.ok) handleHttpError(res.status, await res.text().catch(() => ''), key);
+  const res = await sendWithFallback({
+    key, model, system, text: userText, maxTokens, temperature,
+    url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+  });
   const json = await res.json();
   const cand = json?.candidates?.[0];
   const text = cand?.content?.parts?.map((p) => p.text).join('') || '';
@@ -656,14 +738,13 @@ export async function breakdown(question, retried = false, onProgress = null) {
   } catch (e) {
     // 404: 이 모델은 이 계정에 없다 → 기억해두고 다른 모델로 다시
     // 503: 지금 붐빈다 → 잠깐 쉬게 하고 다른 모델로 다시
-    if ((e.message === 'MODEL_404' || e.message === 'MODEL_BUSY') && !retried) {
-      if (e.message === 'MODEL_404') markDead(model); else markBusy(model);
-      const next = await modelFor({ light: true });
-      if (next !== model) return breakdown(question, true, onProgress);
-      throw new Error(friendlyModelError(e.message, model));
-    }
-    if (e.message === 'MODEL_404' || e.message === 'MODEL_BUSY') {
-      if (e.message === 'MODEL_404') markDead(model); else markBusy(model);
+    const modelFault = e.message === 'MODEL_404' || e.message === 'MODEL_BUSY' || e.message === 'BAD_REQUEST';
+    if (modelFault) {
+      if (e.message === 'MODEL_BUSY') markBusy(model); else markDead(model);
+      if (!retried) {
+        const next = await modelFor({ light: true });
+        if (next !== model) return breakdown(question, true, onProgress);
+      }
       throw new Error(friendlyModelError(e.message, model));
     }
     // 잘렸어도 거기까지는 보여준다 — 아무것도 없는 것보다 낫다

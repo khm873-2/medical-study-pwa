@@ -46,6 +46,15 @@ const run = async (label, fn) => {
   }
 };
 
+// ══════════ 0. 화면 전환이 CSS에 "지금 어느 화면인가"를 알려주는가 ══════════
+// 읽기 화면 레이아웃(목차 따로 스크롤·하단 바 고정 해제)이 전부 이 값에 걸려 있다.
+// show()가 이걸 안 심으면 조용히 옛 레이아웃으로 돌아간다(2026-10-12).
+await run('화면 표시', () => [{
+  name: 'show()가 body[data-screen]을 심는다',
+  ok: !!document.body.dataset.screen,
+  detail: String(document.body.dataset.screen),
+}]);
+
 // ══════════ 준비: 퀴즈 화면을 실제 문항처럼 세운다 ══════════
 await run('준비', () => {
   const out = [];
@@ -250,6 +259,7 @@ await run('목차', async () => {
   document.querySelectorAll('section').forEach((s) => s.classList.add('hidden'));
   const rs = document.getElementById('readScreen');
   rs.classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';   // show()가 하는 일 — CSS가 이걸 본다
 
   // 목차 항목을 앱과 같은 구조로 채운다
   const heads = ['1. 무맥성 심정지 알고리즘', '2. 서맥 알고리즘', '3. 빈맥 알고리즘',
@@ -270,8 +280,14 @@ await run('목차', async () => {
   out.push({ name: '목차가 본문 왼쪽에 있다', ok: tr.right <= mr.left + 20,
     detail: `목차 right ${Math.round(tr.right)} / 본문 left ${Math.round(mr.left)}` });
   out.push({ name: '목차가 본문을 가리지 않는다 (겹침 없음)', ok: tr.right <= mr.left + 1 });
-  out.push({ name: '목차가 sticky (스크롤해도 따라온다)',
-    ok: getComputedStyle(toc).position === 'sticky', detail: getComputedStyle(toc).position });
+  // sticky였을 땐 본문과 **같이 밀려 올라갔다가** 걸렸다 — 그게 싫다는 요청으로
+  // 목차를 아예 제 스크롤 상자로 바꿨다(2026-10-12).
+  out.push({ name: '목차가 제 스크롤 상자다(본문과 따로 움직인다)',
+    ok: ['auto', 'scroll'].includes(getComputedStyle(toc).overflowY),
+    detail: getComputedStyle(toc).overflowY });
+  out.push({ name: '목차가 본문을 따라 스크롤되지 않는다(페이지가 안 움직인다)',
+    ok: document.documentElement.scrollHeight <= window.innerHeight + 1,
+    detail: `${document.documentElement.scrollHeight} vs ${window.innerHeight}` });
   out.push({ name: '목차 항목이 모두 렌더된다', ok: list.querySelectorAll('.toc-link').length === 7 });
   const link = list.querySelector('.toc-link');
   const lr = link.getBoundingClientRect();
@@ -295,6 +311,65 @@ await run('목차', async () => {
   out.push({ name: '펜이 목차 항목을 UI로 인식한다 (탭이 먹는다)',
     ok: p2.constructor && !!link.closest('.read-toc') });
   p2.destroy();
+  return out;
+});
+
+// ══════════ 5a-2. 읽기 화면: 하단 바가 떠오르지 않고, 목차·본문이 따로 구른다 ══════════
+// 실제 증상(2026-10-12): 아래로 스크롤하면 맨 아래 있던 하단 바가 화면 한가운데로 올라왔고,
+// 목차는 본문과 같이 밀려 올라갔다. 둘 다 `position: fixed`/`sticky`에 기댄 탓이다.
+// 고친 뒤에는 **페이지 자체가 스크롤되지 않는다** — 바가 떠오를 자리가 없다.
+await run('읽기 화면 레이아웃', async () => {
+  const out = [];
+  document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
+  const rs = document.getElementById('readScreen');
+  rs.classList.remove('hidden');
+  rs.classList.remove('toc-off');
+  document.body.dataset.screen = 'readScreen';
+
+  const list = document.getElementById('readTocList');
+  list.innerHTML = Array.from({ length: 24 }, (_, i) =>
+    `<li><button type="button" class="toc-link${i === 19 ? ' current' : ''}">` +
+    `<span class="toc-i">${i + 1}</span><span>섹션 ${i + 1} — 제법 긴 제목이 들어간다</span></button></li>`).join('');
+  const body = document.getElementById('readBody');
+  body.innerHTML = Array.from({ length: 80 }, (_, i) => `<p>${i + 1}. 긴 본문 한 줄.</p>`).join('');
+  await new Promise((r) => setTimeout(r, 120));
+
+  const nav = document.querySelector('#readScreen .navbar');
+  const toc = document.getElementById('readToc');
+  const main = document.querySelector('#readScreen .read-main');
+  const nr = nav.getBoundingClientRect();
+
+  out.push({ name: '페이지 자체가 스크롤되지 않는다(바가 떠오를 자리가 없다)',
+    ok: document.documentElement.scrollHeight <= window.innerHeight + 1,
+    detail: `${document.documentElement.scrollHeight} vs ${window.innerHeight}` });
+  out.push({ name: '하단 바가 fixed가 아니라 레이아웃 안에 있다',
+    ok: getComputedStyle(nav).position === 'static', detail: getComputedStyle(nav).position });
+  out.push({ name: '하단 바가 화면 맨 아래에 붙어 있다',
+    ok: Math.abs(nr.bottom - window.innerHeight) < 4, detail: `bottom ${Math.round(nr.bottom)} / ${window.innerHeight}` });
+
+  // 본문을 끝까지 굴려도 바는 그대로고, 마지막 줄이 바에 안 가린다
+  main.scrollTop = main.scrollHeight;
+  await new Promise((r) => setTimeout(r, 120));
+  const nr2 = nav.getBoundingClientRect();
+  out.push({ name: '본문을 끝까지 굴려도 바가 제자리에 있다',
+    ok: Math.abs(nr2.top - nr.top) < 2, detail: `${Math.round(nr.top)} → ${Math.round(nr2.top)}` });
+  out.push({ name: '본문 마지막 줄이 하단 바에 가리지 않는다',
+    ok: body.lastElementChild.getBoundingClientRect().bottom <= nr2.top + 1,
+    detail: `${Math.round(body.lastElementChild.getBoundingClientRect().bottom)} vs ${Math.round(nr2.top)}` });
+
+  // 목차를 굴려도 본문은 가만히 있어야 한다
+  const mBefore = main.scrollTop;
+  out.push({ name: '목차에 제 스크롤이 있다', ok: toc.scrollHeight - toc.clientHeight > 0,
+    detail: `${toc.scrollHeight - toc.clientHeight}px` });
+  toc.scrollTop = toc.scrollHeight;
+  await new Promise((r) => setTimeout(r, 80));
+  out.push({ name: '목차만 굴리면 본문은 안 움직인다', ok: main.scrollTop === mBefore,
+    detail: `${mBefore} → ${main.scrollTop}` });
+  out.push({ name: '목차를 굴려도 페이지는 안 움직인다', ok: window.scrollY === 0, detail: `${window.scrollY}` });
+
+  // 헤더(도구막대)는 항상 보여야 한다
+  out.push({ name: '도구막대가 화면 위에 남아 있다',
+    ok: document.querySelector('#readScreen > header').getBoundingClientRect().top >= -1 });
   return out;
 });
 
@@ -902,17 +977,19 @@ await run('탭 분리', () => {
   document.getElementById('listScreen').classList.remove('hidden');
 
   const tabs = [...document.querySelectorAll('.tab')];
-  const WANT = ['오늘', '퀴즈', '모의고사', '노트 읽기', '카드'];
+  const WANT = ['오늘', '퀴즈', '모의고사', '족보', '노트 읽기', '카드'];
   out.push({ name: `탭이 ${WANT.length}개`, ok: tabs.length === WANT.length, detail: tabs.map((t) => t.textContent).join('·') });
   out.push({ name: `순서가 ${WANT.join(' → ')}`,
     ok: WANT.every((w, i) => tabs[i] && tabs[i].textContent === w),
     detail: tabs.map((t) => t.textContent).join(' ') });
   out.push({ name: '오늘 탭이 기본', ok: tabs[0].classList.contains('active') });
   out.push({ name: '탭마다 담을 자리가 있다',
-    ok: ['todayBody', 'quizBody', 'listBody', 'notesBody', 'cardsBody'].every((id) => !!document.getElementById(id)) });
+    ok: ['todayBody', 'quizBody', 'listBody', 'jokboBody', 'notesBody', 'cardsBody']
+      .every((id) => !!document.getElementById(id)) });
   // 어느 탭을 눌러도 그 탭 하나만 보여야 한다 — 탭을 추가하며 hidden 처리를 빼먹으면 겹친다.
   // (앞선 검사들이 탭을 옮겨놨을 수 있으므로 눌러서 상태를 만들고 본다.)
-  const BODY = { today: 'todayBody', quizzes: 'quizBody', exams: 'listBody', notes: 'notesBody', cards: 'cardsBody' };
+  const BODY = { today: 'todayBody', quizzes: 'quizBody', exams: 'listBody', jokbo: 'jokboBody',
+    notes: 'notesBody', cards: 'cardsBody' };
   for (const t of tabs) {
     const key = t.dataset.tab;
     t.click();
@@ -1745,8 +1822,11 @@ await run('오늘 탭 배선', async () => {
   out.push({ name: '토큰 없음은 배지 대신 설정으로 보낸다', ok: /'NO_TOKEN'\) \{ openSetup\(\)/.test(app) });
   out.push({ name: '뒷일 실패는 조용히 넘긴다', ok: /QUIET_ERRORS/.test(app) });
   out.push({ name: '카드 개수는 오늘 볼 것만 센다',
-    ok: /dueToday\(cards, srs\)/.test(app) && /export function dueToday/.test(reader),
+    ok: /dueToday\(live, srs\)/.test(app) && /export function dueToday/.test(reader),
     detail: 'studyQueue는 기한 안 된 카드까지 붙여줘서 "4,716장 남음"이 된다' });
+  // 끝난 과목을 보관해도 오늘 탭이 계속 세면 보관한 의미가 없다(2026-10-12)
+  out.push({ name: '오늘 탭도 보관한 과목은 빼고 센다',
+    ok: /const live = liveCards\(cards, archived\)/.test(app) && /export function liveCards/.test(reader) });
   out.push({ name: '시간표를 읽어 강의를 뽑는다',
     ok: /parseSchedule/.test(app) && /lecturesFor/.test(app) });
   out.push({ name: '오프라인이면 기억해둔 시간표를 쓴다', ok: /schedule_cache/.test(app) });
@@ -1929,6 +2009,218 @@ await run('오늘 탭 — 좁은 폭', () => {
     detail: `${Math.round(chips[0].getBoundingClientRect().top)} / ${Math.round(chips[1].getBoundingClientRect().top)}` });
   out.push({ name: '긴 강의명이 여러 줄로 흐른다',
     ok: document.querySelector('.today-lec-head').getBoundingClientRect().height > 30 });
+  return out;
+});
+
+
+// ══════════ 카드 관리 고도화: 덱 트리 · 보관 · 여러 장 고르기 (2026-10-12) ══════════
+// "오래 누르면 툭툭 골라서 한꺼번에 처리" + "두경부는 끝났으니 눈에 안 띄게".
+// 길게 누르기와 범위 선택은 **진짜 포인터 이벤트**로만 확인할 수 있어서 여기 있다.
+await page.setViewport({ width: 1366, height: 1024 });
+await page.reload({ waitUntil: 'networkidle0' });
+await page.waitForFunction(() => !document.getElementById('splash'), { timeout: 6000 }).catch(() => {});
+
+await page.evaluate(async () => {
+  const { saveCards, allCards, deleteCard } = await import('/js/db.js');
+  for (const c of await allCards()) await deleteCard(c.id);     // 앞 테스트가 남긴 것 치운다
+  const { kvSet } = await import('/js/db.js');
+  await kvSet('deck_archived', []);
+  await kvSet('srs', {});
+  const cards = [];
+  const notes = [
+    ['98_예습노트_보관/응급_중환자/1015_응급중환자_ACLS.md', 'ACLS', 6],
+    ['98_예습노트_보관/응급_중환자/1021_응급중환자_ECMO.md', 'ECMO', 4],
+    ['02_Wiki/두경부_피부/두경부피부_중이염.md', '중이염', 5],
+  ];
+  for (const [path, title, n] of notes) {
+    for (let i = 1; i <= n; i++) {
+      cards.push({ id: `qa:${path}#${i}`, kind: 'qa', notePath: path, noteTitle: title,
+        heading: title, topic: title, contextHtml: `${title} 질문 ${i}`, answers: [`답 ${i}`] });
+    }
+  }
+  await saveCards(cards);
+});
+await page.evaluate(() => document.querySelector('.tabs [data-tab="cards"]').click());
+await page.waitForFunction(() => document.body.dataset.screen === 'deckScreen', { timeout: 8000 });
+await page.waitForFunction(() => document.querySelectorAll('.deck-card').length > 0, { timeout: 8000 });
+
+await run('덱 트리', () => {
+  const out = [];
+  const names = [...document.querySelectorAll('#deckSide .deck-node .dn-name')].map((n) => n.textContent);
+  out.push({ name: '출처 폴더가 그대로 과목 덱이 된다',
+    ok: names.includes('응급_중환자') && names.includes('두경부_피부'), detail: names.join(' / ') });
+  out.push({ name: '상태 탭과 과목 트리가 따로 있다',
+    ok: document.querySelectorAll('.deck-sec-h').length >= 2 });
+  const sub = [...document.querySelectorAll('#deckSide .deck-node')].find((b) => /응급_중환자/.test(b.textContent));
+  out.push({ name: '노트가 여러 개면 펼칠 수 있다', ok: !!sub.querySelector('.dn-caret.tap') });
+  sub.querySelector('.dn-caret').click();
+  const subs = [...document.querySelectorAll('#deckSide .deck-node.sub .dn-name')].map((n) => n.textContent);
+  out.push({ name: '펼치면 노트가 나온다', ok: subs.length === 2, detail: subs.join(' / ') });
+  out.push({ name: '노트는 배운 순서대로(날짜 오름차순)', ok: /^1015/.test(subs[0]), detail: subs.join(' / ') });
+  // 과목을 고르면 그 과목만
+  sub.click();
+  out.push({ name: '과목을 고르면 그 과목 카드만 보인다',
+    ok: [...document.querySelectorAll('.deck-card .deck-topic')].every((t) => /ACLS|ECMO/.test(t.textContent)),
+    detail: String(document.querySelectorAll('.deck-card').length) });
+  out.push({ name: '어디를 보고 있는지 알려준다', ok: !!document.querySelector('.deck-crumb') });
+  document.querySelector('.deck-crumb .deck-btn').click();   // 전체 보기
+  out.push({ name: '전체로 돌아올 수 있다', ok: !document.querySelector('.deck-crumb') });
+  return out;
+});
+
+await run('과목 보관', async () => {
+  const out = [];
+  const before = document.querySelectorAll('.deck-card').length;
+  const row = [...document.querySelectorAll('.deck-node-row')].find((r) => /두경부_피부/.test(r.textContent));
+  row.querySelector('.deck-arch').click();
+  await new Promise((r) => setTimeout(r, 300));
+  out.push({ name: '보관하면 목록에서 사라진다',
+    ok: document.querySelectorAll('.deck-card').length === before - 5,
+    detail: `${before} → ${document.querySelectorAll('.deck-card').length}` });
+  out.push({ name: '오늘 볼 것 개수에서도 빠진다',
+    ok: document.querySelector('.deck-tab.active .dt-n').textContent === '10',
+    detail: document.querySelector('.deck-tab.active .dt-n').textContent });
+  const arch = document.querySelector('.deck-arch-h');
+  out.push({ name: '지난 과목으로 접힌다', ok: !!arch && /지난 과목/.test(arch.textContent) });
+  out.push({ name: '카드를 지우는 게 아니다',
+    ok: (await (await import('/js/db.js')).allCards()).length === 15 });
+  // 펼쳐서 되돌리기
+  arch.click();
+  const back = [...document.querySelectorAll('.deck-node-row')].find((r) => /두경부_피부/.test(r.textContent));
+  out.push({ name: '보관함을 펼쳐 볼 수 있다', ok: !!back });
+  back.querySelector('.deck-arch').click();
+  await new Promise((r) => setTimeout(r, 300));
+  out.push({ name: '되돌리면 그대로 돌아온다',
+    ok: document.querySelectorAll('.deck-card').length === before,
+    detail: String(document.querySelectorAll('.deck-card').length) });
+  return out;
+});
+
+// ── 길게 누르기 → 여러 장 고르기 ── (진짜 포인터로)
+const pressCard = async (idx, ms) => {
+  const b = await page.evaluate((i) => {
+    const c = document.querySelectorAll('.deck-card')[i];
+    c.scrollIntoView({ block: 'center' });
+    const r = c.getBoundingClientRect();
+    return { x: Math.round(r.left + 50), y: Math.round(r.top + r.height / 2) };
+  }, idx);
+  await page.mouse.move(b.x, b.y);
+  await page.mouse.down();
+  await new Promise((r) => setTimeout(r, ms));
+  await page.mouse.up();
+  await new Promise((r) => setTimeout(r, 250));
+};
+
+await pressCard(0, 120);                       // 짧게 — 들어가면 안 된다
+results.push({ name: '짧게 누르면 고르기로 안 들어간다',
+  ok: await page.evaluate(() => document.getElementById('deckSelBar').classList.contains('hidden')) });
+
+await pressCard(0, 650);                       // 길게 — 들어가야 한다
+results.push({ name: '길게 누르면 고르기 모드로 들어간다',
+  ok: await page.evaluate(() => !document.getElementById('deckSelBar').classList.contains('hidden')) });
+results.push({ name: '누른 카드가 먼저 골라져 있다',
+  ok: (await page.evaluate(() => document.querySelector('.sel-n').textContent)) === '1장 선택',
+  detail: await page.evaluate(() => document.querySelector('.sel-n').textContent) });
+
+await pressCard(4, 650);                       // 길게 = 여기까지 범위 선택
+results.push({ name: '다른 카드를 길게 누르면 그 사이가 전부 골라진다(shift+클릭 대신)',
+  ok: (await page.evaluate(() => document.querySelector('.sel-n').textContent)) === '5장 선택',
+  detail: await page.evaluate(() => document.querySelector('.sel-n').textContent) });
+
+await run('고르기 모드', async () => {
+  const out = [];
+  out.push({ name: '고른 카드에 체크가 보인다',
+    ok: document.querySelectorAll('.deck-card.picked').length === 5,
+    detail: String(document.querySelectorAll('.deck-card.picked').length) });
+  out.push({ name: '고르는 중에는 낱장 버튼이 안 나온다',
+    ok: !document.querySelector('.deck-card.selectable .deck-acts') });
+  // 탭하면 토글
+  document.querySelectorAll('.deck-card')[2].click();
+  out.push({ name: '탭하면 빠진다', ok: document.querySelector('.sel-n').textContent === '4장 선택',
+    detail: document.querySelector('.sel-n').textContent });
+  document.querySelectorAll('.deck-card')[2].click();
+  out.push({ name: '다시 탭하면 들어간다', ok: document.querySelector('.sel-n').textContent === '5장 선택' });
+
+  // 전체 선택 — 화면에 그린 것뿐 아니라 그 칸 전부
+  [...document.querySelectorAll('.sel-btn2')].find((b) => /전체 선택/.test(b.textContent)).click();
+  out.push({ name: '전체 선택은 그 칸 카드 전부', ok: document.querySelector('.sel-n').textContent === '15장 선택',
+    detail: document.querySelector('.sel-n').textContent });
+
+  // 일괄 중요 표시
+  [...document.querySelectorAll('.sel-btn2')].find((b) => b.textContent === '★ 중요').click();
+  await new Promise((r) => setTimeout(r, 350));
+  const starTab = [...document.querySelectorAll('.deck-tab')].find((b) => /중요/.test(b.textContent));
+  out.push({ name: '한 번에 중요 표시가 된다', ok: starTab.querySelector('.dt-n').textContent === '15',
+    detail: starTab.querySelector('.dt-n').textContent });
+  out.push({ name: '처리하면 고르기 모드가 끝난다',
+    ok: document.getElementById('deckSelBar').classList.contains('hidden') });
+  return out;
+});
+
+await run('일괄 버리기 · 삭제 확인', async () => {
+  const out = [];
+  // 앞 단계에서 전부 중요 표시가 되어 '오늘 볼 것' 칸이 비었다 — 전체 칸으로 옮긴다
+  [...document.querySelectorAll('.deck-tab')].find((b) => /전체/.test(b.textContent)).click();
+  await new Promise((r) => setTimeout(r, 200));
+  // 낱장 카드의 '선택' 버튼으로도 들어갈 수 있다(길게 누르기를 모르는 경우)
+  const pick = [...document.querySelectorAll('.deck-card .deck-btn')].find((b) => b.textContent === '선택');
+  out.push({ name: '버튼으로도 고르기에 들어간다', ok: !!pick });
+  pick.click();
+  await new Promise((r) => setTimeout(r, 200));
+  [...document.querySelectorAll('.sel-btn2')].find((b) => /전체 선택/.test(b.textContent)).click();
+  [...document.querySelectorAll('.sel-btn2')].find((b) => /버리기/.test(b.textContent)).click();
+  await new Promise((r) => setTimeout(r, 350));
+  const dropTab = [...document.querySelectorAll('.deck-tab')].find((b) => /버림/.test(b.textContent));
+  out.push({ name: '한 번에 버릴 수 있다', ok: dropTab.querySelector('.dt-n').textContent === '15',
+    detail: dropTab.querySelector('.dt-n').textContent });
+
+  // 삭제는 되돌릴 수 없으니 한 번 더 묻는다
+  [...document.querySelectorAll('.deck-tab')].find((b) => /버림/.test(b.textContent)).click();
+  await new Promise((r) => setTimeout(r, 250));
+  [...document.querySelectorAll('.deck-card .deck-btn')].find((b) => b.textContent === '선택').click();
+  await new Promise((r) => setTimeout(r, 200));
+  const del = () => [...document.querySelectorAll('.sel-btn2')].find((b) => /삭제/.test(b.textContent));
+  del().click();
+  await new Promise((r) => setTimeout(r, 150));
+  out.push({ name: '삭제는 한 번 더 묻는다', ok: /정말 삭제/.test(del().textContent), detail: del().textContent });
+  const n0 = (await (await import('/js/db.js')).allCards()).length;
+  del().click();
+  await new Promise((r) => setTimeout(r, 450));
+  const n1 = (await (await import('/js/db.js')).allCards()).length;
+  out.push({ name: '두 번째 누르면 실제로 지워진다', ok: n1 === n0 - 1, detail: `${n0} → ${n1}` });
+  return out;
+});
+
+await run('오늘 수업 자료 칩', () => {
+  const out = [];
+  // 시간표의 `실강(02_Wiki)` 칸을 읽어 수업 후 노트도 걸어준다(2026-10-12).
+  // 예전에는 예습노트 하나만 걸려서 **위키를 만들어도 계속 예습본만** 떴다.
+  const sec = document.createElement('div');
+  sec.innerHTML = '<div class="today-lec"><div class="today-lec-head"><b>기본소생술(BLS)</b></div>'
+    + '<div class="today-chips"><button class="chip">📗 실강노트</button>'
+    + '<button class="chip">📖 예습노트</button><button class="chip">📜 족보</button></div></div>';
+  document.body.appendChild(sec);
+  const chips = [...sec.querySelectorAll('.chip')];
+  out.push({ name: '한 강의에 자료 칩이 여러 개 들어간다', ok: chips.length === 3 });
+  out.push({ name: '칩이 손가락으로 눌릴 만큼 크다',
+    ok: chips.every((c) => c.getBoundingClientRect().height >= 30),
+    detail: `${Math.round(chips[0].getBoundingClientRect().height)}px` });
+  out.push({ name: '칩이 가로로 넘치지 않는다',
+    ok: sec.scrollWidth <= sec.clientWidth + 1, detail: `${sec.scrollWidth} vs ${sec.clientWidth}` });
+  sec.remove();
+  return out;
+});
+
+await run('아이콘 구분', () => {
+  const out = [];
+  const cap = document.getElementById('readCapture').innerHTML;
+  const card = document.getElementById('readMakeCard').innerHTML;
+  out.push({ name: '영역 복사와 카드 만들기가 서로 다른 그림이다', ok: cap !== card });
+  out.push({ name: '영역 복사는 사진 그림(해+산)', ok: /circle/.test(cap) && /rect/.test(cap) });
+  out.push({ name: '카드 만들기는 가려진 말이 있는 카드 그림',
+    ok: /fill="currentColor"/.test(card) && !/circle/.test(card), detail: card.slice(0, 80) });
+  out.push({ name: '퀴즈 도구막대의 영역 복사도 같은 그림',
+    ok: document.getElementById('toolCapture').innerHTML === cap });
   return out;
 });
 

@@ -257,7 +257,9 @@ ok('rateCheck가 막힌 상태를 알림', rc.ok === false && rc.waitSec > 0, JS
 // 예산을 거의 다 생각에 쓰고 답이 한 줄 쓰다 잘린다 — 실제로 겪은 버그다.
 {
   const src = readFileSync(`${PWA}/js/gemini.js`, 'utf8');
-  ok('요청에 thinkingBudget: 0 을 넣는다', /thinkingConfig:\s*\{\s*thinkingBudget:\s*0\s*\}/.test(src));
+  // 소스 문자열이 아니라 **실제로 조립되는 본문**을 본다 — 모양이 바뀌어도 뜻은 안 바뀌게.
+  const b25 = G.buildBody({ model: 'gemini-2.5-flash', system: 'S', text: 'T', maxTokens: 900, temperature: 0.3 });
+  ok('2.5 요청에 thinkingBudget: 0 을 넣는다', b25.generationConfig.thinkingConfig?.thinkingBudget === 0);
   ok('잘린 응답(MAX_TOKENS)을 감지한다', /finishReason === 'MAX_TOKENS'/.test(src));
   ok('잘려도 거기까지는 보여준다', /e\.partial/.test(src));
   // 예산은 "짧을수록 빠르다"와 "잘리면 안 된다" 사이에서 잡는다(2026-10-10: 1600 → 1100).
@@ -288,6 +290,71 @@ ok('rateCheck가 막힌 상태를 알림', rc.ok === false && rc.waitSec > 0, JS
   ok('키를 추가·삭제할 수 있다', /gem\.addKey/.test(app) && /gem\.removeKey/.test(app));
   ok('키를 가려서 보여준다', /maskKey/.test(app) || /k\.masked/.test(app));
   ok('여러 키를 넣으라는 안내가 있다', /키마다 따로/.test(html));
+}
+
+
+// ── 400 INVALID_ARGUMENT (2026-10-12) ──
+// 실제로 화면에 날것으로 샌 오류:
+//   Gemini 오류 400 — {"error":{"code":400,"message":"Request contains an invalid
+//   argument.","status":"INVALID_ARGUMENT"}}
+// 원인은 thinkingConfig를 2.0 계열에 보낸 것. 보내기 전에 거르고, 그래도 400이면
+// 본문을 깎아 자동으로 다시 보낸다.
+{
+  G.resetTiers();
+  ok('2.5는 thinkingConfig를 지원한다고 본다', G.supportsThinking('gemini-2.5-flash-lite'));
+  ok('2.0은 지원 안 한다고 본다', !G.supportsThinking('gemini-2.0-flash-lite'));
+  ok('1.5도 지원 안 한다고 본다', !G.supportsThinking('gemini-1.5-flash'));
+  ok('-latest 별칭은 2.5 취급', G.supportsThinking('gemini-flash-latest'));
+
+  const b20 = G.buildBody({ model: 'gemini-2.0-flash', system: 'S', text: 'T', maxTokens: 900, temperature: 0.3 });
+  ok('2.0에는 thinkingConfig를 아예 안 넣는다', !('thinkingConfig' in b20.generationConfig),
+    JSON.stringify(b20.generationConfig));
+  ok('2.0에도 systemInstruction은 넣는다', !!b20.systemInstruction);
+
+  // tier 2까지 깎이면 systemInstruction을 빼고 사용자 글 앞에 붙인다
+  G.resetTiers();
+  G.demoteTier('gemini-2.0-flash');           // 1 → 2
+  const b2 = G.buildBody({ model: 'gemini-2.0-flash', system: 'SYS', text: 'USER', maxTokens: 900, temperature: 0.3 });
+  ok('마지막 단계는 systemInstruction을 뺀다', !b2.systemInstruction);
+  ok('뺀 시스템 지시는 본문 앞에 붙인다', b2.contents[0].parts[0].text.startsWith('SYS'),
+    b2.contents[0].parts[0].text.slice(0, 20));
+  ok('더 깎을 게 없으면 false', G.demoteTier('gemini-2.0-flash') === false);
+
+  // ★ 끝에서 끝까지: 400이 와도 사용자는 오류 대신 답을 본다
+  G.resetTiers();
+  G.resetModels();
+  G.resetLimiter();
+  await G.setKeys(['AIza400']);
+  await G.setModel('gemini-2.5-flash');
+  const BAD400 = JSON.stringify({ error: { code: 400, message: 'Request contains an invalid argument.', status: 'INVALID_ARGUMENT' } });
+  const seen = [];
+  global.fetch = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    seen.push(body);
+    if (body.generationConfig.thinkingConfig) return resp(400, BAD400);   // 이 필드가 문제였다
+    return resp(200, { candidates: [{ content: { parts: [{ text: '답변' }] } }] });
+  };
+  const got = await G.ask({ term: '400테스트' });
+  ok('400이 나도 사용자는 답을 받는다', got === '답변', got);
+  ok('두 번째 요청에서 thinkingConfig를 뺐다',
+    seen.length === 2 && !!seen[0].generationConfig.thinkingConfig && !seen[1].generationConfig.thinkingConfig,
+    `${seen.length}회`);
+
+  // 배운 등급은 다음 호출에 바로 쓰인다 — 두 번 깎지 않는다
+  seen.length = 0;
+  G.resetLimiter();
+  await G.ask({ term: '400테스트2' });
+  ok('배운 뒤엔 한 번에 성공한다', seen.length === 1 && !seen[0].generationConfig.thinkingConfig, `${seen.length}회`);
+
+  // 끝까지 깎아도 400이면 — 날것의 JSON이 아니라 사람 말로 알린다
+  G.resetTiers();
+  G.resetModels();
+  G.resetLimiter();
+  global.fetch = async () => resp(400, BAD400);
+  let e400 = null;
+  try { await G.ask({ term: '영원히400' }); } catch (e) { e400 = e.message; }
+  ok('끝내 실패해도 JSON을 그대로 안 보여준다', !/INVALID_ARGUMENT|\{/.test(e400 || ''), e400);
+  ok('대신 할 수 있는 일을 알려준다', /모델/.test(e400 || ''), e400);
 }
 
 console.log(`\n통과 ${pass}건`);

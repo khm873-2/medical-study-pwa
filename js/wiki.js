@@ -12,26 +12,56 @@
 import { listDir, getText } from './github.js';
 import { linkedNoteFromMd } from './parser.js';
 
-const NOTE_DIRS = ['98_예습노트_보관', '02_Wiki'];
+// `01_임종평_전범위`도 넣는다 — build_mock_exam_html.py는 이미 여기까지 뒤져서
+// wikiRefs를 검증한다. 앱만 안 보면 빌드는 통과했는데 화면에선 조용히 자동매칭으로
+// 떨어진다(= 틀린 섹션이 떠도 아무도 모른다). 두 쪽의 탐색 범위는 같아야 한다.
+const NOTE_DIRS = ['98_예습노트_보관', '02_Wiki', '01_임종평_전범위'];
 
 let _noteIndex = null; // {노트이름: vault경로}
+
+// 한글 파일명은 자소 분리형(NFD)과 결합형(NFC) 두 가지로 적힐 수 있다 — 맥 파일시스템은
+// NFD로, 사람이 타이핑한 `연계노트`는 NFC로 적힌다. 눈에는 똑같은데 문자열로는 다르다.
+// 한쪽이라도 NFD로 올라오면 매칭이 **조용히** 실패하므로 양쪽을 맞춰둔다(2026-10-12).
+const nfc = (s) => String(s).normalize('NFC');
+
+
+/**
+ * 한 루트 아래의 노트 파일을 모은다 — `{루트}/{과목}/*.md`와 **그 아래 한 겹 더**까지.
+ *
+ * 한 겹 더 들어가는 이유: /lecture-integrate가 위키를 만들 때마다 Q&A 보조본을
+ * `02_Wiki/{과목}/QA/{주제}_QA.md`에 같이 만든다(명령 9번). 2단만 훑으면 그 폴더가
+ * 통째로 안 보여서, **앞으로 만드는 위키의 절반이 앱에 안 올라온다**(2026-10-12).
+ * @returns {Promise<Array<{subject, group, name, path}>>}
+ */
+export async function listNoteFiles(root) {
+  const out = [];
+  let subs;
+  try { subs = await listDir(root); } catch { return out; }
+  for (const s of subs.filter((e) => e.type === 'dir')) {
+    let files;
+    try { files = await listDir(s.path); } catch { continue; }
+    const push = (f, group) => {
+      if (f.type === 'file' && f.name.endsWith('.md')) {
+        out.push({ subject: s.name, group, name: nfc(f.name.replace(/\.md$/, '')), path: f.path });
+      }
+    };
+    files.forEach((f) => push(f, null));
+    for (const d of files.filter((e) => e.type === 'dir')) {
+      let inner;
+      try { inner = await listDir(d.path); } catch { continue; }
+      inner.forEach((f) => push(f, d.name));
+    }
+  }
+  return out;
+}
 
 /** 노트 이름 → 경로 인덱스를 한 번만 만든다. */
 async function noteIndex() {
   if (_noteIndex) return _noteIndex;
   const idx = {};
   for (const root of NOTE_DIRS) {
-    let subs;
-    try { subs = await listDir(root); } catch { continue; }
-    for (const s of subs.filter((e) => e.type === 'dir')) {
-      let files;
-      try { files = await listDir(s.path); } catch { continue; }
-      for (const f of files) {
-        if (f.type === 'file' && f.name.endsWith('.md')) {
-          const name = f.name.replace(/\.md$/, '');
-          if (!(name in idx)) idx[name] = f.path; // 98_예습노트_보관이 먼저라 우선
-        }
-      }
+    for (const f of await listNoteFiles(root)) {
+      if (!(f.name in idx)) idx[f.name] = f.path; // 98_예습노트_보관이 먼저라 우선
     }
   }
   _noteIndex = idx;
@@ -40,7 +70,76 @@ async function noteIndex() {
 
 export async function resolveNotePath(noteName) {
   const idx = await noteIndex();
-  return idx[noteName] || null;
+  return idx[nfc(noteName)] || null;
+}
+
+// ───────────── 족보 ↔ 강의 노트 짝짓기 (2026-10-12) ─────────────
+//
+// 족보 챕터(`00_Raw_Text/기출문제_학교/{과목}/16_체외막산소장치_ECMO.md`)에는
+// 모의고사와 달리 `연계노트` frontmatter가 없다. 대신 **챕터 제목과 노트 이름이
+// 사실상 같은 말**이라 이름으로 맞출 수 있다:
+//     16_체외막산소장치_ECMO        ↔ 1021_응급중환자_ECMO
+//     13_중환자실환자의통증진정및섬망관리 ↔ 1016_응급중환자_중환자실통증진정섬망관리
+//
+// 띄어쓰기·조사("의", "및")가 들쭉날쭉해서 완전일치로는 21개 중 13개만 붙는다.
+// 포함관계 + 글자 2-gram 유사도(Dice)를 같이 쓰면 17개까지 붙고, 나머지 4개는
+// **실제로 예습노트가 없는 챕터**(Acute stroke·의료인문학 등)라 안 붙는 게 맞다.
+// 억지로 붙이면 엉뚱한 노트가 뜨므로 문턱(0.5) 아래는 포기한다.
+
+const JOKBO_PREFIX = '00_Raw_Text/기출문제_학교/';
+const DICE_MIN = 0.5;
+
+export function isJokboPath(path) { return String(path || '').startsWith(JOKBO_PREFIX); }
+
+/** 비교용으로 다듬는다 — 번호·과목 접두어·기호를 떼고 붙여 쓴다. */
+function nameKey(s) {
+  return nfc(String(s || ''))
+    .replace(/\.md$/, '')
+    .replace(/^\d{2,6}_/, '')          // 16_ / 1021_
+    .replace(/^응급중환자_?/, '')
+    .replace(/[^0-9A-Za-z가-힣]/g, '')
+    .toLowerCase();
+}
+
+function bigrams(s) {
+  const out = new Set();
+  for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2));
+  return out.size ? out : new Set([s]);
+}
+
+/** 두 이름이 얼마나 같은 말인가(0~1). 띄어쓰기에 흔들리지 않게 2-gram으로 본다. */
+export function nameSimilarity(a, b) {
+  const x = nameKey(a);
+  const y = nameKey(b);
+  if (!x || !y) return 0;
+  if (x === y || x.includes(y) || y.includes(x)) return 1;
+  const A = bigrams(x);
+  const B = bigrams(y);
+  let hit = 0;
+  A.forEach((g) => { if (B.has(g)) hit++; });
+  return (2 * hit) / (A.size + B.size);
+}
+
+/** 족보 챕터 경로 → 가장 잘 맞는 강의 노트 이름(없으면 null). */
+export async function noteForJokbo(path) {
+  const parts = String(path).split('/');
+  const subject = parts[2];
+  const chapter = parts[parts.length - 1];
+  if (!subject || !chapter) return null;
+
+  const cands = [];
+  for (const root of NOTE_DIRS) {
+    for (const f of await listNoteFiles(root)) {
+      if (f.subject === subject && !f.group) cands.push(f.name);   // QA본은 산문이 아니라 뺀다
+    }
+  }
+  let best = null;
+  let bestScore = 0;
+  for (const n of cands) {
+    const sc = nameSimilarity(chapter, n);
+    if (sc > bestScore) { bestScore = sc; best = n; }
+  }
+  return bestScore >= DICE_MIN ? best : null;
 }
 
 /** 모의고사 html 경로 → 짝이 되는 md에서 연계노트 이름을 얻는다. */
@@ -248,8 +347,11 @@ export async function wikiFor(question, examHtmlPath) {
     }
   }
 
-  // ② 폴백 — 연계노트에서 자동 매칭
-  const noteName = await linkedNoteName(examHtmlPath);
+  // ② 폴백 — 연계노트에서 자동 매칭.
+  //    족보 챕터에는 연계노트가 없으므로 챕터 제목으로 노트를 찾는다.
+  const noteName = isJokboPath(examHtmlPath)
+    ? await noteForJokbo(examHtmlPath)
+    : await linkedNoteName(examHtmlPath);
   if (!noteName) return null;
   const path = await resolveNotePath(noteName);
   if (!path) return null;

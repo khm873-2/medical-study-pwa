@@ -20,7 +20,9 @@ import {
 export const BACKUP_PATH = '.medstudy/state.json';
 
 /** 백업에 담는 kv 키. 비밀과 "다시 만들면 되는 캐시"는 뺀다. */
-export const BACKUP_KEYS = ['srs', 'theme', 'cached_paths', 'gemini_model', 'side_w', 'ai_h'];
+// deck_archived — 어느 과목을 치워뒀는지. 빠뜨리면 새 기기에서 끝난 과목이 전부 되살아난다.
+export const BACKUP_KEYS = ['srs', 'theme', 'cached_paths', 'gemini_model', 'side_w', 'ai_h',
+  'deck_archived'];
 
 /** 절대 백업하지 않는 키(실수로 추가되는 걸 테스트가 잡게 명시해둔다). */
 export const SECRET_KEYS = ['github_pat', 'gemini_key'];

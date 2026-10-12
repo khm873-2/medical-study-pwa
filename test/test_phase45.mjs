@@ -181,6 +181,88 @@ ok('search 모듈 로드', typeof S.search === 'function' && typeof S.cacheSubje
 const empty = await S.search('a');
 ok('1글자는 검색 안 함', empty.length === 0);
 
+// ── 시간표: 실강노트·족보 칸까지 읽는가 (2026-10-12) ──
+// 수업을 듣고 /lecture-integrate로 위키를 만들어도 "오늘" 탭에 예습노트만 떴다.
+// 시간표에는 `실강(02_Wiki)`·`가공족보` 칸이 이미 채워져 있는데 안 읽고 있었다.
+{
+  const md = [
+    '| 날짜 | 교시 | 강의명 | 담당 | 가공족보 | 예습노트 | 실강(02_Wiki) |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    '| 2026-10-12 | 2~3 | 기본소생술(BLS) | 곽세정 | 02_기본소생술_BLS.md | ✅ [[1012_응급중환자_기본소생술BLS]] | ✅ [[응급중환자_기본소생술BLS]] (왕족 확정) |',
+    '| 2026-10-12 | 8~9 | 환경의학 | 송명제 | 10_환경의학.md | ✅ [[1012_응급중환자_환경의학]] | — |',
+  ].join('\n');
+  const rows = R.parseSchedule(md);
+  ok('강의 2개를 읽는다', rows.length === 2, String(rows.length));
+  ok('예습노트 칸', rows[0].note === '1012_응급중환자_기본소생술BLS', rows[0].note);
+  ok('실강(02_Wiki) 칸', rows[0].wiki === '응급중환자_기본소생술BLS', rows[0].wiki);
+  ok('가공족보 칸은 위키링크가 아니라 파일명', rows[0].jokbo === '02_기본소생술_BLS.md', rows[0].jokbo);
+  ok('실강이 아직 없으면 빈 값(— 를 노트로 오인하지 않는다)', rows[1].wiki === '', `"${rows[1].wiki}"`);
+  ok('족보만 있는 강의도 읽는다', rows[1].jokbo === '10_환경의학.md', rows[1].jokbo);
+}
+
+// ── 덱(폴더) 트리 · 보관 (2026-10-12) ──
+// 카드 5,000장을 한 바구니에 두면 "두경부는 끝났는데 왜 아직 나오나"가 된다.
+// 출처 폴더를 그대로 덱으로 쓰고, 끝난 과목은 보관함으로 접는다.
+{
+  const mk = (path, i) => ({ id: `qa:${path}#${i}`, kind: 'qa', notePath: path, noteTitle: 't',
+    contextHtml: 'q', answers: ['a'] });
+  const cards = [
+    ...Array.from({ length: 3 }, (_, i) => mk('98_예습노트_보관/응급_중환자/1015_응급중환자_ACLS.md', i)),
+    ...Array.from({ length: 2 }, (_, i) => mk('98_예습노트_보관/응급_중환자/1021_응급중환자_ECMO.md', i)),
+    ...Array.from({ length: 4 }, (_, i) => mk('02_Wiki/두경부_피부/두경부피부_중이염.md', i)),
+    ...Array.from({ length: 2 }, (_, i) => mk('02_Wiki/두경부_피부/QA/두경부피부_중이염_QA.md', i)),
+    { id: 'box:1', contextHtml: 'q', answers: ['a'] },        // notePath 없는 카드
+  ];
+
+  // 번호로 집으면 개수를 하나만 바꿔도 조용히 다른 카드를 보게 된다 — 경로로 집는다
+  const pick = (frag) => cards.find((c) => String(c.notePath || '').includes(frag));
+  const d = R.deckOf(pick('1015_응급중환자_ACLS'));
+  ok('덱 좌표 — 과목', d.subject === '응급_중환자', d.subject);
+  ok('덱 좌표 — 노트', d.note === '1015_응급중환자_ACLS', d.note);
+  const qa = R.deckOf(pick('/QA/'));
+  ok('QA 하위폴더는 꼬리표로 단다', qa.subject === '두경부_피부' && qa.group === 'QA',
+    `${qa.subject}/${qa.group}`);
+  ok('출처 없는 카드는 기타로',
+    R.deckOf(cards.find((c) => !c.notePath)).subject === R.OTHER_DECK);
+
+  const tree = R.deckTree(cards, {});
+  const byName = Object.fromEntries(tree.map((t) => [t.subject, t]));
+  ok('과목 트리를 만든다', tree.length === 3, tree.map((t) => t.subject).join(','));
+  ok('같은 과목은 루트가 달라도 한 칸으로 합친다',
+    byName['두경부_피부'].n === 6, String(byName['두경부_피부'] && byName['두경부_피부'].n));
+  ok('과목 아래에 노트가 달린다', byName['응급_중환자'].notes.length === 2);
+  ok('노트는 배운 순서대로(날짜 오름차순)',
+    byName['응급_중환자'].notes[0].name.startsWith('1015'), byName['응급_중환자'].notes[0].name);
+  ok('새 카드는 전부 오늘 볼 것', byName['응급_중환자'].due === 5, String(byName['응급_중환자'].due));
+
+  // ── 보관 ──
+  // 3(ACLS) + 2(ECMO) + 4(중이염) + 2(중이염 QA) + 1(출처 없음) = 12장
+  ok('준비한 카드 수', cards.length === 12, `${cards.length}장`);
+  const archived = new Set([R.subKey('두경부_피부')]);
+  const live = R.liveCards(cards, archived);
+  ok('보관한 과목은 빠진다(QA본까지 같이)', live.length === 6, `${live.length}장`);
+  ok('보관해도 카드 자체는 남는다', cards.length === 12);
+  ok('보관 판정',
+    R.isArchivedCard(archived, pick('두경부피부_중이염')) && !R.isArchivedCard(archived, pick('ACLS')));
+  ok('오늘 볼 것에서도 빠진다', R.dueToday(live, {}).length === 6, `${R.dueToday(live, {}).length}장`);
+
+  // 노트 하나만 보관할 수도 있다 — ACLS 3장만 빠진다
+  const one = new Set([R.noteKey(pick('1015_응급중환자_ACLS'))]);
+  ok('노트 단위 보관', R.liveCards(cards, one).length === 9, `${R.liveCards(cards, one).length}장`);
+
+  const t2 = R.deckTree(cards, {}, { archived });
+  ok('트리가 보관 상태를 표시한다',
+    t2.find((t) => t.subject === '두경부_피부').archived === true);
+  ok('보관된 과목은 아래로 내려간다', t2[t2.length - 1].subject === '두경부_피부', t2.map((x) => x.subject).join(','));
+  ok('보관된 과목의 노트도 보관으로 표시된다',
+    t2.find((t) => t.subject === '두경부_피부').notes.every((n) => n.archived));
+
+  // ── 덱으로 거르기 ──
+  ok('과목으로 거른다', R.cardsInDeck(cards, R.subKey('응급_중환자')).length === 5);
+  ok('노트로 거른다', R.cardsInDeck(cards, R.noteKey(pick('1015_응급중환자_ACLS'))).length === 3);
+  ok('키가 없으면 전부', R.cardsInDeck(cards, null).length === 12);
+}
+
 console.log(`\n통과 ${pass}건`);
 if (fail.length) { console.log(`실패 ${fail.length}건:`); fail.forEach((f) => console.log('  ✗ ' + f)); process.exit(1); }
 console.log('✅ 전부 통과');

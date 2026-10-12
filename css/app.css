@@ -553,7 +553,10 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
    **넓은 화면 퀴즈 레이아웃은 이 블록에서만 정의한다.** 다른 데 또 만들지 말 것. */
 
 @media (min-width: 900px) {
-  #app { padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
+  /* 퀴즈 화면만 하단 바가 칼럼 안에 들어가므로 여백이 필요 없다.
+     읽기·카드 화면은 .navbar가 화면에 고정돼 있어서 여백을 깎으면 내용이 바 뒤로 숨는다
+     (2026-10-12: 노트 마지막 줄이 하단 바에 잘려 보이던 원인). */
+  body[data-screen="quizScreen"] #app { padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
   #quizScreen .split { display: flex; gap: 0; align-items: stretch; }
 
   /* 네비는 본문 칼럼 하단에 붙은 작은 바 (오른쪽은 좁아서 버튼이 눌렸다) */
@@ -904,82 +907,6 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
   color: var(--accent); text-align: left;
 }
 
-/* ═══════════ 카드 관리 (2026-10-10 재작성) ═══════════
-   왼쪽에 성격별 탭, 오른쪽에 카드 미리보기. 카드가 수백 장이라 한 줄 목록으로는
-   무엇이 들었는지 알 수가 없다 — 작은 카드로 보여주고 거기서 바로 골라낸다. */
-.deck-exam {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 10px 14px; margin-bottom: 14px;
-  background: var(--warn-bg); border: 1px solid var(--warn); border-radius: 11px;
-  font-size: 13px; color: var(--warn); font-weight: 600;
-}
-.deck-exam-d {
-  background: var(--warn); color: #fff; padding: 3px 10px;
-  border-radius: 7px; font-weight: 800; font-size: 13px;
-}
-
-.deck-split { display: block; }
-.deck-side { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 10px; margin-bottom: 12px; }
-.deck-tab {
-  display: flex; align-items: center; gap: 7px; flex: 0 0 auto;
-  padding: 10px 13px; border-radius: 10px; min-height: 42px;
-  background: var(--card); border: 1px solid var(--border);
-  font-family: inherit; font-size: 13.5px; color: var(--text); cursor: pointer; white-space: nowrap;
-}
-.deck-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-.dt-ico { font-size: 13px; }
-.dt-n { font-weight: 800; opacity: .8; font-size: 12px; }
-.deck-tab.active .dt-n { opacity: 1; }
-
-@media (min-width: 900px) {
-  .deck-split { display: flex; gap: 16px; align-items: flex-start; }
-  .deck-side {
-    flex: 0 0 188px; display: block; overflow: visible;
-    position: sticky; top: 8px; padding: 0; margin: 0;
-  }
-  .deck-tab { width: 100%; margin-bottom: 6px; justify-content: flex-start; }
-  .dt-l { flex: 1; text-align: left; }
-  .deck-main-col { flex: 1; min-width: 0; }
-}
-
-.deck-stats { margin-bottom: 14px; }
-.deck-hint { font-size: 12px; margin: 10px 0 0; }
-
-/* 미리보기 격자 — 넓으면 두 줄씩 */
-.deck-grid { display: grid; gap: 10px; grid-template-columns: 1fr; }
-@media (min-width: 1100px) { .deck-grid { grid-template-columns: 1fr 1fr; } }
-
-.deck-card {
-  background: var(--card); border: 1px solid var(--border); border-radius: 11px;
-  padding: 12px 14px;
-}
-.deck-topic { font-size: 11px; color: var(--accent); font-weight: 700; margin-bottom: 5px; line-height: 1.45; }
-.deck-q {
-  font-size: 13.5px; line-height: 1.55; color: var(--text);
-  max-height: 5.2em; overflow: hidden;
-}
-.deck-q .cloze {
-  display: inline; min-width: 0; padding: 0 2px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border-bottom: 1.5px solid var(--accent); border-radius: 2px;
-}
-.deck-q table { font-size: 11.5px; border-collapse: collapse; }
-.deck-q th, .deck-q td { border: 1px solid var(--border); padding: 3px 5px; }
-.deck-a {
-  margin-top: 8px; padding: 7px 9px; border-radius: 7px;
-  background: color-mix(in srgb, var(--correct) 12%, transparent);
-  font-size: 13px; font-weight: 700; color: var(--text);
-}
-.deck-meta { margin-top: 8px; font-size: 11.5px; color: var(--sub); }
-.deck-acts { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
-.deck-btn {
-  border: 1px solid var(--border); background: var(--bg); color: var(--sub);
-  border-radius: 8px; padding: 6px 11px; font-size: 12px; font-family: inherit;
-  cursor: pointer; min-height: 34px; white-space: nowrap;
-}
-.deck-btn:active { background: var(--badge-bg); }
-.deck-btn.on { color: var(--accent); border-color: var(--accent); }
-.deck-btn.danger { color: var(--wrong); }
 
 /* 카드 화면 버튼 줄 — 답 보기 전/후로 바뀐다 */
 .card-nav .grade-row { display: flex; gap: 10px; width: 100%; }
@@ -1489,3 +1416,165 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
 .deck-a { max-height: 9em; overflow-y: auto; font-weight: 600; }
 /* 질문은 문장이라 왼쪽 정렬이 자연스럽다(기존 빈칸 카드는 가운데였다) */
 .card-context.qa-q { text-align: left; }
+
+/* ═══════════ 읽기 화면: 한 화면에 가두고, 목차와 본문을 따로 굴린다 (2026-10-12) ═══════════
+   고친 두 가지:
+   ① 하단 바가 스크롤 도중 화면 한가운데로 떠올랐다. `.navbar`가 `position: fixed`라
+      스크롤 합성(compositing)과 별개로 그려져서 생기는 문제다. 바를 **레이아웃 안에**
+      집어넣으면 떠오를 자리 자체가 없어진다 — 퀴즈 화면은 이미 같은 방법으로 고쳤다.
+   ② 목차가 본문과 같이 밀려 올라갔다. sticky는 "같이 스크롤되다가 걸린다"는 뜻이라
+      애초에 원하는 동작이 아니었다. **목차와 본문을 각자 스크롤 상자로 만든다.**
+
+   그래서 넓은 화면에서는 페이지 자체를 스크롤하지 않는다:
+     #app(100dvh, 세로 flex) ─ header ─ .read-split(남는 높이) ─ .navbar
+                                        ├ .read-toc  (제 스크롤)
+                                        └ .read-main (제 스크롤)
+   좁은 화면은 기존대로 — 목차가 서랍이고 본문이 페이지 스크롤이다. */
+
+@media (min-width: 900px) {
+  body[data-screen="readScreen"] { overflow: hidden; }
+  body[data-screen="readScreen"] #app {
+    height: 100vh; height: 100dvh;
+    padding-bottom: 0;
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  body[data-screen="readScreen"] #readScreen {
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+  }
+  /* 헤더는 이제 스크롤되지 않으므로 sticky일 필요가 없다 */
+  body[data-screen="readScreen"] #readScreen > header { position: static; flex: 0 0 auto; }
+
+  /* ↓ 전부 body[data-screen]으로 묶는다. 한 덩어리로 켜지고 한 덩어리로 꺼져야 한다 —
+     일부만 적용되면 목차가 static인데 부모는 스크롤 안 하는 어정쩡한 상태가 된다. */
+  body[data-screen="readScreen"] .read-split {
+    flex: 1 1 auto; min-height: 0;
+    align-items: stretch;                 /* 두 칼럼 모두 꽉 채운다 */
+    padding-top: 10px;
+  }
+  body[data-screen="readScreen"] .read-toc {
+    position: static; top: auto;
+    max-height: none; align-self: stretch;
+    overflow-y: auto; overscroll-behavior: contain;   /* 끝까지 굴려도 본문이 안 따라 움직인다 */
+  }
+  body[data-screen="readScreen"] .read-main {
+    overflow-y: auto; min-height: 0; overscroll-behavior: contain;
+    padding-right: 2px;                   /* 카드 그림자가 잘리지 않게 */
+  }
+  body[data-screen="readScreen"] #readScreen > .navbar {
+    position: static; flex: 0 0 auto;
+    margin-top: 10px; padding: 8px 12px;
+    border: 1px solid var(--border); border-top: 1px solid var(--border);
+    border-radius: var(--r-3); box-shadow: var(--sh-2);
+  }
+}
+
+/* 좁은 화면: 서랍 목차도 본문과 따로 굴러야 한다 */
+@media (max-width: 899px) {
+  .read-toc { overscroll-behavior: contain; }
+}
+
+/* ═══════════ 카드 관리 — 덱 트리 · 여러 장 고르기 (2026-10-12) ═══════════
+   카드가 5,000장이라 한 바구니로는 "오늘 뭘 보나"를 고를 수가 없다.
+   왼쪽에 과목 › 노트 트리(Anki의 덱 트리), 끝난 과목은 보관함으로 접어둔다. */
+
+/* 사이드바가 이제 탭 한 줄이 아니라 "상태 + 과목 트리" 두 구역이다 —
+   가로 스크롤 한 줄짜리 레이아웃을 세로로 되돌린다. */
+#deckSide { display: block; overflow-x: visible; }
+
+.deck-sec-h {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .04em; color: var(--sub);
+  text-transform: uppercase; margin: 14px 2px 7px;
+}
+.deck-sec-h:first-child { margin-top: 0; }
+.deck-tabs { display: flex; gap: 7px; overflow-x: auto; }
+.deck-nodes { display: flex; flex-direction: column; gap: 2px; }
+
+.deck-node-row { display: flex; align-items: stretch; gap: 4px; }
+.deck-node {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; gap: 7px;
+  padding: 9px 10px; min-height: 40px;
+  background: transparent; border: 1px solid transparent; border-radius: 9px;
+  font-family: inherit; font-size: 13px; color: var(--text); text-align: left; cursor: pointer;
+}
+.deck-node:active { background: var(--badge-bg); }
+.deck-node.active { background: var(--badge-bg); border-color: var(--accent); font-weight: 700; }
+.deck-node.sub { padding-left: 20px; font-size: 12.5px; color: var(--sub); }
+.deck-node.sub.active { color: var(--text); }
+.deck-node.archived { opacity: .55; }
+.dn-caret { flex: 0 0 14px; font-size: 10px; color: var(--sub); text-align: center; }
+.dn-caret.tap { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; }
+.dn-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dn-due {
+  flex: 0 0 auto; background: var(--accent); color: #fff; border-radius: 9px;
+  padding: 1px 7px; font-size: 10.5px; font-weight: 800; font-variant-numeric: tabular-nums;
+}
+.deck-arch {
+  flex: 0 0 auto; width: 44px; min-height: 40px;
+  background: transparent; border: 1px solid transparent; border-radius: 9px;
+  font-family: inherit; font-size: 11px; font-weight: 700; color: var(--sub); cursor: pointer;
+}
+.deck-arch:active { background: var(--badge-bg); }
+.deck-arch.on { color: var(--accent); }
+.deck-arch-h {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; margin-top: 12px; padding: 10px; min-height: 40px;
+  background: var(--badge-bg); border: 1px solid var(--border); border-radius: 9px;
+  font-family: inherit; font-size: 12.5px; font-weight: 700; color: var(--sub); cursor: pointer;
+}
+.deck-arch-h.open { color: var(--text); }
+.deck-arch-tag { font-size: 11.5px; color: var(--warn); }
+
+.deck-crumb {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 10px; font-size: 14px;
+}
+.deck-crumb b { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+
+/* ── 고른 상태 ── */
+.deck-card.selectable { cursor: pointer; position: relative; padding-right: 40px; }
+.deck-card.picked { border-color: var(--accent); background: var(--badge-bg); }
+.deck-card.pressing { transform: scale(.985); transition: transform .12s var(--ease); }
+.deck-tick {
+  position: absolute; top: 10px; right: 10px;
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 2px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 800; color: #fff;
+}
+.deck-card.picked .deck-tick { background: var(--accent); border-color: var(--accent); }
+
+/* ── 아래 작업 막대 ── */
+.deck-selbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 70;
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  padding: 10px 14px calc(env(safe-area-inset-bottom) + 10px);
+  background: var(--card); border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 16px rgba(20, 26, 44, .1);
+}
+.deck-selbar .sel-n {
+  font-size: 13px; font-weight: 800; color: var(--accent);
+  margin-right: 4px; font-variant-numeric: tabular-nums;
+}
+.sel-btn2 {
+  min-height: 38px; padding: 8px 12px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+  font-family: inherit; font-size: 12.5px; color: var(--text); cursor: pointer;
+}
+.sel-btn2:active { background: var(--badge-bg); }
+.sel-btn2:disabled { opacity: .4; }
+.sel-btn2.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.sel-btn2.danger { color: var(--wrong); }
+.sel-btn2.danger.on { background: var(--wrong); border-color: var(--wrong); color: #fff; font-weight: 700; }
+
+/* 작업 막대가 마지막 카드를 가리지 않게 */
+body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-bottom) + 120px); }
+
+@media (min-width: 900px) {
+  .deck-tabs { flex-direction: column; overflow: visible; }
+  /* 과목이 늘어나면 사이드바가 화면보다 길어진다 — 제 안에서 구른다 */
+  #deckSide {
+    flex-basis: 236px; max-height: calc(100vh - 110px);
+    overflow-y: auto; overscroll-behavior: contain;
+  }
+}

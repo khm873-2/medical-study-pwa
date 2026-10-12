@@ -6,8 +6,8 @@
 //  - 화면이 꺼지지 않게 Wake Lock을 건다.
 //  - ⭐ ==하이라이트== 를 뽑아 플래시카드로 돌릴 수 있다(노트에 이미 818개 깔려 있다).
 
-import { listDir, getText, getBlobUrl } from './github.js';
-import { splitSections } from './wiki.js';
+import { getText, getBlobUrl } from './github.js';
+import { splitSections, listNoteFiles } from './wiki.js';
 import { renderMarkdown, hydrateEmbeds } from './markdown.js';
 import { kvGet, kvSet } from './db.js';
 
@@ -15,23 +15,26 @@ const NOTE_ROOTS = ['98_예습노트_보관', '02_Wiki', '01_임종평_전범위
 
 /** 노트 목록(과목별). 캐시해두고 새로고침 때만 다시 긁는다. */
 export async function noteList(force) {
-  const KEY = 'note_index';
+  // v2: QA 하위폴더를 포함하고 정렬이 오름차순으로 바뀌었다 — 옛 캐시를 버린다
+  const KEY = 'note_index_v2';
   if (!force) {
     const hit = await kvGet(KEY);
     if (hit) return hit;
   }
   const groups = [];
   for (const root of NOTE_ROOTS) {
-    let subs;
-    try { subs = await listDir(root); } catch { continue; }
-    for (const s of subs.filter((e) => e.type === 'dir')) {
-      let files;
-      try { files = await listDir(s.path); } catch { continue; }
-      const notes = files
-        .filter((f) => f.type === 'file' && f.name.endsWith('.md') && !f.name.startsWith('_'))
-        .map((f) => ({ name: f.name.replace(/\.md$/, ''), path: f.path }))
-        .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
-      if (notes.length) groups.push({ root, subject: s.name, notes });
+    // 과목 밑에 폴더가 하나 더 있으면(02_Wiki/{과목}/QA/) 그것도 과목처럼 따로 묶는다 —
+    // 산문본과 Q&A본은 읽는 목적이 달라서 한 목록에 섞으면 찾기 힘들다(2026-10-12).
+    const bySubject = new Map();
+    for (const f of await listNoteFiles(root)) {
+      if (f.name.startsWith('_')) continue;
+      const key = f.group ? `${f.subject} · ${f.group}` : f.subject;
+      if (!bySubject.has(key)) bySubject.set(key, []);
+      bySubject.get(key).push({ name: f.name, path: f.path });
+    }
+    for (const [subject, notes] of bySubject) {
+      notes.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+      if (notes.length) groups.push({ root, subject, notes });
     }
   }
   await kvSet(KEY, groups);
@@ -417,6 +420,100 @@ export function groupCards(cards, srs, now = Date.now()) {
     g.later.push(c);
   }
   return g;
+}
+
+// ───────────── 덱(폴더) — 과목 › 노트 (2026-10-12) ─────────────
+//
+// 카드가 5,000장인데 한 바구니에 담겨 있으면 "오늘 뭘 봐야 하나"를 고를 수가 없다.
+// 두경부 시험은 끝났고 다음은 응급인데, 끝난 과목 카드가 계속 섞여 나온다.
+//
+// Anki의 덱 트리·MarginNote의 노트북처럼 **출처 폴더를 그대로 덱으로 쓴다** —
+// 카드마다 notePath가 있으니 따로 분류 작업이 필요 없다:
+//   98_예습노트_보관/응급_중환자/1015_…ACLS.md  →  응급_중환자 › 1015_…ACLS
+//   02_Wiki/두경부_피부/QA/…_QA.md             →  두경부_피부 › …_QA
+// 같은 과목이 여러 루트(예습노트·위키)에 걸쳐 있어도 **과목 이름으로 합친다** —
+// 공부하는 사람에게 "응급_중환자"는 하나지 둘이 아니다.
+//
+// **보관(archive)**: 끝난 과목은 보관함으로 보낸다. 지우는 게 아니라 숨기는 것이라
+// SRS 기록은 그대로 남고, 되돌리면 그 자리에서 다시 나온다.
+
+export const OTHER_DECK = '기타';
+
+/** 카드 → 덱 좌표. notePath가 없으면 '기타'로 모은다. */
+export function deckOf(card) {
+  const raw = String((card && card.notePath) || '');
+  const parts = raw.replace(/\.md$/, '').split('/').filter(Boolean);
+  if (parts.length < 2) {
+    return { subject: OTHER_DECK, note: (card && card.noteTitle) || OTHER_DECK, root: '', group: '' };
+  }
+  const [root, subject, ...rest] = parts;
+  // 과목 밑에 폴더가 한 겹 더 있으면(02_Wiki/{과목}/QA/) 그 이름을 꼬리표로 단다
+  const group = rest.length > 1 ? rest[0] : '';
+  const note = rest[rest.length - 1];
+  return { subject, note, root, group };
+}
+
+export const subKey = (subject) => `s:${subject}`;
+export const noteKey = (card) => `n:${String((card && card.notePath) || '')}`;
+
+/** 이 카드가 보관된 과목·노트에 속하나? */
+export function isArchivedCard(archived, card) {
+  if (!archived || !archived.size) return false;
+  return archived.has(subKey(deckOf(card).subject)) || archived.has(noteKey(card));
+}
+
+/** 보관함에 안 들어간 카드만 — 오늘 볼 것·개수·공부 큐는 전부 이걸 쓴다. */
+export function liveCards(cards, archived) {
+  if (!archived || !archived.size) return cards || [];
+  return (cards || []).filter((c) => !isArchivedCard(archived, c));
+}
+
+/**
+ * 과목 › 노트 트리. 각 칸에 전체 장수와 **오늘 볼 장수**를 같이 담는다 —
+ * 덱을 고르는 기준은 "몇 장 있나"가 아니라 "오늘 몇 장 밀렸나"다.
+ * @returns {Array<{key, subject, n, due, archived, notes: Array}>}
+ */
+export function deckTree(cards, srs, { archived = new Set(), now = Date.now() } = {}) {
+  const due = new Set(dueToday(cards, srs, now).map((c) => c.id));
+  const subs = new Map();
+  for (const c of cards || []) {
+    const d = deckOf(c);
+    if (!subs.has(d.subject)) {
+      subs.set(d.subject, { key: subKey(d.subject), subject: d.subject, n: 0, due: 0, notes: new Map() });
+    }
+    const S = subs.get(d.subject);
+    S.n++;
+    if (due.has(c.id)) S.due++;
+    const nk = noteKey(c);
+    if (!S.notes.has(nk)) {
+      S.notes.set(nk, { key: nk, name: d.note, group: d.group, root: d.root, n: 0, due: 0 });
+    }
+    const N = S.notes.get(nk);
+    N.n++;
+    if (due.has(c.id)) N.due++;
+  }
+  const out = [...subs.values()].map((S) => ({
+    ...S,
+    archived: archived.has(S.key),
+    notes: [...S.notes.values()]
+      .map((N) => ({ ...N, archived: archived.has(S.key) || archived.has(N.key) }))
+      // 이름 앞 MMDD가 곧 강의 순서다 — 배운 순서대로(목록 화면과 같은 규칙, 2026-10-12)
+      .sort((a, b) => a.name.localeCompare(b.name, 'ko')),
+  }));
+  // 보관 안 된 것 먼저, 그중에서는 오늘 볼 게 많은 과목부터
+  out.sort((a, b) => Number(a.archived) - Number(b.archived) || b.due - a.due
+    || b.n - a.n || a.subject.localeCompare(b.subject, 'ko'));
+  return out;
+}
+
+/** 덱 키로 거른다. null이면 전부. */
+export function cardsInDeck(cards, key) {
+  if (!key) return cards || [];
+  if (key.startsWith('s:')) {
+    const sub = key.slice(2);
+    return (cards || []).filter((c) => deckOf(c).subject === sub);
+  }
+  return (cards || []).filter((c) => noteKey(c) === key);
 }
 
 export function srsStats(cards, srs) {
@@ -879,6 +976,10 @@ export function parseSchedule(md, { year } = {}) {
         name: cells.findIndex((c) => /강의명/.test(c)),
         teacher: cells.findIndex((c) => /^담당/.test(c)),
         note: cells.findIndex((c) => /예습노트/.test(c)),
+        // 실강 후 /lecture-integrate가 채우는 칸 — 예습노트만 보여주면 **수업을 들은
+        // 뒤에도 예습본만 뜬다**(2026-10-12 실제 불만). 정리된 본 노트가 있으면 그걸 먼저 준다.
+        wiki: cells.findIndex((c) => /실강|02_Wiki/.test(c)),
+        jokbo: cells.findIndex((c) => /^가공족보$/.test(c.trim())),
       };
       continue;
     }
@@ -898,15 +999,23 @@ export function parseSchedule(md, { year } = {}) {
     const at = Date.parse(`${date}T09:00:00`);
     if (Number.isNaN(at)) continue;
 
-    const noteCell = cols.note >= 0 ? (cells[cols.note] || '') : '';
-    const link = noteCell.match(/\[\[([^\]|]+)/);
+    const wikiLink = (i) => {
+      if (i < 0) return '';
+      const m = (cells[i] || '').match(/\[\[([^\]|]+)/);
+      return m ? m[1].trim() : '';
+    };
+    // 가공족보 칸은 위키링크가 아니라 파일명이 그대로 적혀 있다(예: `02_기본소생술_BLS.md`)
+    const jokboCell = cols.jokbo >= 0 ? (cells[cols.jokbo] || '') : '';
+    const jm = jokboCell.match(/(\d{2}_[^\s`|]+\.md)/);
     out.push({
       date,
       at,
       period: cols.period >= 0 ? (cells[cols.period] || '') : '',
       name,
       teacher: cols.teacher >= 0 ? (cells[cols.teacher] || '').replace(/^[-—]$/, '') : '',
-      note: link ? link[1].trim() : '',
+      note: wikiLink(cols.note),
+      wiki: wikiLink(cols.wiki),
+      jokbo: jm ? jm[1] : '',
     });
   }
   return out;
