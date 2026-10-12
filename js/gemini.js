@@ -278,7 +278,7 @@ export function maskKey(k) {
 export async function getModel() { return (await kvGet(MODEL_KEY)) || DEFAULT_MODEL; }
 export async function setModel(m) { return kvSet(MODEL_KEY, m || DEFAULT_MODEL); }
 
-/** 시험 직전에 보기 좋은 짧은 답을 강제하는 시스템 지시. */
+/** 시험 직전에 보기 좋은 짧은 답을 강제하는 시스템 지시(문제 풀 때). */
 const SYSTEM = `당신은 의대생의 시험 공부를 돕는 튜터다. 한국어로 답한다.
 반드시 아래 형식을 지켜라(군더더기 인사말 금지):
 
@@ -287,6 +287,26 @@ const SYSTEM = `당신은 의대생의 시험 공부를 돕는 튜터다. 한국
 **시험 포인트**: 출제될 만한 한 줄
 
 의학 용어는 한글(영문) 병기. 확실하지 않으면 "확실하지 않다"고 말한다.`;
+
+/**
+ * 노트를 읽다가 물을 때 쓰는 지시.
+ *
+ * 왜 따로 두나: 핵심/감별/시험 포인트 틀은 **한 개념**을 물을 때 좋은 형식이다.
+ * 노트에서 문단을 통째로 긁어오면 개념이 여럿이라 그 틀에 욱여넣다가 정작
+ * "이 대목이 무슨 말인지"를 설명하지 않는다(2026-10-12 지적).
+ * 읽기 모드에서는 틀을 강요하지 않고 **긁은 내용 자체를 풀어 설명하게** 한다.
+ */
+const READ_SYSTEM = `당신은 의대생이 강의 노트를 읽다가 막힌 대목을 설명해주는 튜터다.
+한국어로, 인사말 없이 바로 설명한다.
+
+사용자가 노트에서 긁어온 대목을 **그대로 풀어서 설명**한다:
+- 긴 문단이면 흐름을 따라가며 핵심 줄기를 짚고, 어려운 용어·숫자·약어가 왜 그런지 밝힌다.
+- 짧은 구절·용어 하나면 정의와 기전을 설명하고, 헷갈리기 쉬운 것과의 차이를 덧붙인다.
+- 노트에 이미 있는 말을 되풀이하지 말고, **노트가 생략한 연결고리**를 채워준다.
+
+형식은 내용에 맞게 고른다 — 정해진 틀에 욱여넣지 않는다. 길면 소제목(**굵게**)으로
+끊어주고, 나열이면 불릿을 쓴다. 의학 용어는 한글(영문) 병기.
+확실하지 않으면 "확실하지 않다"고 말한다.`;
 
 /**
  * 질문한다.
@@ -298,16 +318,20 @@ const SYSTEM = `당신은 의대생의 시험 공부를 돕는 튜터다. 한국
  * @param {string} [p.lecture]
  * @returns {Promise<string>} 답변 텍스트
  */
-export async function ask({ term, question, noteText, subject, lecture, onProgress }, retried = false) {
+export async function ask({ term, question, noteText, subject, lecture, onProgress, mode = 'exam' },
+  retried = false) {
   if (!(await hasKey())) throw new Error('NO_KEY');
   const model = await modelFor();          // 실측이 느리면 알아서 가벼운 쪽으로
+  const reading = mode === 'read';
 
   // 같은 걸 또 물으면 보내지 않는다(한도 절약)
-  const cacheKey = `${term}|${question ? question.num : ''}`;
+  const cacheKey = `${mode}|${term}|${question ? question.num : ''}`;
   if (!retried && answerCache.has(cacheKey)) return answerCache.get(cacheKey);
 
   const parts = [];
-  parts.push(`[질문] 다음에 대해 설명해줘:\n"${term}"`);
+  parts.push(reading
+    ? `[노트에서 긁어온 대목]\n${term}`
+    : `[질문] 다음에 대해 설명해줘:\n"${term}"`);
   if (subject || lecture) parts.push(`[과목] ${subject || ''} ${lecture || ''}`.trim());
   if (question) {
     const opts = Array.isArray(question.opts)
@@ -315,10 +339,18 @@ export async function ask({ term, question, noteText, subject, lecture, onProgre
       : '';
     parts.push(`[이 문제를 푸는 중이다]\n${question.q}\n${opts}`);
   }
-  if (noteText) parts.push(`[내 노트 발췌 — 이 맥락을 우선 반영]\n${noteText.slice(0, 1500)}`);
+  if (noteText) {
+    parts.push(reading
+      ? `[이 대목이 들어있는 섹션 — 맥락 참고용]\n${noteText.slice(0, 1500)}`
+      : `[내 노트 발췌 — 이 맥락을 우선 반영]\n${noteText.slice(0, 1500)}`);
+  }
 
   return callGeminiStream({
-    model, system: SYSTEM, text: parts.join('\n\n'), maxTokens: 900,
+    model,
+    system: reading ? READ_SYSTEM : SYSTEM,
+    text: parts.join('\n\n'),
+    // 문단을 통째로 긁으면 설명도 길어진다 — 읽기 모드만 예산을 넉넉히 준다
+    maxTokens: reading ? 1600 : 900,
     onChunk: onProgress ? (_p, full) => onProgress(full) : null,
   })
     .then((text) => {
@@ -332,7 +364,7 @@ export async function ask({ term, question, noteText, subject, lecture, onProgre
         if (e.message === 'MODEL_BUSY') markBusy(model); else markDead(model);
         if (!retried) {
           const next = await modelFor();
-          if (next !== model) return ask({ term, question, noteText, subject, lecture, onProgress }, true);
+          if (next !== model) return ask({ term, question, noteText, subject, lecture, onProgress, mode }, true);
         }
         throw new Error(friendlyModelError(e.message, model));
       }

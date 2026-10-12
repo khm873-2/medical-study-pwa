@@ -451,7 +451,7 @@ function isUiTarget(el) {
   return !!el.closest(
     '.pen-passthrough, button, summary, input, textarea, select, a, label, ' +
     '.sel-btn, .navbar, .quiz-head, .col-resizer, .pane-resizer, .sheet, ' +
-    '.read-toc, .toc-link, .toc-scrim'
+    '.read-toc, .toc-link, .toc-scrim, .ask-float'
   );
 }
 

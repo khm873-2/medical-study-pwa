@@ -586,11 +586,13 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
     max-height: calc(100vh - 80px);
   }
   #quizScreen .side-col > #aiPanel,
-  #quizScreen .side-col > #wikiPanel {
+  #quizScreen .side-col > #wikiPanel,
+  #quizScreen .side-col > #overviewPanel {
     margin-top: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
   }
   #quizScreen .side-col #aiBody,
-  #quizScreen .side-col .wiki-body { flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; }
+  #quizScreen .side-col .wiki-body,
+  #quizScreen .side-col .ov-body { flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; }
 
   /* 패널이 하나도 안 열렸으면 사이드는 자리를 차지하지 않는다.
      단 리사이저는 숨기지 않는다 — 숨기면 폭 조절 자체가 불가능해진다(2026-10-09 버그). */
@@ -1301,7 +1303,7 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
 .warn-box { border-radius: var(--r-2); border-left-width: 3px; }
 
 /* ── 사이드 패널 ── */
-#wikiPanel, #aiPanel {
+#wikiPanel, #aiPanel, #overviewPanel {
   border-radius: var(--r-3);
   box-shadow: var(--sh-2);
 }
@@ -1577,4 +1579,129 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
     flex-basis: 236px; max-height: calc(100vh - 110px);
     overflow-y: auto; overscroll-behavior: contain;
   }
+}
+
+/* ═══════════ 문항 전체보기 (2026-10-12) ═══════════
+   모의고사·퀴즈·족보를 풀면서 한 장씩 넘기지 않고 쭉 스크롤하며 훑어보는 패널.
+   위키/AI와 같은 사이드 칸을 쓴다(서로 배타적) — 폭 조절(col-resizer)이 그대로 된다. */
+
+#overviewPanel {
+  margin-top: 14px; background: var(--card); border: 1px solid var(--border);
+  border-radius: 14px; overflow: hidden; display: flex; flex-direction: column;
+}
+.ov-filters {
+  display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 10px 0;
+}
+.ov-chip {
+  padding: 6px 11px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-family: inherit; font-size: 12.5px;
+  cursor: pointer; white-space: nowrap;
+}
+.ov-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.ov-body {
+  padding: 10px; display: flex; flex-direction: column; gap: 7px;
+  max-height: 52vh; overflow-y: auto;
+}
+/* 지문이 주인공이다 — 표시 버튼을 옆에 두면 사이드 폭(최소 300px)에서 지문이
+   두세 단어로 눌린다. 지문을 한 줄 통째로 쓰고 버튼은 아랫줄로 내린다(2026-10-12). */
+.ov-row {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 9px 10px; border-radius: 10px; border: 1px solid var(--border);
+  border-left: 4px solid var(--border);           /* 색상 표시가 생기면 이 변이 그 색으로 바뀐다 */
+  background: var(--bg);
+}
+.ov-row.current { outline: 2px solid var(--accent); outline-offset: -1px; }
+.ov-main { min-width: 0; display: flex; align-items: baseline; gap: 7px; cursor: pointer; }
+.ov-num { flex: 0 0 auto; font-weight: 800; font-size: 13px; color: var(--sub); min-width: 20px; }
+.ov-stem {
+  flex: 1 1 auto; min-width: 0; font-size: 13.5px; line-height: 1.5;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  word-break: keep-all;
+}
+.ov-pill {
+  flex: 0 0 auto; padding: 2px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 800;
+  background: var(--badge-bg); color: var(--sub);
+}
+.ov-pill-ok { background: color-mix(in srgb, var(--correct) 18%, transparent); color: var(--correct); }
+.ov-pill-bad { background: color-mix(in srgb, var(--wrong) 18%, transparent); color: var(--wrong); }
+.ov-pill-read { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.ov-acts { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.ov-star, .ov-dot {
+  min-width: 30px; min-height: 30px; border-radius: 8px; border: none; background: transparent;
+  font-size: 15px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.ov-star { color: var(--sub); }
+.ov-star.on { color: var(--warn); }
+.ov-dot { opacity: .35; filter: grayscale(1); }
+.ov-dot.on { opacity: 1; filter: none; background: var(--badge-bg); }
+.ov-dot:active, .ov-star:active { background: var(--badge-bg); }
+
+
+
+/* ═══════════ 노트 읽기 — 움직이는 AI 답변 창 (2026-10-12) ═══════════
+   바닥 시트(.sheet)를 쓰던 때의 문제: 문단을 통째로 긁으면 **질문이 화면을 다 먹고
+   정작 답이 안 보였다**. 답이 주인공이므로 ① 질문은 한 줄로 접고(눌러서 펼침)
+   ② 남은 공간을 전부 답에 주고 ③ 창을 끌어 옮기고 크기도 바꿀 수 있게 한다. */
+
+.ask-float {
+  position: fixed; z-index: 120;
+  left: var(--af-x, 50%); top: var(--af-y, 12vh);
+  width: var(--af-w, min(560px, 92vw));
+  height: var(--af-h, min(62vh, 560px));
+  display: flex; flex-direction: column;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r-3); box-shadow: var(--sh-3); overflow: hidden;
+}
+.af-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 9px 8px 9px 12px; background: var(--badge-bg);
+  border-bottom: 1px solid var(--border);
+  cursor: grab; touch-action: none;          /* 끌어서 옮긴다 — 스크롤에 뺏기지 않게 */
+  user-select: none; -webkit-user-select: none;
+}
+.af-head:active { cursor: grabbing; }
+.af-grip {
+  width: 16px; height: 10px; flex: 0 0 auto; opacity: .45;
+  background:
+    linear-gradient(currentColor, currentColor) 0 2px / 100% 1.5px no-repeat,
+    linear-gradient(currentColor, currentColor) 0 6px / 100% 1.5px no-repeat;
+}
+.af-title { flex: 0 0 auto; font-size: 13.5px; }
+.af-status { flex: 1 1 auto; min-width: 0; font-size: 11.5px; color: var(--sub);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 질문은 접어둔다 — 답이 주인공이다 */
+.af-q { flex: 0 0 auto; border-bottom: 1px solid var(--border); background: var(--bg); }
+.af-q > summary {
+  list-style: none; cursor: pointer; padding: 8px 12px;
+  font-size: 12px; color: var(--sub); display: flex; gap: 6px; align-items: baseline;
+}
+.af-q > summary::-webkit-details-marker { display: none; }
+.af-q > summary::before { content: '▸ 질문'; flex: 0 0 auto; font-weight: 700; }
+.af-q[open] > summary::before { content: '▾ 질문'; }
+.af-q > summary > span {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.af-q[open] > summary > span { display: none; }
+.af-q-full {
+  padding: 0 12px 10px; font-size: 12.5px; line-height: 1.6; color: var(--sub);
+  max-height: 22vh; overflow-y: auto; white-space: pre-wrap; word-break: keep-all;
+}
+
+.af-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  max-height: none;                          /* .wiki-body의 52vh 상한을 푼다 */
+  padding: 14px 16px; font-size: 15.5px;
+}
+.af-foot {
+  flex: 0 0 auto; display: flex; gap: 8px; padding: 10px 12px;
+  border-top: 1px solid var(--border); background: var(--bg);
+}
+.af-foot .btn { flex: 1; }
+.af-resize {
+  position: absolute; right: 0; bottom: 0; width: 24px; height: 24px;
+  cursor: nwse-resize; touch-action: none;
+  background:
+    linear-gradient(135deg, transparent 50%, var(--border) 50%, var(--border) 62%, transparent 62%,
+                    transparent 72%, var(--border) 72%, var(--border) 84%, transparent 84%);
 }

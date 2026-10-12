@@ -589,12 +589,13 @@ async function openExam(subject, ex) {
 
     if (quiz) quiz.destroy();
     destroyPen();
+    closeOverview();   // 전체보기는 지금 연 시험 것이어야 한다 — 이전 시험 내용이 남으면 안 된다
     quiz = new Quiz({
       examKey: ex.path,
       questions,
       title: currentExam.title,
       onFinish: showResult,
-      onExit: () => { quiz.destroy(); destroyPen(); loadList(false); },
+      onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); loadList(false); },
       onRender: onQuestionRender,
       meta: { subject, kind: ex.kind || '' },
     });
@@ -667,11 +668,12 @@ document.getElementById('toolErase').onclick = () => {
   pen.setErasing(on);
   document.getElementById('toolErase').classList.toggle('active', on);
 };
-document.getElementById('toolWiki').onclick = () => toggleWiki();
+document.getElementById('toolWiki').onclick = () => { closeOverview(); toggleWiki(); };
 // AI 해설도 위키처럼 탭으로 — 질문할 때마다 자동으로 열리기만 하던 걸 직접 열고 닫게 한다
 document.getElementById('toolAi').onclick = () => {
   const p = document.getElementById('aiPanel');
   if (p.classList.contains('hidden')) {
+    closeOverview();
     p.classList.remove('hidden');
     syncSideCol();
     if (!askCtx || !askCtx.answer) {
@@ -685,7 +687,7 @@ document.getElementById('toolAi').onclick = () => {
   }
 };
 
-/** 문항이 바뀔 때마다 — 필기 복원 + 위키 갱신 */
+/** 문항이 바뀔 때마다 — 필기 복원 + 위키 갱신 + 전체보기가 열려 있으면 같이 갱신 */
 function onQuestionRender(q, idx, { answered }) {
   if (pen) {
     pen.load(penStrokes[idx] || null);
@@ -693,6 +695,9 @@ function onQuestionRender(q, idx, { answered }) {
   }
   if (!document.getElementById('wikiPanel').classList.contains('hidden')) {
     loadWiki(q, answered);
+  }
+  if (!document.getElementById('overviewPanel').classList.contains('hidden')) {
+    highlightOverviewCurrent();
   }
 }
 
@@ -714,6 +719,174 @@ function closeWiki() {
   syncSideCol();
 }
 document.getElementById('wikiClose').onclick = closeWiki;
+
+// ---------- 문항 전체보기 (2026-10-12) ----------
+//
+// 문제를 한 장씩 넘기지 않고 **쭉 스크롤하며 훑어보는** 화면 — 위키/AI와 같은
+// 사이드 칸을 쓰므로(서로 배타적) 넓은 화면에서는 폭 조절(col-resizer)이 그대로 된다.
+//
+// 색상 표시는 북마크(★, "다시 볼 것" 하나뿐)와 달리 **뜻을 사용자가 정해 쓰라고**
+// 6갈래를 열어둔다. Obsidian이 플러그인 없이도 그리는 색 원(🔴🟠🟡🟢🔵🟣)을 그대로
+// 써서, "vault에 저장"을 누르면 Obsidian 쪽 노트에서도 같은 기호로 보인다(아래 참고).
+// `name`은 **Obsidian 쪽 이름**이다 — vault에 저장할 때 `달모/빨강` 같은 태그와
+// 🔴 이모지로 같이 적어서, 앱에서 칠한 색을 Obsidian에서 검색·필터할 수 있게 한다
+// (2026-10-12 요청: "옵시디언에서도 관리가 같이 되면서"). 뜻은 사용자가 정해 쓴다.
+const OV_TAGS = [
+  { emoji: '🔴', hex: '#ef4444', name: '빨강' },
+  { emoji: '🟠', hex: '#f97316', name: '주황' },
+  { emoji: '🟡', hex: '#eab308', name: '노랑' },
+  { emoji: '🟢', hex: '#22c55e', name: '초록' },
+  { emoji: '🔵', hex: '#3b82f6', name: '파랑' },
+  { emoji: '🟣', hex: '#a855f7', name: '보라' },
+];
+
+let ovFilterColor = 0;      // 0 = 필터 없음
+let ovStarOnly = false;
+
+function closeOverview() {
+  document.getElementById('overviewPanel').classList.add('hidden');
+  document.getElementById('toolOverview').classList.remove('active');
+  syncSideCol();
+}
+
+document.getElementById('toolOverview').onclick = () => {
+  const p = document.getElementById('overviewPanel');
+  if (p.classList.contains('hidden')) {
+    closeWiki();
+    closeAi();
+    ovFilterColor = 0;
+    ovStarOnly = false;
+    p.classList.remove('hidden');
+    document.getElementById('toolOverview').classList.add('active');
+    syncSideCol();
+    renderOverview();
+  } else {
+    closeOverview();
+  }
+};
+document.getElementById('ovClose').onclick = closeOverview;
+
+/** 문항 하나의 채점 상태 — 없는 함수(_renderOpen류)와 중복 없이 한 곳에서만 판단한다. */
+function ovStatus(i) {
+  const q = quiz.all[i];
+  const answered = quiz.answers[i] !== null;
+  if (q.type === 'open') return answered ? { label: '읽음', cls: 'read' } : { label: '안읽음', cls: 'new' };
+  if (!answered) return { label: '안 풂', cls: 'new' };
+  return quiz.isCorrect(i) ? { label: '정답', cls: 'ok' } : { label: '오답', cls: 'bad' };
+}
+
+function renderOverview() {
+  if (!quiz) return;
+  const body = document.getElementById('ovBody');
+  const filters = document.getElementById('ovFilters');
+  const stats = document.getElementById('ovStats');
+
+  const rows = quiz.order.map((i) => ({ i, status: ovStatus(i) }));
+  const counts = { ok: 0, bad: 0, new: 0, read: 0, star: 0 };
+  const colorCounts = [0, 0, 0, 0, 0, 0, 0];
+  rows.forEach(({ i, status }) => {
+    counts[status.cls]++;
+    if (quiz.bookmarks[i]) counts.star++;
+    colorCounts[quiz.colors[i]]++;
+  });
+  stats.textContent = `전체 ${rows.length} · 정답 ${counts.ok} · 오답 ${counts.bad}`
+    + (counts.read ? ` · 읽음 ${counts.read}` : '') + ` · 안 풂 ${counts.new}`;
+
+  // ── 필터 줄 ──
+  filters.innerHTML = '';
+  const allBtn = document.createElement('button');
+  allBtn.className = `ov-chip${!ovFilterColor && !ovStarOnly ? ' active' : ''}`;
+  allBtn.textContent = '전체';
+  allBtn.onclick = () => { ovFilterColor = 0; ovStarOnly = false; renderOverview(); };
+  filters.appendChild(allBtn);
+
+  const starBtn = document.createElement('button');
+  starBtn.className = `ov-chip${ovStarOnly ? ' active' : ''}`;
+  starBtn.textContent = `★ ${counts.star}`;
+  starBtn.onclick = () => { ovStarOnly = !ovStarOnly; renderOverview(); };
+  filters.appendChild(starBtn);
+
+  OV_TAGS.forEach((tag, ci) => {
+    const n = colorCounts[ci + 1];
+    const b = document.createElement('button');
+    b.className = `ov-chip${ovFilterColor === ci + 1 ? ' active' : ''}`;
+    b.textContent = `${tag.emoji} ${n}`;
+    b.onclick = () => { ovFilterColor = ovFilterColor === ci + 1 ? 0 : ci + 1; renderOverview(); };
+    filters.appendChild(b);
+  });
+
+  // ── 목록 ──
+  const show = rows.filter(({ i }) =>
+    (!ovFilterColor || quiz.colors[i] === ovFilterColor) && (!ovStarOnly || quiz.bookmarks[i]));
+  body.innerHTML = '';
+  if (!show.length) {
+    const p = document.createElement('p');
+    p.className = 'muted';
+    p.style.padding = '14px';
+    p.textContent = '조건에 맞는 문항이 없습니다.';
+    body.appendChild(p);
+    return;
+  }
+  show.forEach(({ i, status }) => body.appendChild(ovRow(i, status)));
+  highlightOverviewCurrent();
+}
+
+function ovRow(i, status) {
+  const q = quiz.all[i];
+  const row = document.createElement('div');
+  row.className = `ov-row ov-${status.cls}`;
+  row.dataset.i = String(i);
+  if (quiz.colors[i]) row.style.borderLeftColor = OV_TAGS[quiz.colors[i] - 1].hex;
+
+  const main = document.createElement('div');
+  main.className = 'ov-main';
+  main.innerHTML = `<span class="ov-num">${q.num}</span>`
+    + `<span class="ov-pill ov-pill-${status.cls}">${status.label}</span>`
+    + `<span class="ov-stem">${escapeHtml(String(q.q || '').slice(0, 90))}</span>`;
+  main.onclick = () => {
+    quiz.goTo(i);
+    if (!wideScreen()) closeOverview();
+  };
+  row.appendChild(main);
+
+  const acts = document.createElement('div');
+  acts.className = 'ov-acts';
+  const star = document.createElement('button');
+  star.className = `ov-star${quiz.bookmarks[i] ? ' on' : ''}`;
+  star.textContent = quiz.bookmarks[i] ? '★' : '☆';
+  star.title = '다시 볼 문항으로 표시';
+  star.onclick = (e) => {
+    e.stopPropagation();
+    quiz.bookmarks[i] = !quiz.bookmarks[i];
+    quiz.persist();
+    if (quiz.qIndex === i) {
+      quiz.el.bookmark.classList.toggle('active', quiz.bookmarks[i]);
+      quiz.el.bookmark.textContent = quiz.bookmarks[i] ? '★' : '☆';
+    }
+    renderOverview();
+  };
+  acts.appendChild(star);
+  OV_TAGS.forEach((tag, ci) => {
+    const b = document.createElement('button');
+    b.className = `ov-dot${quiz.colors[i] === ci + 1 ? ' on' : ''}`;
+    b.textContent = tag.emoji;
+    b.onclick = (e) => { e.stopPropagation(); quiz.setColor(i, ci + 1); renderOverview(); };
+    acts.appendChild(b);
+  });
+  row.appendChild(acts);
+  return row;
+}
+
+/** 전체 다시 그리지 않고 "지금 보고 있는 문항" 줄만 강조 — 문제를 넘길 때마다 부른다. */
+function highlightOverviewCurrent() {
+  const body = document.getElementById('ovBody');
+  const cur = String(quiz.qIndex);
+  body.querySelectorAll('.ov-row').forEach((el) => {
+    el.classList.toggle('current', el.dataset.i === cur);
+  });
+}
+
+
 
 /** 섹션 드롭다운에 상태 한 줄만 띄운다(불러오는 중·오류 등). */
 function wikiStatus(text) {
@@ -1036,7 +1209,8 @@ document.getElementById('aiOpenApp').onclick = () => { if (askCtx && askCtx.term
 function syncSideCol() {
   const anyOpen =
     !document.getElementById('aiPanel').classList.contains('hidden') ||
-    !document.getElementById('wikiPanel').classList.contains('hidden');
+    !document.getElementById('wikiPanel').classList.contains('hidden') ||
+    !document.getElementById('overviewPanel').classList.contains('hidden');
   document.getElementById('quizScreen').classList.toggle('with-side', anyOpen);
   updatePaneLayout();
   requestAnimationFrame(() => pen && pen.resize());
@@ -1804,13 +1978,14 @@ async function openWeakQueue(subject) {
     currentExam = { subject, file: '다시볼문항.html', path: WEAK_KEY, title: `다시 볼 문항 — ${subject}` };
     if (quiz) quiz.destroy();
     destroyPen();
+    closeOverview();
     await clearSession(WEAK_KEY);         // 이전 모아풀기 상태가 남아 섞이지 않게
     quiz = new Quiz({
       examKey: WEAK_KEY,
       questions: picked,
       title: `다시 볼 문항 — ${subject} (${picked.length})`,
       onFinish: showResult,
-      onExit: () => { quiz.destroy(); destroyPen(); loadList(false); },
+      onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); loadList(false); },
       onRender: onQuestionRender,
       meta: { subject, kind: '모아풀기' },
     });
@@ -2116,26 +2291,117 @@ function openAskFromReader(term, info) {
   showSelPop(term, info && info.box);
 }
 
-/** 읽기 모드에서 "여기서 질문"을 고른 경우 — 시트 안에 답변을 띄운다(화면 전환 없음). */
+// ---- 노트 읽기: 움직이는 AI 답변 창 (2026-10-12) ----
+//
+// 바닥 시트를 쓰던 때의 문제 셋을 한 번에 고친다:
+//   ① 문단을 통째로 긁으면 **질문이 화면을 다 먹고 답이 안 보였다** → 질문은 접고 답에 공간을 준다.
+//   ② 답이 textarea 안의 날 텍스트라 읽기 힘들었다 → 마크다운으로 렌더한다.
+//   ③ 창이 화면 아래에 고정돼 노트를 가렸다 → 끌어 옮기고 크기도 바꾼다.
+// 위치·크기는 기억해둔다 — 매번 같은 자리에 두고 쓰는 물건이다.
+
+function afEl(id) { return document.getElementById(id); }
+
+function openAskFloat(term) {
+  const f = afEl('askFloat');
+  afEl('afQ').textContent = term;
+  afEl('afQFull').textContent = term;
+  afEl('afQWrap').open = false;
+  afEl('afBody').innerHTML = '<p class="muted">묻는 중…</p>';
+  afEl('afStatus').textContent = '';
+  f.classList.remove('hidden');
+  restoreFloatBox();
+}
+function closeAskFloat() { afEl('askFloat').classList.add('hidden'); }
+
+/** 기억해둔 위치·크기를 되살리되, 화면 밖으로 나가 있으면 끌어온다. */
+function restoreFloatBox() {
+  const f = afEl('askFloat');
+  let box = null;
+  try { box = JSON.parse(localStorage.getItem('ask_float_box') || 'null'); } catch {}
+  const w = Math.min(box?.w || Math.min(560, innerWidth * 0.92), innerWidth - 16);
+  const h = Math.min(box?.h || Math.min(innerHeight * 0.62, 560), innerHeight - 16);
+  const x = Math.max(8, Math.min(box?.x ?? (innerWidth - w) / 2, innerWidth - w - 8));
+  const y = Math.max(8, Math.min(box?.y ?? innerHeight * 0.12, innerHeight - h - 8));
+  f.style.setProperty('--af-w', `${w}px`);
+  f.style.setProperty('--af-h', `${h}px`);
+  f.style.setProperty('--af-x', `${x}px`);
+  f.style.setProperty('--af-y', `${y}px`);
+}
+function saveFloatBox() {
+  const r = afEl('askFloat').getBoundingClientRect();
+  localStorage.setItem('ask_float_box',
+    JSON.stringify({ x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }));
+}
+
+/** 머리를 끌면 옮기고, 오른쪽 아래 모서리를 끌면 크기를 바꾼다. */
+function initAskFloat() {
+  const f = afEl('askFloat');
+  const drag = (handle, onMove) => {
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('button')) return;      // 닫기·다시묻기는 버튼이다
+      const r = f.getBoundingClientRect();
+      const sx = e.clientX, sy = e.clientY;
+      handle.setPointerCapture(e.pointerId);
+      const move = (ev) => onMove(ev.clientX - sx, ev.clientY - sy, r);
+      const up = () => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', up);
+        handle.removeEventListener('pointercancel', up);
+        saveFloatBox();
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', up);
+      handle.addEventListener('pointercancel', up);
+      e.preventDefault();
+    });
+  };
+  drag(afEl('afHead'), (dx, dy, r) => {
+    // 화면 밖으로 완전히 나가면 되찾을 수가 없다 — 머리 부분은 항상 남겨둔다
+    const x = Math.max(8 - r.width + 60, Math.min(r.left + dx, innerWidth - 60));
+    const y = Math.max(8, Math.min(r.top + dy, innerHeight - 44));
+    f.style.setProperty('--af-x', `${x}px`);
+    f.style.setProperty('--af-y', `${y}px`);
+  });
+  drag(afEl('afResize'), (dx, dy, r) => {
+    f.style.setProperty('--af-w', `${Math.max(280, Math.min(r.width + dx, innerWidth - r.left - 8))}px`);
+    f.style.setProperty('--af-h', `${Math.max(200, Math.min(r.height + dy, innerHeight - r.top - 8))}px`);
+  });
+
+  afEl('afClose').onclick = closeAskFloat;
+  afEl('afRetry').onclick = () => { if (askCtx && askCtx.term) askInReader(askCtx.term); };
+  afEl('afApp').onclick = () => { if (askCtx && askCtx.term) fillAskSheet(askCtx.term); };
+  afEl('afSave').onclick = () => {
+    if (!askCtx || !askCtx.answer) { toast('저장할 답변이 없습니다.'); return; }
+    askItems.push({ ...askCtx });
+    toast(`기록했습니다 (${askItems.length}건) — 결과 화면에서 vault에 저장됩니다.`);
+  };
+}
+
+/** 읽기 모드에서 "여기서 질문"을 고른 경우 — 움직이는 창에 답을 흘려 보여준다. */
 async function askInReader(term) {
   if (!(await gem.hasKey())) { fillAskSheet(term); return; }
-  fillAskSheet(term);
-  const ta = document.getElementById('askAnswer');
-  const msg = document.getElementById('askMsg');
-  msg.textContent = '묻는 중…';
+  openAskFloat(term);
+  const body = afEl('afBody');
+  const status = afEl('afStatus');
+  status.textContent = '묻는 중…';
   try {
     const answer = await gem.ask({
       term, question: null, noteText: askCtx.noteText || '',
       subject: reader ? reader.note.title : '', lecture: askCtx.qtext || '',
+      // 노트를 읽다 묻는 것이라 "핵심/감별/시험 포인트" 틀을 강요하지 않는다 —
+      // 문단을 통째로 긁으면 개념이 여럿이라 그 틀에 안 맞는다(2026-10-12 지적).
+      mode: 'read',
+      onProgress: (full) => { body.innerHTML = renderMarkdown(full); },
     });
     askCtx.answer = answer;
-    ta.value = answer;
-    msg.textContent = '답변을 받았습니다. "답변 저장"을 누르면 vault에 기록됩니다.';
+    body.innerHTML = renderMarkdown(answer);
+    tokenizeTree(body);                 // 답변에서도 긁어서 다시 물을 수 있게
+    status.textContent = '저장하지 않으면 사라집니다';
   } catch (e) {
     const w = /^RATE_WAIT:(\d+)$/.exec(e.message);
-    msg.textContent = e.message === 'NO_KEY' ? ''
-      : w ? `무료 한도에 걸렸습니다 — ${w[1]}초 뒤 다시 시도하거나 아래 앱으로 물어보세요.`
-      : `오류: ${e.message}`;
+    body.innerHTML = `<div class="warn-box">${escapeText(
+      w ? `무료 한도에 걸렸습니다 — ${w[1]}초 뒤 다시 누르거나 "다른 앱에서"를 쓰세요.` : e.message)}</div>`;
+    status.textContent = '';
   }
 }
 
@@ -3138,6 +3404,15 @@ document.getElementById('retryWrongBtn').onclick = () => {
 };
 
 // ---------- vault 저장 ----------
+
+/** 문항 앞에 붙는 표시 — 앱에서 칠한 색·★을 Obsidian에서도 눈으로 보게. */
+function markOf(x) {
+  const bits = [];
+  if (x.color) bits.push(OV_TAGS[x.color - 1].emoji);
+  if (x.bookmarked) bits.push('★');
+  return bits.length ? `${bits.join('')} ` : '';
+}
+
 function buildMarkdown(res) {
   const now = new Date();
   const yy = String(now.getFullYear()).slice(2);
@@ -3156,6 +3431,11 @@ function buildMarkdown(res) {
   lines.push(`강의: ${topic}`);
   lines.push(`풀이일시: 20${yy}-${mm}-${dd} ${hh}:${mi}`);
   lines.push(`점수: ${res.correct}/${res.total}`);
+  // 앱에서 칠한 색을 Obsidian 태그로도 남긴다 — 노트 검색·Dataview에서 바로 걸린다
+  const usedColors = [...new Set(res.items.map((x) => x.color).filter(Boolean))].sort();
+  const tagList = ['달모/모의고사풀이', ...usedColors.map((c) => `달모/${OV_TAGS[c - 1].name}`)];
+  if (res.items.some((x) => x.bookmarked)) tagList.push('달모/다시볼것');
+  lines.push(`tags: [${tagList.join(', ')}]`);
   lines.push('---');
   lines.push('');
   lines.push(`# ${topic} 모의고사 풀이 기록`);
@@ -3170,7 +3450,7 @@ function buildMarkdown(res) {
     res.wrong.forEach((x) => {
       const picked = x.q.type === 'ox' ? (x.picked === 0 ? 'O' : 'X') : `${x.picked + 1}번`;
       const ans = x.q.type === 'ox' ? (x.q.ans === 0 ? 'O' : 'X') : `${x.q.ans + 1}번`;
-      lines.push(`### ${x.q.num}. (내 답 ${picked} → 정답 ${ans})`);
+      lines.push(`### ${markOf(x)}${x.q.num}. (내 답 ${picked} → 정답 ${ans})`);
       if (x.q.source || x.q.srcTag) lines.push(`*출처: ${x.q.source || x.q.srcTag}*`);
       lines.push('');
       lines.push(x.q.q);
@@ -3188,8 +3468,21 @@ function buildMarkdown(res) {
   if (marked.length) {
     lines.push(`## ☆ 북마크한 문제 ${marked.length}개`);
     lines.push('');
-    marked.forEach((x) => lines.push(`- ${x.q.num}. ${x.q.q.slice(0, 80)}…`));
+    marked.forEach((x) => lines.push(`- ${markOf(x)}${x.q.num}. ${x.q.q.slice(0, 80)}…`));
     lines.push('');
+  }
+
+  // 색으로 표시한 문제 — 색마다 묶어서, Obsidian에서 그대로 읽히게
+  if (usedColors.length) {
+    lines.push('## 🎨 색으로 표시한 문제');
+    lines.push('');
+    for (const c of usedColors) {
+      const tag = OV_TAGS[c - 1];
+      const mine = res.items.filter((x) => x.color === c);
+      lines.push(`### ${tag.emoji} ${tag.name} (${mine.length}개) #달모/${tag.name}`);
+      mine.forEach((x) => lines.push(`- ${x.q.num}. ${x.q.q.slice(0, 80)}…`));
+      lines.push('');
+    }
   }
 
   const memos = res.items.filter((x) => x.memo && !res.wrong.includes(x));
@@ -3422,6 +3715,7 @@ function hideSplash() {
   gem.loadDeadModels().catch(() => {});
   gem.loadBodyTiers().catch(() => {});   // 어떤 모델에 어떤 본문이 통했는지 기억해둔 것
   initResizers();
+  initAskFloat();
   refreshSyncBar();
   flushOutbox();
   try {

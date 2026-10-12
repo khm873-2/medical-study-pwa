@@ -34,6 +34,10 @@ export class Quiz {
     this.answers = new Array(questions.length).fill(null);
     this.eliminated = questions.map(() => new Set());
     this.bookmarks = new Array(questions.length).fill(false);
+    // 문항 전체보기(2026-10-12)의 색상 표시 — 0은 "표시 없음", 1~6은 COLOR_TAGS 인덱스.
+    // 북마크(★)는 "다시 볼 것" 하나뿐이지만, 색상은 "헷갈림/암기 필요/시험에 나올 듯" 처럼
+    // 사용자가 뜻을 정해 여러 갈래로 나눠 쓰라는 것이라 숫자로만 두고 뜻은 안 정한다.
+    this.colors = new Array(questions.length).fill(0);
     this.memos = new Array(questions.length).fill('');
     // "찍어서 맞췄다" 표시 — 맞은 문항도 다시 볼 큐에 넣기 위한 것(2026-10-10)
     this.unsure = new Array(questions.length).fill(false);
@@ -102,6 +106,7 @@ export class Quiz {
     this.bookmarks = s.bookmarks || this.bookmarks;
     this.memos = s.memos || this.memos;
     if (Array.isArray(s.unsure) && s.unsure.length === this.all.length) this.unsure = s.unsure;
+    if (Array.isArray(s.colors) && s.colors.length === this.all.length) this.colors = s.colors;
     this.cur = Math.min(s.cur || 0, this.order.length - 1);
     return s.answers.some((a) => a !== null);
   }
@@ -112,6 +117,7 @@ export class Quiz {
       bookmarks: this.bookmarks,
       memos: this.memos,
       unsure: this.unsure,
+      colors: this.colors,
       cur: this.cur,
       title: this.title,
       total: this.all.length,
@@ -451,6 +457,21 @@ export class Quiz {
     this.render();
   }
 
+  /** 전체보기에서 문항을 눌렀을 때 — 번호가 아니라 **원본 배열 인덱스**로 바로 건너뛴다. */
+  goTo(i) {
+    const pos = this.order.indexOf(i);
+    if (pos < 0) return;
+    this.cur = pos;
+    this.persist();
+    this.render();
+  }
+
+  /** 색상 표시를 순환시킨다. 같은 색을 다시 고르면 지운다. */
+  setColor(i, color) {
+    this.colors[i] = this.colors[i] === color ? 0 : color;
+    this.persist();
+  }
+
   /** 결과 집계 */
   results() {
     const items = this.order.map((i) => ({
@@ -461,6 +482,7 @@ export class Quiz {
       memo: this.memos[i] || '',
       bookmarked: !!this.bookmarks[i],
       unsure: !!this.unsure[i],
+      color: this.colors[i] || 0,
     }));
     const graded = items.filter((x) => this.isGraded(x.i));
     const answered = graded.filter((x) => x.picked !== null);

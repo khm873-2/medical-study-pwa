@@ -2244,6 +2244,386 @@ await run('오늘 탭 ↻ 가 노트까지 다시 읽는다', async () => {
     ok: /groups = await noteList\(true\)/.test(app) });
   return out;
 });
+
+// ══════════ 문항 전체보기 (2026-10-12) ══════════
+// 스크롤하며 쭉 훑어보고, 체크(★)·색상으로 표시하는 패널. 실제 GitHub Contents API를
+// 흉내 낸 작은 가짜 시험으로 **진짜 앱 플로우**(설정→목록→풀이)를 통해 검증한다 —
+// toolOverview 핸들러가 app.js의 모듈 비공개 `quiz` 변수를 직접 쓰므로, 외부에서
+// 함수를 호출하는 식으로는 테스트할 수 없고 실제로 클릭해서 그 상태를 만들어야 한다.
+{
+  const QS = Array.from({ length: 12 }, (_, i) => ({
+    num: i + 1, type: 'mc',
+    q: `문제 ${i + 1} — 전체보기 테스트용 지문이다. 어느 정도 길게 써서 두 줄로 접히는지도 본다.`,
+    opts: ['가', '나', '다', '라', '마'], ans: i % 5, opt: [],
+  }));
+  const EXAM_HTML = `<!doctype html><html><body><script>
+const QUESTIONS = ${JSON.stringify(QS)};
+const LECTURE_NAME = "전체보기 테스트";
+<\/script></body></html>`;
+
+  const FILES = {
+    '06_모의고사': [{ name: '테스트과목', path: '06_모의고사/테스트과목', type: 'dir' }],
+    '06_모의고사/테스트과목': [{ name: 'test_모의고사.html', path: '06_모의고사/테스트과목/test_모의고사.html', type: 'file' }],
+  };
+
+  await page.setBypassServiceWorker(true);
+  await page.setRequestInterception(true);
+  const CORS = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': '*',
+    'Access-Control-Allow-Methods': 'GET,PUT,POST,OPTIONS',
+  };
+  const onReq = async (req) => {
+    const u = req.url();
+    try {
+      const m = u.match(/api\.github\.com\/repos\/[^/]+\/[^/]+\/contents\/([^?]*)/);
+      if (!m) return await req.continue();
+      if (req.method() === 'OPTIONS') return await req.respond({ status: 204, headers: CORS, body: '' });
+      const rel = decodeURIComponent(m[1]);
+      if (FILES[rel]) {
+        return await req.respond({ status: 200, headers: CORS, contentType: 'application/json', body: JSON.stringify(FILES[rel]) });
+      }
+      if (rel === '06_모의고사/테스트과목/test_모의고사.html') {
+        return await req.respond({ status: 200, headers: CORS, contentType: 'text/plain', body: EXAM_HTML });
+      }
+      return await req.respond({ status: 404, headers: CORS, contentType: 'text/plain', body: 'not found' });
+    } catch (e) {
+      try { await req.respond({ status: 500, headers: CORS, contentType: 'text/plain', body: String(e.message) }); } catch {}
+    }
+  };
+  page.on('request', onReq);
+
+  await page.evaluate(async () => {
+    const a = await import('/js/auth.js');
+    const d = await import('/js/db.js');
+    await a.setToken('fake-token');
+    await a.setRepo('me/fake-vault');
+    // 앞선 검사들이 남긴 상태를 치운다 — 특히 last_tab이 'cards'면 카드 화면으로 가버리고,
+    // exam_index 캐시가 남아 있으면 가짜 시험이 목록에 안 들어온다.
+    localStorage.setItem('last_tab', 'exams');
+    await d.kvSet('exam_index_v3', null);
+    await d.kvSet('schedule_cache', null);
+  });
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForFunction(() => !document.getElementById('splash'), { timeout: 8000 }).catch(() => {});
+  await page.waitForFunction(() => document.querySelectorAll('#listBody .exam-item').length > 0, { timeout: 20000 })
+    .catch(async () => {
+      const diag = await page.evaluate(() => ({
+        screen: document.body.dataset.screen,
+        tab: document.querySelector('.tab.active')?.dataset.tab,
+        list: document.getElementById('listBody').textContent.slice(0, 160),
+      }));
+      throw new Error('전체보기 준비 실패 — ' + JSON.stringify(diag));
+    });
+  await page.evaluate(() => document.querySelector('#listBody .exam-item').click());
+  await page.waitForFunction(() => document.body.dataset.screen === 'quizScreen', { timeout: 15000 });
+  await new Promise((r) => setTimeout(r, 300));
+
+  await run('전체보기 열기', () => {
+    const out = [];
+    const btn = document.getElementById('toolOverview');
+    out.push({ name: '도구막대에 전체보기 버튼이 있다', ok: !!btn });
+    btn.click();
+    const panel = document.getElementById('overviewPanel');
+    out.push({ name: '누르면 패널이 열린다', ok: !panel.classList.contains('hidden') });
+    out.push({ name: '버튼이 켜진 표시가 된다', ok: btn.classList.contains('active') });
+    out.push({ name: '위키·AI 패널과 같은 칼럼을 쓴다(동시에 열리지 않는다)',
+      ok: document.getElementById('wikiPanel').classList.contains('hidden')
+        && document.getElementById('aiPanel').classList.contains('hidden') });
+    out.push({ name: '12문항이 전부 나열된다', ok: document.querySelectorAll('.ov-row').length === 12,
+      detail: String(document.querySelectorAll('.ov-row').length) });
+    out.push({ name: '아직 하나도 안 풀어서 전부 "안 풂"',
+      ok: [...document.querySelectorAll('.ov-pill')].every((p) => p.textContent === '안 풂') });
+    out.push({ name: '지금 보고 있는 1번이 강조돼 있다',
+      ok: document.querySelector('.ov-row[data-i="0"]').classList.contains('current') });
+    return out;
+  });
+
+  await run('목록에서 문제 풀고 상태가 바뀌는지', async () => {
+    const out = [];
+    // 3번 문항을 정답으로, 5번을 오답으로 — 전체보기가 실시간으로 따라와야 한다
+    document.getElementById('toolOverview').click();   // 끄기
+    await new Promise((r) => setTimeout(r, 50));
+
+    const go = (n) => {
+      while (true) {
+        const m = document.getElementById('posLabel').textContent.match(/^(\d+)\//);
+        if (Number(m[1]) === n) return;
+        document.getElementById('nextBtn').click();
+      }
+    };
+    go(3);
+    document.querySelectorAll('.opt-row')[2].click();   // ans=2(다)와 일치 → 정답
+    go(5);
+    document.querySelectorAll('.opt-row')[0].click();   // ans=4(마)와 불일치 → 오답
+
+    document.getElementById('toolOverview').click();    // 다시 켜기
+    await new Promise((r) => setTimeout(r, 50));
+    const pill = (i) => document.querySelector(`.ov-row[data-i="${i}"] .ov-pill`).textContent;
+    out.push({ name: '맞힌 문항이 정답으로 표시된다', ok: pill(2) === '정답', detail: pill(2) });
+    out.push({ name: '틀린 문항이 오답으로 표시된다', ok: pill(4) === '오답', detail: pill(4) });
+    out.push({ name: '머리글 집계가 같이 바뀐다',
+      ok: /정답 1/.test(document.getElementById('ovStats').textContent)
+        && /오답 1/.test(document.getElementById('ovStats').textContent),
+      detail: document.getElementById('ovStats').textContent });
+    return out;
+  });
+
+  await run('행을 누르면 그 문항으로 건너뛴다', async () => {
+    const out = [];
+    document.querySelector('.ov-row[data-i="7"] .ov-main').click();
+    await new Promise((r) => setTimeout(r, 50));
+    out.push({ name: '8번 문항으로 이동한다', ok: document.getElementById('posLabel').textContent === '8/12',
+      detail: document.getElementById('posLabel').textContent });
+    out.push({ name: '넓은 화면에선 패널이 안 닫힌다(계속 훑어보려고)',
+      ok: !document.getElementById('overviewPanel').classList.contains('hidden') });
+    return out;
+  });
+
+  await run('★ 체크와 색상 표시', async () => {
+    const out = [];
+    out.push({ name: '처음엔 ★이 꺼져 있다',
+      ok: !document.querySelector('.ov-row[data-i="0"] .ov-star').classList.contains('on') });
+    document.querySelector('.ov-row[data-i="0"] .ov-star').click();
+    out.push({ name: '★을 누르면 켜진다(다시 그려도 유지)',
+      ok: document.querySelector('.ov-row[data-i="0"] .ov-star').classList.contains('on') });
+
+    // 지금 보고 있는 문항(8번)에 ★을 주면 **문제 화면의 북마크 버튼도 같이** 켜져야 한다 —
+    // 두 곳이 같은 배열을 보는지 확인하는 것이 요점이다.
+    const curIdx = Number(document.getElementById('posLabel').textContent.split('/')[0]) - 1;
+    document.querySelector(`.ov-row[data-i="${curIdx}"] .ov-star`).click();
+    out.push({ name: '보고 있는 문항에 ★을 주면 문제 화면 북마크도 켜진다',
+      ok: document.getElementById('bookmarkBtn').classList.contains('active') });
+    document.querySelector(`.ov-row[data-i="${curIdx}"] .ov-star`).click();   // 되돌린다
+    out.push({ name: '끄면 문제 화면 북마크도 같이 꺼진다',
+      ok: !document.getElementById('bookmarkBtn').classList.contains('active') });
+
+    // 3번째 색(🟡)을 2번 문항에 지정
+    const row1 = document.querySelector('.ov-row[data-i="1"]');
+    const dots = row1.querySelectorAll('.ov-dot');
+    dots[2].click();
+    const row1b = document.querySelector('.ov-row[data-i="1"]');
+    out.push({ name: '색을 고르면 테두리가 그 색이 된다',
+      ok: row1b.style.borderLeftColor === 'rgb(234, 179, 8)', detail: row1b.style.borderLeftColor });
+    out.push({ name: '같은 색을 다시 누르면 지워진다',
+      ok: (() => {
+        document.querySelector('.ov-row[data-i="1"] .ov-dot:nth-child(4)').click();
+        return document.querySelector('.ov-row[data-i="1"]').style.borderLeftColor !== 'rgb(234, 179, 8)';
+      })() });
+
+    // 필터 — ★만 보기
+    const starChip = [...document.querySelectorAll('.ov-chip')].find((c) => c.textContent.startsWith('★'));
+    starChip.click();
+    const rows = [...document.querySelectorAll('.ov-row')];
+    out.push({ name: '★ 필터를 걸면 그 문항만 남는다', ok: rows.length === 1 && rows[0].dataset.i === '0',
+      detail: rows.map((r) => r.dataset.i).join(',') });
+    const allChip = [...document.querySelectorAll('.ov-chip')].find((c) => c.textContent === '전체');
+    allChip.click();
+    out.push({ name: '전체를 누르면 필터가 풀린다', ok: document.querySelectorAll('.ov-row').length === 12 });
+    return out;
+  });
+
+  await run('다른 시험을 열면 이전 내용이 안 남는다', async () => {
+    const out = [];
+    document.getElementById('backToListBtn').click();
+    await new Promise((r) => setTimeout(r, 200));
+    document.querySelector('#listBody .exam-item').click();
+    await new Promise((r) => setTimeout(r, 400));
+    out.push({ name: '다시 들어가면 전체보기가 닫혀 있다(이전 시험 내용이 안 남는다)',
+      ok: document.getElementById('overviewPanel').classList.contains('hidden') });
+    return out;
+  });
+
+  page.off('request', onReq);
+  await page.setRequestInterception(false);
+  // 가짜 토큰을 지워 이후 테스트에 영향을 안 주게 한다
+  await page.evaluate(async () => { const a = await import('/js/auth.js'); await a.clearToken(); });
+}
+
+// ══════════ 노트 읽기: 움직이는 AI 답변 창 (2026-10-12) ══════════
+// 바닥 시트를 쓰던 때: 문단을 통째로 긁으면 질문이 화면을 다 먹고 정작 답이 안 보였다.
+// 답이 주인공이므로 질문은 접고, 창은 끌어 옮기고 크기도 바꿀 수 있어야 한다.
+await page.setViewport({ width: 1366, height: 1024 });
+await run('움직이는 답변 창', async () => {
+  const out = [];
+  // 실제로 겪은 상황: 목차 문단을 통째로 긁어 1,500자가 넘어갔다
+  const LONG = '1. 왜 BLS인가 — 첫 10초, 질병관리청 통계(32.9%/15.3%/5.6%), 시간-생존율 곡선. '.repeat(30);
+  const f = document.getElementById('askFloat');
+  document.getElementById('afQ').textContent = LONG;
+  document.getElementById('afQFull').textContent = LONG;
+  document.getElementById('afQWrap').open = false;
+  document.getElementById('afBody').innerHTML =
+    '<p>' + '답변 문장이 여러 줄에 걸쳐 들어간다. '.repeat(40) + '</p>';
+  f.classList.remove('hidden');
+  await new Promise((r) => setTimeout(r, 60));
+
+  const qr = document.querySelector('.af-q').getBoundingClientRect();
+  const br = document.getElementById('afBody').getBoundingClientRect();
+  out.push({ name: '질문이 긴데도 한 줄로만 접힌다', ok: qr.height < 48, detail: `${Math.round(qr.height)}px` });
+  out.push({ name: '남는 공간은 전부 답이 갖는다', ok: br.height > qr.height * 4,
+    detail: `질문 ${Math.round(qr.height)} / 답 ${Math.round(br.height)}` });
+  out.push({ name: '답이 창 안에서 스크롤된다',
+    ok: ['auto', 'scroll'].includes(getComputedStyle(document.getElementById('afBody')).overflowY) });
+  out.push({ name: '답이 창 밖으로 안 넘친다',
+    ok: br.bottom <= f.getBoundingClientRect().bottom + 1 });
+
+  // 질문을 눌러 펼치면 전문이 보인다
+  document.querySelector('.af-q > summary').click();
+  await new Promise((r) => setTimeout(r, 30));
+  out.push({ name: '눌러서 질문 전문을 볼 수 있다',
+    ok: document.getElementById('afQFull').getBoundingClientRect().height > 20 });
+  const qf = document.getElementById('afQFull');
+  out.push({ name: '펼친 질문도 제 안에서 스크롤된다(답을 밀어내지 않는다)',
+    ok: qf.scrollHeight > qf.clientHeight && ['auto', 'scroll'].includes(getComputedStyle(qf).overflowY),
+    detail: `${qf.scrollHeight} vs ${qf.clientHeight} / ${getComputedStyle(qf).overflowY}` });
+  out.push({ name: '질문을 펼쳐도 답이 창 안에 남는다',
+    ok: document.getElementById('afBody').getBoundingClientRect().height > 100,
+    detail: `${Math.round(document.getElementById('afBody').getBoundingClientRect().height)}px` });
+  document.querySelector('.af-q > summary').click();
+
+  out.push({ name: '화면에 고정돼 노트를 따라 스크롤되지 않는다',
+    ok: getComputedStyle(f).position === 'fixed' });
+  out.push({ name: '펜이 이 창을 UI로 인식한다(그림이 안 그려진다)',
+    ok: !!document.getElementById('afBody').closest('.ask-float') });
+  return out;
+});
+
+// 끌어서 옮기기 — 진짜 포인터로만 확인된다
+{
+  const before = await page.evaluate(() => {
+    const r = document.getElementById('askFloat').getBoundingClientRect();
+    return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+  });
+  const head = await page.evaluate(() => {
+    const r = document.getElementById('afHead').getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  });
+  await page.mouse.move(head.x, head.y);
+  await page.mouse.down();
+  await page.mouse.move(head.x - 120, head.y + 90, { steps: 6 });
+  await page.mouse.up();
+  await new Promise((r) => setTimeout(r, 80));
+  const after = await page.evaluate(() => {
+    const r = document.getElementById('askFloat').getBoundingClientRect();
+    return { x: Math.round(r.left), y: Math.round(r.top) };
+  });
+  results.push({ name: '머리를 끌면 창이 따라 움직인다',
+    ok: Math.abs(after.x - (before.x - 120)) <= 3 && Math.abs(after.y - (before.y + 90)) <= 3,
+    detail: `(${before.x},${before.y}) → (${after.x},${after.y})` });
+
+  // 크기 조절
+  const grip = await page.evaluate(() => {
+    const r = document.getElementById('afResize').getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  });
+  await page.mouse.move(grip.x, grip.y);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + 100, grip.y + 70, { steps: 6 });
+  await page.mouse.up();
+  await new Promise((r) => setTimeout(r, 80));
+  const sized = await page.evaluate(() => {
+    const r = document.getElementById('askFloat').getBoundingClientRect();
+    return { w: Math.round(r.width), h: Math.round(r.height) };
+  });
+  results.push({ name: '모서리를 끌면 크기가 바뀐다',
+    ok: Math.abs(sized.w - (before.w + 100)) <= 4 && Math.abs(sized.h - (before.h + 70)) <= 4,
+    detail: `${before.w}×${before.h} → ${sized.w}×${sized.h}` });
+  results.push({ name: '옮긴 자리·크기를 기억한다',
+    ok: await page.evaluate(() => !!localStorage.getItem('ask_float_box')) });
+
+  // 화면 밖으로 끌어내도 되찾을 수 있어야 한다
+  const h2 = await page.evaluate(() => {
+    const r = document.getElementById('afHead').getBoundingClientRect();
+    return { x: Math.round(r.left + 40), y: Math.round(r.top + r.height / 2) };
+  });
+  await page.mouse.move(h2.x, h2.y);
+  await page.mouse.down();
+  await page.mouse.move(-500, -500, { steps: 6 });
+  await page.mouse.up();
+  await new Promise((r) => setTimeout(r, 80));
+  const esc = await page.evaluate(() => {
+    const r = document.getElementById('askFloat').getBoundingClientRect();
+    return { right: Math.round(r.right), top: Math.round(r.top) };
+  });
+  results.push({ name: '화면 밖으로 끌어내도 손잡이가 남는다(되찾을 수 있다)',
+    ok: esc.right >= 50 && esc.top >= 0, detail: JSON.stringify(esc) });
+
+  await page.evaluate(() => {
+    document.getElementById('askFloat').classList.add('hidden');
+    localStorage.removeItem('ask_float_box');
+  });
+}
+
+// 읽기 모드 프롬프트 — 문단을 긁으면 "핵심/감별/시험 포인트" 틀을 강요하지 않는다
+await run('읽기 모드 프롬프트', async () => {
+  const out = [];
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '읽기에서 물으면 mode:read 로 보낸다', ok: /mode: 'read'/.test(app) });
+  out.push({ name: '답이 오는 대로 흘려 보여준다(다 기다리지 않는다)',
+    ok: /onProgress: \(full\) => \{ body\.innerHTML = renderMarkdown\(full\)/.test(app) });
+  out.push({ name: '답을 날 텍스트가 아니라 마크다운으로 그린다',
+    ok: /body\.innerHTML = renderMarkdown\(answer\)/.test(app) });
+
+  const G = await import('/js/gemini.js');
+  const realFetch = window.fetch;
+  let sent = null;
+  try {
+    await G.setKeys(['AIzaTESTREAD']);
+    G.resetLimiter();
+    window.fetch = async (url, init) => {
+      sent = JSON.parse(init.body);
+      const sse = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: '설명' }] } }] }) }\n\n`;
+      const bytes = new TextEncoder().encode(sse);
+      let done = false;
+      return { ok: true, status: 200,
+        body: { getReader: () => ({ read: async () => (done ? { done: true } : (done = true, { done: false, value: bytes })) }) } };
+    };
+    await G.ask({ term: '긁어온 문단', mode: 'read' });
+    const sys = sent.systemInstruction.parts[0].text;
+    out.push({ name: '읽기 모드는 핵심/감별/시험 포인트 틀을 강요하지 않는다',
+      ok: !/\*\*감별\*\*/.test(sys) && !/\*\*시험 포인트\*\*/.test(sys), detail: sys.slice(0, 40) });
+    out.push({ name: '대신 "긁어온 대목을 풀어 설명"하라고 시킨다', ok: /풀어서 설명/.test(sys) });
+    out.push({ name: '긁은 글을 질문이 아니라 "대목"으로 넣는다',
+      ok: /\[노트에서 긁어온 대목\]/.test(sent.contents[0].parts[0].text) });
+    out.push({ name: '설명이 길어질 수 있으니 예산을 더 준다',
+      ok: sent.generationConfig.maxOutputTokens >= 1500, detail: String(sent.generationConfig.maxOutputTokens) });
+
+    // 문제 풀이 쪽은 그대로여야 한다
+    G.resetLimiter();
+    await G.ask({ term: 'Torsade', question: { num: 1, q: '지문', opts: ['가', '나'] } });
+    const sys2 = sent.systemInstruction.parts[0].text;
+    out.push({ name: '문제 풀 때는 기존 틀을 그대로 쓴다',
+      ok: /\*\*핵심\*\*/.test(sys2) && /\*\*시험 포인트\*\*/.test(sys2) });
+  } finally {
+    window.fetch = realFetch;
+    await G.setKeys([]);
+    G.resetLimiter();
+  }
+  return out;
+});
+
+// ══════════ 색상 표시가 Obsidian까지 간다 (2026-10-12) ══════════
+// "꼭 1:1은 아니더라도 옵시디언에서도 관리가 같이 되면서" — 앱에서 칠한 색을
+// vault 마크다운에 **태그 + 이모지**로 남겨 Obsidian에서 검색·필터가 되게 한다.
+await run('색상 → Obsidian 태그', async () => {
+  const out = [];
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '색마다 Obsidian 이름이 있다',
+    ok: /name: '빨강'/.test(app) && /name: '보라'/.test(app) });
+  out.push({ name: 'frontmatter에 태그로 남긴다', ok: /tags: \[\$\{tagList\.join/.test(app) });
+  out.push({ name: '태그가 달모/ 이름공간을 쓴다(다른 노트 태그와 안 섞인다)',
+    ok: /'달모\/모의고사풀이'/.test(app) && /`달모\/\$\{OV_TAGS\[c - 1\]\.name\}`/.test(app) });
+  out.push({ name: '★도 태그로 남는다', ok: /달모\/다시볼것/.test(app) });
+  out.push({ name: '색마다 묶은 절을 따로 쓴다', ok: /## 🎨 색으로 표시한 문제/.test(app) });
+  out.push({ name: '문항 번호 앞에 이모지·★를 붙여 눈으로도 보인다',
+    ok: /function markOf\(x\)/.test(app) && /\$\{markOf\(x\)\}\$\{x\.q\.num\}/.test(app) });
+
+  const quiz = await fetch('/js/quiz.js').then((r) => r.text());
+  out.push({ name: '결과에 색이 실려 나간다', ok: /color: this\.colors\[i\] \|\| 0/.test(quiz) });
+  out.push({ name: '색은 이어풀기에 저장된다(앱을 꺼도 남는다)',
+    ok: /colors: this\.colors/.test(quiz) && /s\.colors\.length === this\.all\.length/.test(quiz) });
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════
