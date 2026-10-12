@@ -12,7 +12,7 @@ import { captureRect, canvasToBlob, copyBlobToClipboard } from './capture.js';
 import { renderMarkdown, hydrateEmbeds } from './markdown.js';
 import { buildPrompt, appList, sendTo, share, buildQaMarkdown } from './ask.js';
 import {
-  noteList, loadNote, renderSection, extractCards,
+  noteList, loadNote, renderSection, extractCards, findNoteInGroups,
   loadSrs, saveSrs, dueCards, gradeCard, srsStats, keepAwake, cardsFromBox,
   studyQueue, groupCards, suspendCard, unsuspendCard, buryCard, toggleStar,
   deckTree, cardsInDeck, liveCards, isArchivedCard, deckOf, subKey, noteKey,
@@ -1567,8 +1567,13 @@ async function loadTodayTab(force) {
   const body = document.getElementById('todayBody');
   body.innerHTML = '<p class="muted">불러오는 중…</p>';
   try {
-    const [{ schedule, exams }, index, attempts, srs, cards] = await Promise.all([
-      todayData(force), buildExamIndex(force), allAttempts(), loadSrs(), allCards(),
+    // ⚠️ 노트 목록(noteList)도 같이 force해야 한다 — 전에는 ↻ 가 시험 인덱스만 다시 읽고
+    // 노트 캐시(note_index_v2)는 그대로 둬서, "오늘" 탭에서 ↻ 를 눌러도 **그날 새로
+    // 생긴 노트는 "노트를 찾지 못했습니다"로 떴다**(2026-10-12 사용자 지적 — 종료 후
+    // 재실행은 되는데 ↻ 로는 안 됨. 원인: 재실행 뒤 첫 조회에서야 비로소 캐시가 채워졌고,
+    // 그 뒤로는 ↻ 를 눌러도 이 탭이 캐시를 갱신한 적이 없었다).
+    const [{ schedule, exams }, index, attempts, srs, cards, noteGroups] = await Promise.all([
+      todayData(force), buildExamIndex(force), allAttempts(), loadSrs(), allCards(), noteList(force),
     ]);
     body.innerHTML = '';
 
@@ -1658,8 +1663,8 @@ async function loadTodayTab(force) {
           b.onclick = fn;
           chips.appendChild(b);
         };
-        if (l.wiki) chip('📗 실강노트', () => openNoteByName(l.wiki));
-        if (l.note) chip('📖 예습노트', () => openNoteByName(l.note));
+        if (l.wiki) chip('📗 실강노트', () => openNoteByName(l.wiki, { groups: noteGroups }));
+        if (l.note) chip('📖 예습노트', () => openNoteByName(l.note, { groups: noteGroups }));
         if (l.jokbo) {
           const subject = subjectOfLecture(index, l) || '응급_중환자';
           const hit = findJokboChapter(index, subject, l.jokbo);
@@ -1733,16 +1738,23 @@ function muted(text) {
   return p;
 }
 
-/** 위키링크 이름(1013_응급중환자_임상독성학)으로 노트를 찾아 연다. */
-async function openNoteByName(name) {
+/**
+ * 위키링크 이름(1013_응급중환자_임상독성학)으로 노트를 찾아 연다.
+ *
+ * `groups`를 넘기면(이미 force로 읽어온 최신 목록) 그걸 그대로 쓴다. 안 넘기면
+ * 캐시부터 보되, **못 찾으면 한 번 더 실제로 vault를 본다** — 방금 생긴 노트는
+ * 캐시에 없는 게 당연하고, 그때마다 사용자가 다른 탭에 가서 ↻ 를 따로 누를 이유가
+ * 없다(2026-10-12: "노트를 찾지 못했습니다"가 뜬 원인).
+ */
+async function openNoteByName(name, { groups: given, force = false } = {}) {
   try {
-    const groups = await noteList(false);
-    const want = String(name).normalize('NFC');
-    for (const g of groups) {
-      for (const n of g.notes) {
-        if (n.name.normalize('NFC') === want) return openNote(n.path);
-      }
+    let groups = given || (await noteList(force));
+    let hit = findNoteInGroups(groups, name);
+    if (!hit && !given && !force) {
+      groups = await noteList(true);
+      hit = findNoteInGroups(groups, name);
     }
+    if (hit) return openNote(hit.path);
     toast(`노트를 찾지 못했습니다: ${name}`);
   } catch (e) {
     toast(`노트를 열지 못했습니다: ${e.message}`);

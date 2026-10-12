@@ -42,6 +42,22 @@ export async function noteList(force) {
 }
 
 /** 노트 하나를 섹션으로 쪼개 읽을 준비를 한다. */
+/**
+ * 노트 그룹 목록(noteList의 반환값)에서 이름으로 노트를 찾는다.
+ *
+ * NFC/NFD 차이를 맞추고(한글 파일명 정규화 문제, 2026-10-12), 못 찾으면 null —
+ * 호출 쪽이 "캐시에 없으니 한 번 더 실제로 본다"를 판단하는 데 쓴다.
+ */
+export function findNoteInGroups(groups, name) {
+  const want = String(name).normalize('NFC');
+  for (const g of groups || []) {
+    for (const n of g.notes || []) {
+      if (n.name.normalize('NFC') === want) return n;
+    }
+  }
+  return null;
+}
+
 export async function loadNote(path) {
   const md = await getText(path);
   const secs = splitSections(md);

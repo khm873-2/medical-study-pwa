@@ -2224,6 +2224,26 @@ await run('아이콘 구분', () => {
   return out;
 });
 
+
+
+// ══════════ "오늘" 탭 ↻ 가 노트 목록까지 다시 읽는가 (2026-10-12) ══════════
+// 실제 증상: vault에 새 노트(실강노트)를 올리고 "오늘" 탭에서 ↻ 를 눌러도
+// 📗 칩이 "노트를 찾지 못했습니다"를 띄웠다. 앱을 완전히 종료했다 열면 되는데
+// ↻ 로는 안 됐다 — note_index 캐시가 ↻ 의 대상이 아니었다. 자동 복구 로직
+// 자체(findNoteInGroups)는 test_phase45.mjs가 보고, 여기서는 **그게 이 경로에
+// 실제로 배선돼 있는지**를 확인한다 — 배선만 빠져도 조용히 재발한다.
+await run('오늘 탭 ↻ 가 노트까지 다시 읽는다', async () => {
+  const out = [];
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '↻ 가 노트 목록도 같이 force한다',
+    ok: /noteList\(force\)/.test(app) && /todayData\(force\), buildExamIndex\(force\)/.test(app) });
+  out.push({ name: '칩은 그 자리에서 읽어온 최신 목록을 그대로 쓴다(중복 조회 없음)',
+    ok: /openNoteByName\(l\.wiki, \{ groups: noteGroups \}\)/.test(app)
+      && /openNoteByName\(l\.note, \{ groups: noteGroups \}\)/.test(app) });
+  out.push({ name: '캐시에 없으면 자동으로 한 번 더 본다(사용자가 따로 ↻ 안 눌러도 된다)',
+    ok: /groups = await noteList\(true\)/.test(app) });
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════

@@ -263,6 +263,27 @@ ok('1글자는 검색 안 함', empty.length === 0);
   ok('키가 없으면 전부', R.cardsInDeck(cards, null).length === 12);
 }
 
+// ── 노트 이름 찾기(findNoteInGroups) — "오늘" 탭 ↻ 자동 복구의 바탕 (2026-10-12) ──
+// 실제 증상: vault에 새 노트를 올리고 ↻ 를 눌러도 "노트를 찾지 못했습니다"가 떴다.
+// (quit+재실행은 되는데 ↻ 로는 안 됨 — note_index 캐시가 ↻ 의 대상이 아니었다.)
+// app.js의 openNoteByName은 이 함수로 먼저 찾고, 없으면 noteList(true)로 한 번 더 본다.
+{
+  const groups = [
+    { root: '02_Wiki', subject: '응급_중환자', notes: [
+      { name: '응급중환자_기본소생술BLS', path: '02_Wiki/응급_중환자/응급중환자_기본소생술BLS.md' },
+    ] },
+  ];
+  ok('이름으로 노트를 찾는다',
+    R.findNoteInGroups(groups, '응급중환자_기본소생술BLS').path
+      === '02_Wiki/응급_중환자/응급중환자_기본소생술BLS.md');
+  ok('NFD로 와도 찾는다(한글 정규화)',
+    !!R.findNoteInGroups(groups, '응급중환자_기본소생술BLS'.normalize('NFD')));
+  ok('없으면 null — 호출 쪽이 이걸로 "한 번 더 볼지" 판단한다',
+    R.findNoteInGroups(groups, '방금생긴노트') === null);
+  ok('빈 목록도 터지지 않는다', R.findNoteInGroups([], '아무거나') === null);
+  ok('groups가 없어도 터지지 않는다', R.findNoteInGroups(undefined, '아무거나') === null);
+}
+
 console.log(`\n통과 ${pass}건`);
 if (fail.length) { console.log(`실패 ${fail.length}건:`); fail.forEach((f) => console.log('  ✗ ' + f)); process.exit(1); }
 console.log('✅ 전부 통과');
