@@ -291,22 +291,22 @@ ok('1글자는 검색 안 함', empty.length === 0);
 {
   const { renderMarkdown, setSlideDoc } = await import(`${PWA}/js/markdown.js`);
 
+  // ⚠️ 지금은 **꺼져 있다**(markdown.js의 SLIDE_LINKS=false). `page/...` 포맷이
+  //    MarginNote 앱 바이너리에 적혀 있긴 한데 MCP(AI 도구)용 ID 표기였고, URL
+  //    스킴으로는 앱만 열리고 그 페이지로 가지 않는다(맥·아이패드 둘 다 확인).
+  //    "열리긴 하는데 안 간다"가 제일 헷갈리는 모양이라 링크를 아예 안 만든다.
   setSlideDoc(null);
   const plain = renderMarkdown('가슴압박 깊이는 5~6cm다. [슬라이드 p.12]');
-  ok('슬라이드 표기가 링크가 된다', /<a class="slide-link"/.test(plain), plain.slice(0, 80));
-  ok('문서를 모르면 "현재 열린 문서"(0)로', /marginnote4app:\/\/page\/0\/p12/.test(plain), plain);
-  ok('표기 글자는 그대로 보인다', /슬라이드 p\.12/.test(plain));
+  ok('지금은 링크를 만들지 않는다(안 가는 링크를 두지 않는다)',
+    !/<a class="slide-link"/.test(plain), plain.slice(0, 80));
+  ok('표기 글자는 그대로 남는다(어느 슬라이드인지는 계속 보인다)', /슬라이드 p\.12/.test(plain));
 
-  setSlideDoc('ff004e7d1234');
-  ok('문서를 알면 그 문서로 간다',
-    /marginnote4app:\/\/page\/ff004e7d1234\/p12/.test(renderMarkdown('[슬라이드 p.12]')));
-  ok('범위도 받는다(p10-15)',
-    /page\/ff004e7d1234\/p10-15/.test(renderMarkdown('[슬라이드 p.10~15]')),
-    renderMarkdown('[슬라이드 p.10~15]'));
-  ok('여러 쪽도 받는다(p4,7)', /page\/ff004e7d1234\/p4,7/.test(renderMarkdown('[슬라이드 p.4,7]')));
-  ok('숫자가 아니면 건드리지 않는다',
-    !/slide-link/.test(renderMarkdown('[슬라이드 p.뒤쪽]')), renderMarkdown('[슬라이드 p.뒤쪽]'));
-  setSlideDoc(null);
+  // 쪽 번호 해석은 살아 있다 — 맞는 라우트를 찾으면 상수만 켜면 된다
+  const src = readFileSync(`${PWA}/js/markdown.js`, 'utf8');
+  ok('링크를 켜고 끄는 스위치가 한 군데다', /const SLIDE_LINKS = false/.test(src));
+  ok('왜 껐는지 코드에 남아 있다', /MCP\(AI 도구\) 서버가 쓰는 ID 표기/.test(src));
+  ok('단일 쪽·범위·여러 쪽 해석이 남아 있다',
+    /p\$\{range\[1\]\}-\$\{range\[2\]\}/.test(src) && /p\$\{list\.join\(','\)\}/.test(src));
 
   // frontmatter에서 PDF 이름 뽑기 — 공백이 들어간 이름이 흔하다
   ok('frontmatter의 PDF 이름을 읽는다',
@@ -362,14 +362,15 @@ ok('1글자는 검색 안 함', empty.length === 0);
       `${linked}/${withSlides}개`);
     console.log(`  슬라이드 표기 ${marks}개 · 노트 ${withSlides}개 중 ${linked}개가 MarginNote로 연결`);
 
-    // 실제 노트 한 줄이 제대로 링크로 변하는지
+    // 실제 노트 줄이 그대로 읽히는지(링크가 꺼져 있어도 글은 멀쩡해야 한다)
     const sample = notes.find((p) => readFileSync(p, 'utf8').includes('[슬라이드 p.'));
     const md = readFileSync(sample, 'utf8');
     setSlideDoc(R.findMnDoc(docs, R.sourcePdf(md)));
     const line = md.split('\n').find((l) => /\[슬라이드\s*p\.\s*\d/.test(l));
     const html = renderMarkdown(line);
-    ok('실제 노트 줄이 눌리는 링크가 된다', /href="marginnote4app:\/\/page\/[^/]+\/p\d/.test(html),
-      (html.match(/href="[^"]+"/) || ['?'])[0]);
+    ok('실제 노트 줄에 슬라이드 표기가 그대로 보인다', /슬라이드\s*p\.\s*\d/.test(html),
+      html.slice(0, 70));
+    ok('안 가는 링크를 만들지 않는다', !/marginnote4app/.test(html));
     setSlideDoc(null);
   }
 }

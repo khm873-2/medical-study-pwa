@@ -146,8 +146,17 @@ function splitRow(l) {
 //
 // `{md5}`는 파일의 MD5가 아니라 MarginNote 내부 ID라 계산으로는 못 구한다.
 // 맥에서 `.claude/scripts/export_marginnote_map.py`가 뽑아 vault에 넣어둔 걸 쓴다.
-// 그게 없거나 이 노트의 PDF를 못 찾으면 `0`(현재 문서)으로 떨어진다 — 맞는 슬라이드를
-// 열어둔 상태면 여전히 동작하고, 아니면 MarginNote만 뜬다. 어느 쪽이든 안 깨진다.
+//
+// ⚠️ **2026-10-12: 꺼둔다.** 저 `page/...` 포맷은 MarginNote 앱 바이너리에 분명히
+//    적혀 있지만, 알고 보니 **MCP(AI 도구) 서버가 쓰는 ID 표기**이지 URL 스킴
+//    핸들러의 라우트가 아니었다. 실제로 열어보면 앱만 뜨고 그 페이지로 가지 않는다
+//    (맥에서 `open`으로 book/open/page 네 가지를 시험해 전부 방문 기록이 안 바뀜,
+//     아이패드에서도 같은 증상). 스킴 자체는 등록돼 있어서 "열리긴 하는데 안 간다"는
+//    가장 헷갈리는 모양이 된다 — 그래서 링크를 아예 안 만든다.
+//
+//    맞는 라우트를 알아내면 이 상수만 true로 돌리면 된다. 나머지(문서 ID 맵·PDF
+//    이름 매칭·테스트)는 그대로 살아 있다.
+const SLIDE_LINKS = false;
 
 let slideDocMd5 = null;     // 지금 보고 있는 노트의 문서 ID(모르면 null)
 
@@ -167,14 +176,16 @@ function slidePages(raw) {
 function inline(s) {
   let t = escapeHtml(s);
 
-  // [슬라이드 p.12] → 누르면 MarginNote의 그 쪽으로
-  t = t.replace(/\[슬라이드\s*p\.\s*([\d\s,~\-–]+)\]/g, (whole, pages) => {
-    const p = slidePages(pages);
-    if (!p) return whole;
-    const doc = slideDocMd5 || '0';
-    return `<a class="slide-link" href="marginnote4app://page/${doc}/${p}"`
-      + ` title="MarginNote에서 열기">📄 ${escapeHtml(whole.slice(1, -1))}</a>`;
-  });
+  // [슬라이드 p.12] → 링크. 지금은 **꺼져 있다**(아래 SLIDE_LINKS 주석 참고).
+  if (SLIDE_LINKS) {
+    t = t.replace(/\[슬라이드\s*p\.\s*([\d\s,~\-–]+)\]/g, (whole, pages) => {
+      const p = slidePages(pages);
+      if (!p) return whole;
+      const doc = slideDocMd5 || '0';
+      return `<a class="slide-link" href="marginnote4app://page/${doc}/${p}"`
+        + ` title="MarginNote에서 열기">📄 ${escapeHtml(whole.slice(1, -1))}</a>`;
+    });
+  }
 
   // 이미지 임베드 ![[파일명]] — src는 나중에 채운다(지연 로딩)
   t = t.replace(/!\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]/g, (_, f) =>

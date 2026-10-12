@@ -2918,8 +2918,10 @@ await run('모아두기 창', async () => {
   await page.evaluate(() => document.getElementById('scrapFloat').classList.add('hidden'));
 }
 
-// ══════════ MarginNote 슬라이드 링크가 화면에서 눌리는가 ══════════
-await run('슬라이드 링크', async () => {
+// ══════════ 슬라이드 표기는 글로만 남는다 (2026-10-12) ══════════
+// `marginnote4app://page/...`는 앱만 열고 그 페이지로 가지 않는다(맥·아이패드 둘 다 확인).
+// "열리긴 하는데 안 간다"가 제일 헷갈리므로 링크를 아예 만들지 않는다.
+await run('슬라이드 표기', async () => {
   const out = [];
   const { renderMarkdown, setSlideDoc } = await import('/js/markdown.js');
   document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
@@ -2928,14 +2930,14 @@ await run('슬라이드 링크', async () => {
   setSlideDoc('ff004e7d');
   document.getElementById('readBody').innerHTML =
     renderMarkdown('가슴압박 깊이는 5~6cm다. [슬라이드 p.12] 이어지는 문장이 더 있다.');
-  const a = document.querySelector('#readBody .slide-link');
-  out.push({ name: '본문 안에 링크가 생긴다', ok: !!a });
-  out.push({ name: 'MarginNote 스킴으로 간다', ok: /^marginnote4app:\/\/page\/ff004e7d\/p12$/.test(a.getAttribute('href')),
-    detail: a.getAttribute('href') });
-  const r = a.getBoundingClientRect();
-  out.push({ name: '본문 흐름을 깨지 않는다(한 줄 안에 들어간다)', ok: r.height < 40, detail: `${Math.round(r.height)}px` });
-  out.push({ name: '눌릴 만한 크기다', ok: r.width >= 40, detail: `${Math.round(r.width)}px` });
-  out.push({ name: '펜이 링크를 UI로 인식한다(그림이 안 그려진다)', ok: !!a.closest('a') });
+  out.push({ name: '안 가는 링크를 만들지 않는다',
+    ok: !document.querySelector('#readBody .slide-link')
+      && !/marginnote4app/.test(document.getElementById('readBody').innerHTML) });
+  out.push({ name: '어느 슬라이드인지는 글로 그대로 보인다',
+    ok: /슬라이드\s*p\.\s*12/.test(document.getElementById('readBody').textContent) });
+  out.push({ name: '본문 글이 깨지지 않는다',
+    ok: /가슴압박 깊이는 5~6cm다/.test(document.getElementById('readBody').textContent)
+      && /이어지는 문장이 더 있다/.test(document.getElementById('readBody').textContent) });
   setSlideDoc(null);
   return out;
 });
