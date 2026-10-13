@@ -910,6 +910,7 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
    읽는 중에 언제든 손이 닿아야 하는 버튼들이라 화면 위에 붙여둔다. */
 #readScreen > header {
   position: sticky; top: 0; z-index: 60;
+  gap: 5px;
   background: var(--bg);
   padding-top: calc(env(safe-area-inset-top) + 4px);
   margin: calc(-1 * (env(safe-area-inset-top) + 10px)) -10px 0;
@@ -2107,23 +2108,36 @@ body.dragging-doc .doc-drawer { opacity: .55; }
 /* ═══════════ 도구막대 정리 (2026-10-13) ═══════════
    ① 탐색(목차·노트·카드)은 **글씨**로 — 아이콘만 두니 셋이 서로 구분이 안 됐다.
    ② 아이콘 버튼에 둥근 네모 테두리를 줘서 **어디를 눌러야 하는지** 경계를 분명히 한다. */
+/* 글씨 버튼 — 작고 단정하게. 테두리를 두르는 대신 **한 덩어리로 묶어** 띄운다
+   (2026-10-13: "버튼이 커서 안 예쁘다"). 각자 네모를 치면 셋이 따로 노는 데다
+   테두리만 늘어나 시끄럽다. */
+.txt-group {
+  display: flex; align-items: center; gap: 2px;
+  padding: 2px; background: var(--badge-bg); border-radius: 9px;
+}
 .txt-btn {
-  flex: 0 0 auto; min-height: 36px; padding: 7px 13px;
-  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
-  font-family: inherit; font-size: 13.5px; font-weight: 600; color: var(--text);
+  flex: 0 0 auto; min-height: 28px; padding: 4px 10px;
+  background: none; border: none; border-radius: 7px;
+  font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--sub);
   cursor: pointer; white-space: nowrap;
 }
-.txt-btn:active { background: var(--badge-bg); }
-.txt-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.txt-btn:active { background: var(--card); }
+.txt-btn.active { background: var(--card); color: var(--accent); box-shadow: var(--sh-1); }
 
+/* 아이콘 버튼 — 경계는 주되 작고 가볍게 */
 #readScreen > header .icon-btn {
-  border: 1px solid var(--border); background: var(--card); border-radius: 10px;
+  min-width: 32px; min-height: 32px; padding: 5px;
+  border: 1px solid var(--border); background: var(--card); border-radius: 8px;
 }
+#readScreen > header .icon-btn .ic { width: 19px; height: 19px; }
 #readScreen > header .icon-btn:active { background: var(--badge-bg); }
 #readScreen > header .icon-btn.active {
   background: var(--accent); border-color: var(--accent); color: #fff;
 }
-#readScreen > header #readBack { border-color: transparent; background: none; }
+#readScreen > header #readBack {
+  border-color: transparent; background: none; min-width: 30px; padding: 4px;
+}
+#readScreen > header h1 { margin-left: 4px; }
 
 /* 문서 서랍 — 과목을 접었다 편다. 지금 보는 과목만 펼쳐두고 나머지는 접는다(2026-10-13).
    검색 중에는 걸린 과목을 다 펼친다 — 접힌 채로는 찾았는지 알 수가 없다. */
@@ -2138,3 +2152,29 @@ body.dragging-doc .doc-drawer { opacity: .55; }
 .dd-caret { flex: 0 0 10px; font-size: 9px; }
 .dd-gname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dd-gn { flex: 0 0 auto; background: var(--badge-bg); border-radius: 7px; padding: 1px 6px; font-size: 10.5px; }
+
+/* ── 더보기 메뉴 (2026-10-13) ──
+   머리줄 아이콘이 9개까지 늘었는데 늘 쓰는 건 서넛뿐이다. 나머지는 접는다.
+   접힌 메뉴는 **글씨로 설명까지** 붙일 수 있어 오히려 찾기 쉽다. */
+.more-menu {
+  position: absolute; right: 10px; z-index: 80;
+  margin-top: 4px; width: min(290px, calc(100vw - 24px));
+  padding: 6px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r-3); box-shadow: var(--sh-3);
+}
+.mm-item {
+  display: grid; grid-template-columns: 26px 1fr; gap: 2px 8px; width: 100%;
+  padding: 9px 10px; min-height: 44px;
+  background: none; border: none; border-radius: 9px;
+  font-family: inherit; text-align: left; color: var(--text); cursor: pointer;
+}
+.mm-item:active { background: var(--badge-bg); }
+.mm-ic { grid-row: 1 / 3; align-self: center; font-size: 15px; color: var(--sub); text-align: center; }
+.mm-t { font-size: 13.5px; font-weight: 600; }
+.mm-d { font-size: 11px; color: var(--sub); line-height: 1.4; }
+/* 켜고 끄는 항목은 지금 상태를 보여준다 — 눌러봐야 아는 메뉴는 쓸모가 없다 */
+.mm-item.on { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.mm-item.on .mm-ic, .mm-item.on .mm-t { color: var(--accent); }
+.mm-sep { height: 1px; background: var(--border); margin: 5px 8px; }
+.hidden-controls { display: none; }

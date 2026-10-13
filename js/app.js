@@ -2681,7 +2681,66 @@ function initDocDrop() {
 }
 
 document.getElementById('readDocs').onclick = openDocDrawer;
-document.getElementById('readCards').onclick = openCardManager;
+
+// ---------- 더보기 메뉴 (2026-10-13) ----------
+// 머리줄 아이콘이 9개까지 늘었는데 정작 늘 쓰는 건 서넛뿐이다. 자주 쓰는 것만 밖에 두고
+// 나머지는 접는다 — 접힌 메뉴는 글씨로 설명까지 붙일 수 있어 오히려 찾기 쉽다.
+function closeMore() {
+  document.getElementById('readMoreMenu').classList.add('hidden');
+  document.getElementById('readMore').setAttribute('aria-expanded', 'false');
+}
+function toggleMore() {
+  const m = document.getElementById('readMoreMenu');
+  const on = m.classList.contains('hidden');
+  m.classList.toggle('hidden', !on);
+  document.getElementById('readMore').setAttribute('aria-expanded', String(on));
+  if (on) paintMoreStates();
+}
+/** 켜고 끄는 항목은 지금 상태를 보여준다 — 눌러봐야 아는 메뉴는 쓸모가 없다. */
+function paintMoreStates() {
+  const awake = document.getElementById('readAwake').classList.contains('active');
+  document.getElementById('mmAwake').classList.toggle('on', awake);
+  const cap = !!(readerPen && readerPen.capturing);
+  document.getElementById('mmCapture').classList.toggle('on', cap);
+  document.getElementById('mmTts').classList.toggle('on', ttsOn);
+}
+
+document.getElementById('readMore').onclick = (e) => { e.stopPropagation(); toggleMore(); };
+document.addEventListener('pointerdown', (e) => {
+  const m = document.getElementById('readMoreMenu');
+  if (m.classList.contains('hidden')) return;
+  if (!m.contains(e.target) && e.target.id !== 'readMore') closeMore();
+});
+
+const mm = (id, fn) => { document.getElementById(id).onclick = () => { closeMore(); fn(); }; };
+mm('mmCards', openCardManager);
+mm('mmScrap', openScrap);
+mm('mmCapture', () => document.getElementById('readCapture').click());
+mm('mmAwake', () => document.getElementById('readAwake').click());
+mm('mmTts', () => toggleTts());
+mm('mmTop', () => scrollReadTop());
+mm('mmSearch', () => openSearch());
+
+// ---- 읽어주기 ----
+// 머리줄에서는 뺐지만(거의 안 쓴다) 누워서 들을 때가 있어 메뉴에 남긴다.
+let ttsOn = false;
+function stopTts() {
+  try { window.speechSynthesis.cancel(); } catch {}
+  ttsOn = false;
+}
+function toggleTts() {
+  if (!('speechSynthesis' in window)) { toast('이 기기는 읽어주기를 지원하지 않습니다.'); return; }
+  if (ttsOn) { stopTts(); toast('읽어주기 끔'); return; }
+  const text = (document.getElementById('readBody').textContent || '').replace(/\s+/g, ' ').trim();
+  if (!text) return;
+  const u = new SpeechSynthesisUtterance(text.slice(0, 4000));
+  u.lang = 'ko-KR';
+  u.rate = 1.05;
+  u.onend = () => stopTts();
+  window.speechSynthesis.speak(u);
+  ttsOn = true;
+  toast('읽어주기 시작');
+}
 document.getElementById('docClose').onclick = closeDocDrawer;
 document.getElementById('docScrim').onclick = closeDocDrawer;
 document.getElementById('docSearch').oninput = (e) => {
@@ -4612,10 +4671,12 @@ function shuffle(a) {
 
 // ═══════════ Phase 5 — 검색 ═══════════
 
-document.getElementById('searchBtn').onclick = () => {
+/** 검색 시트 — 목록 화면의 🔍와 읽기 화면의 더보기 메뉴가 같이 쓴다. */
+function openSearch() {
   document.getElementById('searchSheet').classList.remove('hidden');
   document.getElementById('searchInput').focus();
-};
+}
+document.getElementById('searchBtn').onclick = openSearch;
 document.getElementById('searchClose').onclick = () =>
   document.getElementById('searchSheet').classList.add('hidden');
 document.getElementById('searchSheet').onclick = (e) => {

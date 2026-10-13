@@ -237,9 +237,13 @@ export class PenLayer {
     }
 
     // 끊어 그은 획들을 하나의 선택으로 모은다 — 잠깐 기다렸다가 확정.
+    //
+    // ⚠️ 여기서 _showPendingBox()를 부르면 안 된다. `_cur`가 이미 비었으므로
+    //    _liveBounds가 **획 전체**를 다시 재서, 되돌린 것이 되살아난다 —
+    //    화면엔 줄어든 게 보이는데 잡히는 건 줄 전체였다(2026-10-13).
+    //    끌던 동안 갱신해둔 _lastLive / _lastRetreating 를 그대로 쓴다.
     this._pending = this._pending || [];
     this._pending.push(stroke);
-    this._showPendingBox();
 
     clearTimeout(this._settle);
     this._settle = setTimeout(() => this._commit(), SETTLE_MS);
@@ -251,12 +255,48 @@ export class PenLayer {
    * 궤적만 보여주면 "어디까지 복사되는지" 알 수 없다.
    */
   _showPendingBox() {
-    const raw = boundsOf([...(this._pending || []), ...(this._cur ? [this._cur] : [])]);
+    const raw = this._liveBounds();
     if (!raw) { this._previewBox = null; this._coveredLines = null; this.redraw(); return; }
     this._textInBox(raw);                       // _coveredBox / _coveredLines 를 갱신한다
     const box = this._coveredBox || raw;
     this._previewBox = (box.r - box.l) * (box.b - box.t) > 0 ? box : null;
+    this._lastLive = raw;                           // 확정 때 이 범위를 그대로 쓴다
     this.redraw();
+  }
+
+  /**
+   * 지금 그리는 획의 범위.
+   *
+   * ⚠️ 그냥 `boundsOf`(모든 점을 감싸는 사각형)를 쓰면 **되돌릴 수가 없다** — 펜을
+   *    왼쪽으로 끌어올려도 이미 지나간 오른쪽 끝 점이 남아 상자가 줄지 않는다
+   *    (2026-10-13: "하이라이트된 부분이 펜을 올려도 취소가 안 된다").
+   *
+   *    그래서 **지금 그리는 획만** 시작점 ↔ 현재점으로 본다. 되돌아오면 그만큼
+   *    줄어들어 하이라이트가 풀린다. 끊어 그은 이전 획들(_pending)은 그대로 더한다 —
+   *    그건 이미 확정한 선택이라 유지하는 게 맞다.
+   */
+  _liveBounds() {
+    const parts = [...(this._pending || [])];
+    const box = boundsOf(parts);
+    const cur = this._cur;
+    if (!cur || cur.pts.length < 2) { this._retreating = false; return box; }
+    const a = cur.pts[0];
+    const z = cur.pts[cur.pts.length - 1];
+    // 가장 멀리 갔던 지점보다 **눈에 띄게 돌아왔으면** 되돌리는 중이다.
+    // 손 떨림(몇 px)으로는 켜지지 않게 여유를 둔다.
+    const far = cur.pts.reduce((m, pt) =>
+      Math.abs(pt.x - a.x) > Math.abs(m.x - a.x) ? pt : m, a);
+    this._retreating = Math.abs(far.x - a.x) - Math.abs(z.x - a.x) > 24;
+    this._lastRetreating = this._retreating;        // 손을 뗀 뒤 _commit이 쓴다
+    const live = {
+      l: Math.min(a.x, z.x), r: Math.max(a.x, z.x),
+      t: Math.min(a.y, z.y), b: Math.max(a.y, z.y),
+    };
+    if (!box) return live;
+    return {
+      l: Math.min(box.l, live.l), r: Math.max(box.r, live.r),
+      t: Math.min(box.t, live.t), b: Math.max(box.b, live.b),
+    };
   }
 
   /**
@@ -281,15 +321,23 @@ export class PenLayer {
   /** 모아둔 획을 하나의 선택으로 확정한다. */
   _commit() {
     const pend = this._pending || [];
+    // ⚠️ 여기서 _liveBounds()를 다시 부르면 안 된다 — 손을 뗀 뒤라 `_cur`가 이미
+    //    비어 있어서 "되돌리는 중"이라는 사실을 잃는다. **미리보기에 쓴 값을 그대로**
+    //    쓴다(2026-10-13: 화면엔 줄어든 게 보이는데 잡히는 건 줄 전체였다).
+    const live = this._lastLive || this._liveBounds();
+    this._retreating = this._lastRetreating || false;
     this._pending = null;
     this._previewBox = null;
     this._coveredLines = null;
     this._tokCache = null;
+    this._lastLive = null;
+    this._lastRetreating = false;
     if (this._liveRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this._liveRaf);
     this._liveRaf = 0;
     if (!pend.length) return;
 
-    const box = boundsOf(pend);
+    const box = live || boundsOf(pend);
+    if (!box) return;
     const w = box.r - box.l, h = box.b - box.t;
 
     // 캡처 모드 — 네모 친 영역을 **이미지로** 넘긴다(글자 추출이 아니라).
@@ -381,17 +429,29 @@ export class PenLayer {
 
     const picked = [];
     const covered = [];                 // 실제로 잡힌 줄의 화면 범위(미리보기용)
-    for (const line of groupLines(inPane)) {
-      if (line.cy < yTop || line.cy > yBot) continue;
-      // 가로로 조금이라도 걸쳤으면 그 줄 전체를 가져간다
+    // 세로로 걸친 줄들을 먼저 추린다 — 첫·끝 줄인지 알아야 "그은 만큼"을 판단한다
+    const lineList = groupLines(inPane).filter((line) => line.cy >= yTop && line.cy <= yBot
+      && line.toks.some((t) => t.r >= box.l - 6 && t.l <= box.r + 6));
+    for (const line of lineList) {
       const touches = line.toks.some((t) => t.r >= box.l - 6 && t.l <= box.r + 6);
       if (!touches) continue;
-      picked.push(line.toks);
+
+      // 기본은 **줄 전체**다 — 짧게 그어도 그 줄이 통째로 잡혀야 쓰기 편하다
+      // (정확히 따라 그으라고 하면 펜으로 쓸 수가 없다).
+      //
+      // 다만 **되돌아온 경우**(펜을 끌었다가 왔던 길로 돌아옴)에는 그은 만큼만 잡는다 —
+      // 그러지 않으면 되돌려도 선택이 안 풀린다(2026-10-13 지적). 되돌리는 건
+      // "줄이고 싶다"는 뜻이 분명하므로 이때만 정밀 모드로 바꾼다.
+      const toks = this._retreating
+        ? line.toks.filter((t) => t.r >= box.l - 6 && t.l <= box.r + 6)
+        : line.toks;
+      if (!toks.length) continue;
+      picked.push(toks);
       covered.push({
-        l: Math.min(...line.toks.map((t) => t.l)),
-        r: Math.max(...line.toks.map((t) => t.r)),
-        t: Math.min(...line.toks.map((t) => t.t)),
-        b: Math.max(...line.toks.map((t) => t.b)),
+        l: Math.min(...toks.map((t) => t.l)),
+        r: Math.max(...toks.map((t) => t.r)),
+        t: Math.min(...toks.map((t) => t.t)),
+        b: Math.max(...toks.map((t) => t.b)),
       });
     }
     this._coveredLines = covered.length ? covered : null;

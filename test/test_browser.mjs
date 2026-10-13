@@ -1339,9 +1339,9 @@ await run('카드 만들기', async () => {
   const mk = document.getElementById('readMakeCard').getBoundingClientRect();
   out.push({ name: '카드 버튼이 계속 눌린다',
     ok: mk.top >= 0 && mk.bottom <= window.innerHeight && mk.width > 10 });
-  out.push({ name: '읽기 화면에 캡처 버튼이 있다', ok: !!document.getElementById('readCapture') });
-  const capb = document.getElementById('readCapture').getBoundingClientRect();
-  out.push({ name: '캡처 버튼도 계속 눌린다', ok: capb.top >= 0 && capb.width > 10 });
+  // 캡처는 머리줄에서 빠지고 더보기 메뉴로 들어갔다(2026-10-13) — 기능은 살아 있어야 한다
+  out.push({ name: '캡처 기능이 남아 있다', ok: !!document.getElementById('readCapture') });
+  out.push({ name: '캡처를 더보기 메뉴에서 쓸 수 있다', ok: !!document.getElementById('mmCapture') });
   out.push({ name: '도구모음이 본문을 가리지 않는다(불투명 배경)',
     ok: getComputedStyle(head).backgroundColor !== 'rgba(0, 0, 0, 0)',
     detail: getComputedStyle(head).backgroundColor });
@@ -3269,8 +3269,15 @@ await run('분할 읽기', async () => {
 
     // 탐색은 글씨 버튼으로 — 아이콘만 두니 목차·노트·카드가 서로 구분이 안 됐다
     const txt = [...document.querySelectorAll('#readScreen > header .txt-btn')].map((b) => b.textContent);
-    out.push({ name: '목차·노트·카드가 글씨 버튼이다',
-      ok: txt.join(',') === '목차,노트,카드', detail: txt.join(',') });
+    out.push({ name: '목차·노트가 글씨 버튼이다(카드는 더보기로 내렸다)',
+      ok: txt.join(',') === '목차,노트', detail: txt.join(',') });
+    out.push({ name: '머리줄 버튼이 8개를 넘지 않는다(늘 쓰는 것만 밖에)',
+      ok: ids.length <= 8, detail: `${ids.length}개: ${ids.join(',')}` });
+    const tg = document.querySelector('#readScreen > header .txt-group');
+    out.push({ name: '글씨 버튼이 한 덩어리로 묶여 있다', ok: !!tg });
+    out.push({ name: '버튼이 지나치게 크지 않다',
+      ok: document.getElementById('readTocBtn').getBoundingClientRect().height <= 34,
+      detail: `${Math.round(document.getElementById('readTocBtn').getBoundingClientRect().height)}px` });
     const h1 = document.getElementById('readTitle');
     out.push({ name: '글씨 버튼이 제목보다 앞에 있다',
       ok: document.getElementById('readTocBtn').compareDocumentPosition(h1) & Node.DOCUMENT_POSITION_FOLLOWING });
@@ -3342,8 +3349,8 @@ await run('카드 창', async () => {
   out.push({ name: '같은 창에서 지울 수 있다', ok: /await deleteCard\(c\.id\);[\s\S]{0,120}refreshCardFloat/.test(app) });
   out.push({ name: '카드 버튼은 네모 모드만 켠다(누르자마자 창이 뜨면 화면만 가린다)',
     ok: !/if \(on\) openCardManager\(\)/.test(app) });
-  out.push({ name: '카드 보기·지우기는 "카드" 메뉴가 따로 맡는다',
-    ok: /getElementById\('readCards'\)\.onclick = openCardManager/.test(app) });
+  out.push({ name: '카드 보기·지우기는 더보기의 "카드 관리"가 맡는다',
+    ok: /mm\('mmCards', openCardManager\)/.test(app) });
   return out;
 });
 
@@ -3507,6 +3514,82 @@ await run('답변 일부 저장', async () => {
       [...document.querySelectorAll('#selPop button')].map((b) => b.textContent.trim()));
     results.push({ name: '팝업에서 다음 할 일을 고를 수 있다', ok: btns.length >= 2, detail: btns.join(' / ') });
     await page.evaluate(() => document.getElementById('selPop').classList.add('hidden'));
+  }
+}
+
+// ══════════ 되돌리면 선택이 풀린다 · 더보기 메뉴 (2026-10-13) ══════════
+await run('펜 되돌리기 · 더보기', async () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+
+  // ── 더보기 메뉴 ──
+  const menu = document.getElementById('readMoreMenu');
+  out.push({ name: '처음엔 접혀 있다', ok: menu.classList.contains('hidden') });
+  document.getElementById('readMore').click();
+  await new Promise((r) => setTimeout(r, 80));
+  out.push({ name: '⋯ 를 누르면 펼쳐진다', ok: !menu.classList.contains('hidden') });
+  const items = [...menu.querySelectorAll('.mm-item .mm-t')].map((x) => x.textContent);
+  out.push({ name: '가끔 쓰는 것들이 들어 있다', ok: items.length >= 6, detail: items.join(' / ') });
+  out.push({ name: '항목마다 뭘 하는지 글로 적혀 있다',
+    ok: [...menu.querySelectorAll('.mm-item')].every((x) => (x.querySelector('.mm-d') || {}).textContent) });
+  out.push({ name: '화면 안에 들어온다',
+    ok: menu.getBoundingClientRect().right <= innerWidth + 1 });
+  // 바깥을 누르면 닫힌다
+  document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 80));
+  out.push({ name: '바깥을 누르면 닫힌다', ok: menu.classList.contains('hidden') });
+  return out;
+});
+
+// 되돌리기 — 펜을 끌었다가 **되돌아오면** 하이라이트가 풀려야 한다
+{
+  const ready = await page.evaluate(async () => {
+    const { tokenize } = await import('/js/pen.js');
+    const body = document.getElementById('readBody');
+    body.innerHTML = '<p id="rr"></p>';
+    tokenize(document.getElementById('rr'),
+      '가 나 다 라 마 바 사 아 자 차 카 타 파 하 거 너 더 러 머 버 서 어 저 처');
+    return document.querySelectorAll('#readBody .tok').length > 10 && !!window.__penForTest;
+  });
+  if (!ready) {
+    results.push({ name: '되돌리기 준비', ok: false, detail: '펜/토큰 없음' });
+  } else {
+    const r = await page.evaluate(async () => {
+      const t = [...document.querySelectorAll('#readBody .tok')];
+      const a = t[0].getBoundingClientRect();
+      const far = t[Math.min(12, t.length - 1)].getBoundingClientRect();
+      const cv = document.querySelector('#readCard .penlayer');
+      const pen = window.__penForTest;
+      const ev = (type, x, y) => cv.dispatchEvent(new PointerEvent(type, {
+        pointerType: 'pen', pointerId: 9, isPrimary: true,
+        buttons: type === 'pointerup' ? 0 : 1, pressure: .5,
+        clientX: Math.round(x), clientY: Math.round(y), bubbles: true, cancelable: true }));
+      const y = a.top + a.height / 2;
+      const frame = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+
+      ev('pointerdown', a.left + 2, y);
+      for (let i = 1; i <= 8; i++) ev('pointermove', a.left + (far.right - a.left) * i / 8, y);
+      await frame();
+      const wide = pen._previewBox ? Math.round(pen._previewBox.r - pen._previewBox.l) : 0;
+
+      // 되돌아온다 — 두 번째 토큰 근처까지
+      const near = t[2].getBoundingClientRect();
+      for (let i = 1; i <= 8; i++) ev('pointermove', far.right - (far.right - near.right) * i / 8, y);
+      await frame();
+      const narrow = pen._previewBox ? Math.round(pen._previewBox.r - pen._previewBox.l) : 0;
+      ev('pointerup', near.right, y);
+      await new Promise((res) => setTimeout(res, 700));
+      const text = (document.getElementById('selPopText') || {}).textContent || '';
+      document.getElementById('selPop').classList.add('hidden');
+      return { wide, narrow, text };
+    });
+    results.push({ name: '끌면 선택 범위가 넓어진다', ok: r.wide > 60, detail: `${r.wide}px` });
+    results.push({ name: '되돌리면 **범위가 줄어든다**(선택이 풀린다)',
+      ok: r.narrow > 0 && r.narrow < r.wide * 0.75, detail: `${r.wide}px → ${r.narrow}px` });
+    results.push({ name: '확정된 글도 되돌린 만큼만 잡힌다(보여준 것과 같다)',
+      ok: r.text.length > 0 && !/자|차|카|타/.test(r.text), detail: r.text.slice(0, 24) });
   }
 }
 await browser.close();
