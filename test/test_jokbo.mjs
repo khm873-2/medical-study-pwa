@@ -155,6 +155,17 @@ if (existsSync(DIR)) {
   console.log(`  실측: 복수정답 ${multi}문항 · 챕터 머리말 ${introChars}자`);
 }
 
+// 과목마다 가공본이 조금씩 다르다 — 모르는 필드도 버리지 않는다
+{
+  const { questions } = J.parseJokbo(
+    '# 제목\n\n## [2022 · 김] 1번\n\n**문제**\n지문\n1. 가\n2. 나\n3. 다\n4. 라\n\n'
+    + '**정답 (족보)**: 2\n\n**2022 스캔 원본 대조 결과**: 스캔본과 글자까지 같다\n', 'x/01_a.md');
+  ok('처음 보는 필드도 해설에 남는다',
+    /2022 스캔 원본 대조 결과 — 스캔본과 글자까지 같다/.test(questions[0].explain),
+    questions[0].explain.slice(0, 50));
+  ok('정답 번호만 있으면 해설에 또 적지 않는다', !/정답\(족보\)/.test(questions[0].explain));
+}
+
 // ── 챕터 ↔ 강의 노트 짝짓기 ──
 {
   const ws = readFileSync(`${PWA}/js/wiki.js`, 'utf8')

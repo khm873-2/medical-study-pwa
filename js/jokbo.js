@@ -280,6 +280,14 @@ function explainOf(f, ansRaw, graded, imgNotes, multi = false) {
   if (f['원본 해설']) parts.push(`원본 해설 — ${f['원본 해설']}`);
   if (f['교정 해설']) parts.push(`교정 해설 — ${f['교정 해설']}`);
   if (f['검증']) parts.push(`검증 — ${f['검증']}`);
+  // 과목마다 가공본이 조금씩 다르다. 아는 이름만 골라 담으면 그 과목에만 있는 필드가
+  // 통째로 사라진다 — 근골격계의 "2022 스캔 원본 대조 결과"가 125건 그랬다(2026-10-13).
+  // 그래서 **모르는 필드는 이름 그대로 붙인다**. 빠지는 것보다 길어지는 게 낫다.
+  const KNOWN = new Set(['문제', '원문', '정답', '첨부 이미지', '원본 해설', '교정 해설', '검증', '비고']);
+  for (const [k, v] of Object.entries(f)) {
+    if (KNOWN.has(k) || !String(v).trim()) continue;
+    parts.push(`${k} — ${v}`);
+  }
   if (f['비고'] && !/^없음\.?$/.test(f['비고'].trim())) parts.push(`비고 — ${f['비고']}`);
   if (imgNotes.length) parts.push(`이미지 — ${imgNotes.join(' / ')}`);
   return parts.join('\n\n');
