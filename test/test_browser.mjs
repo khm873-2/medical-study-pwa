@@ -3778,6 +3778,15 @@ await run('단축키 안내', () => {
   out.push({ name: 'Obsidian과 같은 ⌘F를 적어 뒀다', ok: txt.includes('⌘F') });
   out.push({ name: '아이패드에서 마우스 버튼 여는 법도 적었다',
     ok: txt.includes('AssistiveTouch') });
+  // 어느 버튼이 앱까지 오는지는 기기마다 다르다 — 눌러서 확인하게 해 둔다
+  const pad = document.getElementById('mpPad');
+  out.push({ name: '마우스 버튼을 직접 눌러 시험할 수 있다', ok: !!pad });
+  pad.dispatchEvent(new PointerEvent('pointerdown', { button: 3, bubbles: true, cancelable: true }));
+  pad.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  const hits = [...document.querySelectorAll('#mpLog .mp-hit')].map((x) => x.textContent);
+  out.push({ name: '온 버튼만 적힌다', ok: hits.length === 2, detail: hits.join(' ') });
+  out.push({ name: '4번 버튼을 알아본다', ok: hits.some((h) => h.includes('4번')) });
+  out.push({ name: '보조 클릭(오른쪽)을 알아본다', ok: hits.some((h) => h.includes('보조 클릭')) });
   document.getElementById('keyClose').click();
   out.push({ name: '닫힌다', ok: sheet.classList.contains('hidden') });
   return out;

@@ -2797,6 +2797,31 @@ function showKeyHelp() {
     위 동작이 앱까지 전달됩니다.</p>`;
   document.getElementById('keySheet').classList.remove('hidden');
 }
+// 마우스 버튼 시험 — "되나?"를 말로 따지지 말고 눌러서 확인한다.
+// 아이패드는 버튼마다 시스템이 먼저 가져갈 수도 있어서, 기기에서 직접 봐야 안다.
+{
+  const pad = document.getElementById('mpPad');
+  const log = document.getElementById('mpLog');
+  const seen = new Set();
+  const NAME = { 0: '왼쪽', 1: '가운데(휠)', 2: '오른쪽', 3: '4번(뒤로)', 4: '5번(앞으로)' };
+  const note = (what) => {
+    if (seen.has(what)) return;
+    seen.add(what);
+    const d = document.createElement('div');
+    d.className = 'mp-hit';
+    d.textContent = `✓ ${what}`;
+    log.appendChild(d);
+  };
+  const onBtn = (e) => { e.preventDefault(); note(NAME[e.button] || `${e.button}번`); };
+  pad.addEventListener('pointerdown', onBtn);
+  pad.addEventListener('auxclick', onBtn);
+  pad.addEventListener('contextmenu', (e) => { e.preventDefault(); note('오른쪽 (보조 클릭)'); });
+  pad.addEventListener('wheel', (e) => {
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) note('엄지 휠(좌우)');
+  }, { passive: true });
+  pad.addEventListener('keydown', (e) => note(`키보드: ${e.key}`));
+}
+
 document.getElementById('keyClose').onclick = () =>
   document.getElementById('keySheet').classList.add('hidden');
 document.getElementById('keySheet').onclick = (e) => {

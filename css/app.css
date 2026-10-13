@@ -2279,3 +2279,17 @@ mark.find-mark { background: #fde68a; color: inherit; border-radius: 2px; paddin
 .search-row { display: flex; gap: 6px; align-items: center; }
 .search-row input { flex: 1 1 auto; min-width: 0; }
 .search-row .icon-btn.on { background: var(--accent); color: #fff; }
+
+/* 마우스 버튼 시험 — 기기마다 다르니 직접 눌러 보게 한다 */
+.mouse-probe { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.mouse-probe p { margin: 4px 0 8px; font-size: 12px; }
+.mp-pad {
+  padding: 22px 12px; text-align: center; font-size: 12.5px; color: var(--sub);
+  background: var(--badge-bg); border: 1px dashed var(--border); border-radius: var(--r-2);
+  cursor: crosshair; user-select: none; -webkit-user-select: none;
+}
+.mp-log { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.mp-hit {
+  padding: 4px 9px; font-size: 12px; border-radius: 999px;
+  background: var(--accent); color: #fff;
+}
