@@ -592,6 +592,8 @@ await run('신규 기능', async () => {
   const out = [];
   document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
   document.getElementById('quizScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'quizScreen';     // 도구막대는 이 화면에서만 뜬다
+  await new Promise((r) => setTimeout(r, 30));
 
   // 버튼이 있는가
   const cap = document.getElementById('toolCapture');
@@ -600,7 +602,7 @@ await run('신규 기능', async () => {
     ok: !!cap && cap.previousElementSibling && cap.previousElementSibling.id === 'toolErase' });
   out.push({ name: '뜯어보기 버튼이 있다', ok: !!brk });
   out.push({ name: '두 버튼 모두 탭 가능한 크기',
-    ok: cap.getBoundingClientRect().height >= 34 && brk.getBoundingClientRect().height >= 34,
+    ok: cap.getBoundingClientRect().height >= 30 && brk.getBoundingClientRect().height >= 30,
     detail: `${Math.round(cap.getBoundingClientRect().height)}px` });
 
   // 펜 레이어의 캡처 모드
@@ -2984,7 +2986,12 @@ await run('모아두기 창', async () => {
   results.push({ name: '어디서 모았는지 머리에 남는다', ok: /출처: 아이패드 "모아두기"/.test(text) });
   results.push({ name: '아직 정리 안 됐다고 표시한다', ok: /아직 정리 안 된 수집물/.test(text) });
   results.push({ name: 'Obsidian 태그가 붙는다', ok: /tags: \[달모\/모아두기\]/.test(text) });
-  results.push({ name: '저장했다고 알려준다', ok: /vault에 모았습니다/.test(saved.status), detail: saved.status });
+  // 저장 결과는 세 갈래(올라감 / 인터넷 없어 대기 / 권한 문제)를 **다르게** 말해야 한다.
+  // 다 "대기열로"라고만 하면 권한 문제는 영영 안 올라간다(2026-10-13).
+  results.push({ name: '저장했다고 알려준다',
+    ok: /vault에 저장했습니다/.test(saved.status), detail: saved.status });
+  results.push({ name: '무엇이 올라갔는지 파일명까지 말해준다',
+    ok: /\.md/.test(saved.status) });
 
   // 그림 바이트가 안 깨지고 그대로 올라가는가 — UTF-8 인코딩을 타면 깨진다
   const img = saved.sent.find((x) => x.url.startsWith('attachments/'));
@@ -4042,6 +4049,430 @@ await run('자르는 틀', async () => {
 
   pen.destroy();
   body.innerHTML = '';
+  return out;
+});
+
+// ══════════ 크기 조절 손잡이 — 가까이 가면 깨어난다 (2026-10-13) ══════════
+// 2px 선을 10px 칸에 그려두니 아이패드에서 잡기가 너무 어려웠다
+// ("퀴즈 및 문제 풀 때 사이즈 조절이 원활하지 않음").
+await run('크기 조절 손잡이', async () => {
+  const out = [];
+  // 퀴즈 화면을 넓은 화면으로 세운다(손잡이는 900px 이상에서만 뜬다)
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'quizScreen';
+  document.getElementById('quizScreen').classList.add('with-side');
+  document.getElementById('wikiPanel').classList.remove('hidden');
+  await new Promise((r) => setTimeout(r, 120));
+
+  const col = document.getElementById('colResizer');
+  const r = col.getBoundingClientRect();
+  out.push({ name: '폭 조절 손잡이가 보인다', ok: r.width > 0 && r.height > 0,
+    detail: `${Math.round(r.width)}×${Math.round(r.height)}` });
+  if (!r.width) return out;
+
+  out.push({ name: '손잡이가 예전(10px)보다 넓다', ok: r.width >= 14,
+    detail: `${Math.round(r.width)}px` });
+  out.push({ name: '잡는 자리임을 알려주는 표시가 있다', ok: !!col.querySelector('.rg-dots') });
+  out.push({ name: '뭘 하는 건지 적혀 있다(두 번 누르면 되돌아가는 것까지)',
+    ok: /끌어서/.test(col.title) && /두 번/.test(col.title), detail: col.title });
+
+  // ★ 가까이 가면 깨어난다 — 펜은 닿기 전에 좌표가 온다
+  out.push({ name: '평소엔 조용하다', ok: !col.classList.contains('near') });
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  document.dispatchEvent(new PointerEvent('pointermove',
+    { clientX: cx + 30, clientY: cy, bubbles: true }));
+  await new Promise((rs) => requestAnimationFrame(() => requestAnimationFrame(rs)));
+  out.push({ name: '**30px까지 다가가면 깨어난다**', ok: col.classList.contains('near') });
+  const awake = col.getBoundingClientRect();
+  out.push({ name: '깨어나면 선이 굵어진다(눈에 띈다)',
+    ok: parseFloat(getComputedStyle(col, '::before').width) > 2,
+    detail: getComputedStyle(col, '::before').width });
+  out.push({ name: '깨어나면 눌리는 범위도 넓어진다',
+    ok: parseFloat(getComputedStyle(col, '::after').width) > awake.width,
+    detail: `${getComputedStyle(col, '::after').width} > ${Math.round(awake.width)}px` });
+
+  // 멀어지면 다시 조용해진다 — 늘 켜 두면 옆 패널 가장자리를 먹는다
+  document.dispatchEvent(new PointerEvent('pointermove',
+    { clientX: cx + 200, clientY: cy, bubbles: true }));
+  await new Promise((rs) => requestAnimationFrame(() => requestAnimationFrame(rs)));
+  out.push({ name: '멀어지면 다시 조용해진다(옆 패널을 안 먹게)',
+    ok: !col.classList.contains('near') });
+
+  // 실제로 끌어서 폭이 바뀌는가
+  const before = document.querySelector('#quizScreen .side-col').getBoundingClientRect().width;
+  col.dispatchEvent(new PointerEvent('pointerdown',
+    { pointerId: 21, clientX: cx, clientY: cy, bubbles: true, cancelable: true }));
+  out.push({ name: '끄는 동안 티가 난다', ok: col.classList.contains('dragging') });
+  out.push({ name: '끄는 동안 글이 선택되지 않는다(조절이 안 끊기게)',
+    ok: document.body.classList.contains('resizing') });
+  document.dispatchEvent(new PointerEvent('pointermove',
+    { pointerId: 21, clientX: cx - 90, clientY: cy, bubbles: true, cancelable: true }));
+  await new Promise((rs) => setTimeout(rs, 60));
+  const after = document.querySelector('#quizScreen .side-col').getBoundingClientRect().width;
+  out.push({ name: '**끌면 폭이 그만큼 바뀐다**', ok: Math.abs(after - (before + 90)) < 14,
+    detail: `${Math.round(before)} → ${Math.round(after)}px` });
+  document.dispatchEvent(new PointerEvent('pointerup', { pointerId: 21, bubbles: true }));
+  out.push({ name: '놓으면 표시가 사라진다',
+    ok: !col.classList.contains('dragging') && !document.body.classList.contains('resizing') });
+  out.push({ name: '맞춰둔 폭을 기억한다', ok: !!localStorage.getItem('side_w') });
+  col.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  out.push({ name: '두 번 누르면 기본값으로', ok: !localStorage.getItem('side_w') });
+
+  document.getElementById('wikiPanel').classList.add('hidden');
+  document.getElementById('quizScreen').classList.remove('with-side');
+  return out;
+});
+
+// ══════════ 퀴즈에서도 "이 문서"를 찾을 수 있다 (2026-10-13) ══════════
+// 문제는 옆에 띄운 위키를 바탕으로 만들어진다 — 풀다가 찾을 곳도 거기다.
+// 그런데 퀴즈 화면에서는 "이 문서"가 아예 안 눌려서 전체 검색만 됐다.
+await run('퀴즈에서 찾기', async () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'quizScreen';
+  document.querySelectorAll('.sheet, .ask-float, .more-menu, #docDrawer, #docScrim')
+    .forEach((x) => x.classList.add('hidden'));
+
+  out.push({ name: '퀴즈 도구막대에 찾기가 있다', ok: !!document.getElementById('toolFind') });
+  document.getElementById('toolFind').click();
+  await new Promise((r) => setTimeout(r, 150));
+  const chips = [...document.querySelectorAll('#searchSheet .scope-btn[data-scope]')];
+  const doc = chips.find((b) => b.dataset.scope === 'doc');
+  out.push({ name: '**옆에 뜬 노트를 "이 문서"로 잡는다**', ok: !doc.disabled,
+    detail: doc.disabled ? '못 누름' : '누를 수 있음' });
+  out.push({ name: '열면 그 문서가 기본 범위', ok: doc.classList.contains('on') });
+  out.push({ name: '어느 노트인지 칸에 적어준다',
+    ok: /안에서 찾기$/.test(document.getElementById('searchInput').placeholder),
+    detail: document.getElementById('searchInput').placeholder });
+  out.push({ name: '이 폴더도 고를 수 있다',
+    ok: !chips.find((b) => b.dataset.scope === 'dir').disabled });
+
+  // 실제로 찾아진다. 칠하는 자리는 **읽기 화면이면 본문, 퀴즈면 옆 패널**이어야 한다 —
+  // 그래서 지금 문서의 글을 옆 패널에 띄워두고 거기 표시가 가는지 본다.
+  const target = document.getElementById('wikiBody');
+  target.innerHTML = '<p>내용 가 — 옆 패널에 떠 있는 글</p>';
+  const inp = document.getElementById('searchInput');
+  inp.value = '내용';
+  inp.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 420));
+  out.push({ name: '그 노트 안에서 찾아낸다',
+    ok: /\d+군데/.test(document.getElementById('searchMsg').textContent),
+    detail: document.getElementById('searchMsg').textContent });
+  out.push({ name: '**본문이 아니라 옆 패널에 표시가 간다**',
+    ok: !!target.querySelector('mark.find-mark'),
+    detail: (target.querySelector('mark.find-mark') || {}).textContent || '없음' });
+  out.push({ name: '읽기 화면 본문은 안 건드린다',
+    ok: !document.querySelector('#readBody mark.find-mark') });
+  document.getElementById('searchClose').click();
+  out.push({ name: '닫으면 표시를 지운다', ok: !document.querySelector('mark.find-mark') });
+  target.innerHTML = '';
+  return out;
+});
+
+// ══════════ 뜯어보기는 중간에 그만둘 수 있다 (2026-10-13) ══════════
+await run('뜯어보기 그만두기', async () => {
+  const out = [];
+  const el = document.getElementById('breakdown');
+  const btn = document.getElementById('toolBreak');
+  // 느린 응답을 흉내 — 영영 안 끝나는 스트림
+  const realFetch = window.fetch;
+  let aborted = false;
+  window.fetch = (url, init) => {
+    if (!String(url).includes('generativelanguage')) return realFetch(url, init);
+    return new Promise((_, reject) => {
+      const sig = init && init.signal;
+      if (sig) sig.addEventListener('abort', () => {
+        aborted = true;
+        const e = new Error('aborted'); e.name = 'AbortError'; reject(e);
+      });
+    });
+  };
+  const g = await import('/js/gemini.js');
+  await g.setKey('fake-key-for-cancel-test');
+  g.resetLimiter();          // 앞 검사가 캐시해둔 답이 있으면 기다릴 틈이 없다
+
+  btn.click();
+  // 미리 만들어둔 게 있으면 0초에 떠버린다 — "기다리는 중"이 나타날 때까지 본다.
+  // 고정 시간으로 재면 기기·캐시 상태에 따라 들쭉날쭉하다.
+  for (let i = 0; i < 40 && !el.querySelector('.bd-stop'); i++) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  out.push({ name: '누르면 뜯어보기가 뜬다', ok: !el.classList.contains('hidden') });
+  const stop = el.querySelector('.bd-stop');
+  out.push({ name: '**기다리는 동안 "그만" 버튼이 보인다**', ok: !!stop,
+    detail: el.textContent.slice(0, 40) });
+  out.push({ name: '뭘 하는 중인지 적혀 있다', ok: /뜯어보는 중/.test(el.textContent) });
+
+  // ★ 다시 누르면 그만둔다 — 전에는 아무 반응이 없었다
+  btn.click();
+  await new Promise((r) => setTimeout(r, 120));
+  out.push({ name: '**다시 누르면 바로 닫힌다**(다 뜰 때까지 안 기다려도 된다)',
+    ok: el.classList.contains('hidden') });
+  out.push({ name: '버튼의 켜진 표시도 꺼진다', ok: !btn.classList.contains('active') });
+  out.push({ name: '요청도 실제로 끊는다(할당량을 아낀다)', ok: aborted });
+
+  // 그만둔 뒤 다시 눌러도 멀쩡하다 — busy가 남으면 영영 안 열린다
+  btn.click();
+  await new Promise((r) => setTimeout(r, 350));
+  out.push({ name: '그만둔 뒤 다시 열 수 있다', ok: !el.classList.contains('hidden') });
+  const stop2 = el.querySelector('.bd-stop');
+  if (stop2) stop2.click();
+  await new Promise((r) => setTimeout(r, 120));
+  out.push({ name: '"그만" 버튼으로도 닫힌다', ok: el.classList.contains('hidden') });
+
+  window.fetch = realFetch;
+  await g.setKey('');
+  return out;
+});
+
+// ══════════ 퀴즈 도구막대 · 타이머 (2026-10-13) ══════════
+await run('퀴즈 도구막대', async () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'quizScreen';
+  await new Promise((r) => setTimeout(r, 40));
+
+  const bar = document.getElementById('quizTools');
+  out.push({ name: '퀴즈 도구도 떠 있는 막대로 나왔다', ok: !!bar });
+  out.push({ name: '화면에 고정된다(스크롤을 안 따라간다)',
+    ok: getComputedStyle(bar).position === 'fixed' });
+  out.push({ name: '끌어서 옮길 손잡이가 있다', ok: !!document.getElementById('qtGrip') });
+  // ★ 막대가 떠 있으니 머리줄 오른쪽 끝(점수·타이머)이 그 밑에 깔렸다 — 자리를 비운다
+  {
+    const sb = document.getElementById('scoreBadge');
+    sb.textContent = '7/10';
+    const pill = document.getElementById('timerPill');
+    pill.classList.remove('hidden');
+    pill.textContent = '08:12';
+    await new Promise((r) => setTimeout(r, 160));
+    const br = bar.getBoundingClientRect();
+    out.push({ name: '**점수가 막대에 안 가린다**', ok: sb.getBoundingClientRect().right <= br.left + 1,
+      detail: `점수 ${Math.round(sb.getBoundingClientRect().right)} / 막대 ${Math.round(br.left)}` });
+    out.push({ name: '타이머도 안 가린다', ok: pill.getBoundingClientRect().right <= br.left + 1 });
+    pill.classList.add('hidden');
+  }
+  out.push({ name: '머리줄에는 제목·점수만 남는다',
+    ok: [...document.querySelectorAll('#quizScreen > header button')]
+      .every((b) => !b.classList.contains('tool')),
+    detail: [...document.querySelectorAll('#quizScreen > header button')].map((b) => b.id).join(',') });
+  // 손잡이를 실제로 끌어서 왼쪽 아래로 보낸다
+  const grip = document.getElementById('qtGrip');
+  const g0 = grip.getBoundingClientRect();
+  const pe = (t, x, y) => grip.dispatchEvent(new PointerEvent(t,
+    { pointerId: 31, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+  pe('pointerdown', g0.left + 5, g0.top + 5);
+  pe('pointermove', 40, innerHeight - 60);
+  pe('pointerup', 40, innerHeight - 60);
+  await new Promise((r) => setTimeout(r, 60));
+  out.push({ name: '**끌면 가까운 변에 가서 붙는다**', ok: /^(bl|l)$/.test(bar.dataset.dock),
+    detail: bar.dataset.dock });
+  // 읽기 화면 막대와 **따로** 기억한다 — 둘은 쓰는 자리가 다르다
+  out.push({ name: '퀴즈 막대 자리는 따로 기억한다',
+    ok: localStorage.getItem('quiz_tools_dock') === bar.dataset.dock
+      && localStorage.getItem('read_tools_dock') !== bar.dataset.dock,
+    detail: `퀴즈 ${localStorage.getItem('quiz_tools_dock')} / 읽기 ${localStorage.getItem('read_tools_dock')}` });
+  grip.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  out.push({ name: '두 번 누르면 원래 자리로', ok: bar.dataset.dock === 'tr' });
+  out.push({ name: '다른 화면에서는 안 보인다',
+    ok: (document.body.dataset.screen = 'listScreen',
+      getComputedStyle(bar).display === 'none') });
+  document.body.dataset.screen = 'quizScreen';
+  return out;
+});
+
+// 타이머 — 점수에 쓰지 않는다. 딴짓하다 한 세트가 한 시간이 되는 걸 막는 용도.
+await run('타이머', async () => {
+  const out = [];
+  const pill = document.getElementById('timerPill');
+  out.push({ name: '평소엔 안 보인다', ok: pill.classList.contains('hidden') });
+
+  document.getElementById('toolTimer').click();
+  await new Promise((r) => setTimeout(r, 120));
+  const sheet = document.getElementById('timerSheet');
+  out.push({ name: '타이머 버튼이 설정을 연다', ok: !sheet.classList.contains('hidden') });
+  const mins = [...document.querySelectorAll('#timerSeg .btn')].map((b) => b.textContent);
+  out.push({ name: '10·20분 같은 흔한 길이를 고를 수 있다',
+    ok: mins.includes('10분') && mins.includes('20분'), detail: mins.join(' ') });
+  out.push({ name: '**점수에 안 쓴다고 분명히 적는다**',
+    ok: /점수에는 안 들어갑니다/.test(sheet.textContent) });
+  out.push({ name: '문항마다 다시 시작도 고를 수 있다', ok: !!document.getElementById('timerPerQ') });
+
+  document.querySelector('#timerSeg .btn[data-min="10"]').click();
+  document.getElementById('timerStart').click();
+  await new Promise((r) => setTimeout(r, 120));
+  out.push({ name: '시작하면 닫힌다', ok: sheet.classList.contains('hidden') });
+  out.push({ name: '남은 시간이 보인다', ok: !pill.classList.contains('hidden') && /^\d\d:\d\d$/.test(pill.textContent),
+    detail: pill.textContent });
+  out.push({ name: '고른 길이대로 센다', ok: /^(10:00|09:5\d)$/.test(pill.textContent),
+    detail: pill.textContent });
+
+  // 누르면 잠깐 멈춤 — 화장실 다녀오는 동안 도는 건 의미가 없다
+  pill.click();
+  await new Promise((r) => setTimeout(r, 40));
+  out.push({ name: '누르면 멈춘다', ok: /⏸/.test(pill.textContent), detail: pill.textContent });
+  const held = pill.textContent;
+  await new Promise((r) => setTimeout(r, 1100));
+  out.push({ name: '멈춘 동안은 안 줄어든다', ok: pill.textContent === held });
+  pill.click();
+  out.push({ name: '다시 누르면 이어 간다', ok: !/⏸/.test(pill.textContent) });
+
+  // 끄기
+  document.getElementById('toolTimer').click();
+  await new Promise((r) => setTimeout(r, 100));
+  document.getElementById('timerOff').click();
+  out.push({ name: '끄면 사라진다', ok: pill.classList.contains('hidden') });
+  out.push({ name: '고른 길이를 기억한다', ok: /"min":10/.test(localStorage.getItem('timer_pref') || ''),
+    detail: localStorage.getItem('timer_pref') });
+
+  // 시간이 지나면 색이 바뀐다 — 숫자만으로는 곁눈으로 안 보인다
+  pill.classList.remove('hidden');
+  const plain = getComputedStyle(pill).backgroundColor;
+  pill.classList.add('warn');
+  const warn = getComputedStyle(pill).backgroundColor;
+  pill.classList.remove('warn');
+  pill.classList.add('over');
+  const over = getComputedStyle(pill).backgroundColor;
+  out.push({ name: '1분 남으면 색이 바뀐다', ok: warn !== plain, detail: `${plain} → ${warn}` });
+  out.push({ name: '지나면 또 다르게 바뀐다', ok: over !== warn && over !== plain, detail: over });
+  pill.classList.remove('over');
+  pill.classList.add('hidden');
+  out.push({ name: '시간이 지나도 **자동 제출은 안 한다**(재촉하는 장치가 아니다)',
+    ok: document.getElementById('resultScreen').classList.contains('hidden') });
+  return out;
+});
+
+// ══════════ 모아두기 붙여넣기 — 한 번에 들어가야 한다 (2026-10-13) ══════════
+// "붙여넣기 누르면 바로 되어야 되는 거 아님? 왜 팝업이 또 떠서 두 번 누르게 만듦?"
+// → 그 팝업은 사파리의 클립보드 권한 창이라 우리가 못 없앤다. 대신 **권한이 필요 없는 길**
+//    (글 상자에 그냥 붙여넣기)을 먼저 보이게 하고, 창 어디에 붙여넣어도 들어가게 했다.
+await run('모아두기 붙여넣기', async () => {
+  const out = [];
+  document.getElementById('readScrap').click();
+  await new Promise((r) => setTimeout(r, 200));
+  const panel = document.getElementById('scrapFloat');
+  const ta = document.getElementById('scText');
+  ta.value = '';
+  out.push({ name: '모아두기가 열린다', ok: !panel.classList.contains('hidden') });
+  out.push({ name: '**열자마자 글 상자에 초점이 간다**(바로 붙여넣을 수 있게)',
+    ok: document.activeElement === ta, detail: document.activeElement.id });
+  out.push({ name: '길게 눌러 붙여넣으라고 안내한다',
+    ok: /길게 눌러 붙여넣/.test(ta.placeholder) });
+  out.push({ name: '버튼은 권한을 묻는다고 미리 알려준다',
+    ok: /물어봅니다/.test(document.getElementById('scPaste').title) });
+
+  // 글 상자 밖(버튼)에 초점이 있어도 붙여넣기가 들어간다
+  const dt = new DataTransfer();
+  dt.setData('text/plain', '붙여넣은 글입니다');
+  document.getElementById('scPaste').focus();
+  panel.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  await new Promise((r) => setTimeout(r, 80));
+  out.push({ name: '**창 어디에 붙여넣어도 글이 들어간다**', ok: ta.value.includes('붙여넣은 글입니다'),
+    detail: ta.value.slice(0, 20) });
+  out.push({ name: '몇 자 들어갔는지 알려준다',
+    ok: /\d+자 붙여넣었습니다/.test(document.getElementById('scStatus').textContent),
+    detail: document.getElementById('scStatus').textContent });
+
+  // 글 상자 안에서는 브라우저 기본 동작에 맡긴다 — 우리가 또 넣으면 두 번 들어간다
+  ta.focus();
+  const before = ta.value;
+  const dt2 = new DataTransfer();
+  dt2.setData('text/plain', '두번들어가면안됨');
+  const ev = new ClipboardEvent('paste', { clipboardData: dt2, bubbles: true, cancelable: true });
+  ta.dispatchEvent(ev);
+  await new Promise((r) => setTimeout(r, 60));
+  out.push({ name: '글 상자 안에서는 두 번 들어가지 않는다',
+    ok: ta.value === before && !ev.defaultPrevented });
+
+  ta.value = '';
+  document.getElementById('scClose').click();
+  return out;
+});
+
+// ══════════ vault 저장 — 됐는지 안 됐는지가 분명해야 한다 (2026-10-13) ══════════
+// "저장이 되었는지 피드백이 없어서 혼란스러움". 그리고 인터넷이 끊겼을 때 **잃는 게 없다**는
+// 사실이 화면에 보여야 한다 — 안 보이면 사람이 같은 걸 또 저장하려 든다.
+await run('vault 저장 알림', async () => {
+  const out = [];
+  const d = await import('/js/db.js');
+  const a = await import('/js/auth.js');
+  await a.setToken('fake'); await a.setRepo('me/v');
+  const realFetch = window.fetch;
+  const open = () => {
+    document.getElementById('readScrap').click();
+    document.getElementById('scText').value = '저장 알림 검사';
+  };
+  const statusText = () => document.getElementById('scStatus').textContent;
+  const toastText = () => [...document.querySelectorAll('body > div')]
+    .map((x) => x.textContent).filter((t) => /저장|대기|기기에/.test(t)).join(' | ');
+
+  // ① 잘 올라간 경우
+  window.fetch = async (u, i) => (String(u).includes('api.github.com')
+    ? { ok: true, status: 201, json: async () => ({ content: { path: 'x/저장됨.md' } }) }
+    : realFetch(u, i));
+  open();
+  await new Promise((r) => setTimeout(r, 120));
+  document.getElementById('scSave').click();
+  await new Promise((r) => setTimeout(r, 400));
+  out.push({ name: '올라가면 올라갔다고 한다', ok: /저장했습니다/.test(statusText()), detail: statusText() });
+  out.push({ name: '**토스트로도 띄운다**(아래 작은 글씨는 눈에 안 들어온다)',
+    ok: /저장했습니다/.test(toastText()), detail: toastText().slice(0, 50) });
+
+  // ② 인터넷이 끊긴 경우 — 큐에 남고, 그 사실을 말해준다
+  await new Promise((r) => setTimeout(r, 1200));
+  window.fetch = async (u, i) => {
+    if (!String(u).includes('api.github.com')) return realFetch(u, i);
+    throw new TypeError('Failed to fetch');
+  };
+  open();
+  await new Promise((r) => setTimeout(r, 120));
+  const qBefore = (await d.listOutbox()).length;
+  document.getElementById('scSave').click();
+  await new Promise((r) => setTimeout(r, 500));
+  out.push({ name: '**끊겨도 "인터넷이 없다"고 정확히 말한다**',
+    ok: /인터넷이 없어/.test(statusText()), detail: statusText() });
+  out.push({ name: '잃는 게 없다고 안심시킨다',
+    ok: /자동으로 올라갑니다|앱을 꺼도/.test(statusText()) });
+  const qAfter = (await d.listOutbox()).length;
+  out.push({ name: '진짜로 기기에 남는다(큐가 늘어난다)', ok: qAfter > qBefore,
+    detail: `${qBefore} → ${qAfter}` });
+  out.push({ name: '보낼 게 남았다고 띠를 띄운다',
+    ok: !document.getElementById('syncBar').classList.contains('hidden') });
+
+  // ③ 권한 문제 — "대기열로"라고만 하면 영영 안 올라간다. 다르게 말해야 한다.
+  await new Promise((r) => setTimeout(r, 1200));
+  window.fetch = async (u, i) => (String(u).includes('api.github.com')
+    ? { ok: false, status: 401, text: async () => 'Bad credentials', json: async () => ({}) }
+    : realFetch(u, i));
+  open();
+  await new Promise((r) => setTimeout(r, 120));
+  document.getElementById('scSave').click();
+  await new Promise((r) => setTimeout(r, 500));
+  out.push({ name: '**권한 문제는 인터넷 문제와 다르게 말한다**',
+    ok: /권한/.test(statusText()) && !/인터넷이 없어/.test(statusText()), detail: statusText() });
+
+  window.fetch = realFetch;
+  for (const it of await d.listOutbox()) await d.dequeue(it.id);
+  document.getElementById('syncNowBtn').click();     // 띠를 다시 그리게 한다
+  document.getElementById('scClose').click();
+  return out;
+});
+
+// 저장한 파일은 vault가 **아직 안 본 것**을 찾을 수 있어야 한다
+await run('vault가 집어갈 표시', async () => {
+  const out = [];
+  const { buildQaMarkdown } = await import('/js/ask.js');
+  const md = buildQaMarkdown({
+    subject: '응급_중환자', lecture: 'BLS', examPath: '06_모의고사/x.html',
+    items: [{ term: '가슴압박', qnum: 3, qtext: '깊이', answer: '5~6cm' }],
+  });
+  out.push({ name: '질문기록에 "아직 안 봤다" 표시가 붙는다', ok: /^처리: 대기$/m.test(md.content) });
+  out.push({ name: '갈래를 태그로 적어둔다(어느 명령이 가져갈지)',
+    ok: /달모\/질문기록/.test(md.content) });
+  out.push({ name: '앞머리 안에 들어간다(본문이 아니라)',
+    ok: md.content.indexOf('처리: 대기') < md.content.indexOf('\n---\n\n') });
   return out;
 });
 await browser.close();

@@ -557,12 +557,12 @@ export class PenLayer {
    */
   _drawCrop(b, kind) {
     const { ctx } = this;
-    const color = kind === 'card' ? '#8b5cf6' : '#2563eb';
+    const color = kind === 'card' ? '#a78bfa' : '#34a07a';   // 파스텔 보라 · 파스텔 녹색
     const w = b.r - b.l, h = b.b - b.t;
     const tooSmall = Math.max(w, h) < BOX_MIN;
     ctx.save();
     // ① 안쪽을 옅게 — 어디가 잡히는지 면으로 보인다
-    ctx.fillStyle = kind === 'card' ? 'rgba(139,92,246,.12)' : 'rgba(37,99,235,.12)';
+    ctx.fillStyle = kind === 'card' ? 'rgba(167,139,250,.13)' : 'rgba(110,205,170,.20)';
     ctx.fillRect(b.l, b.t, w, h);
     // ② 테두리 — 너무 작아 아무 일도 안 일어날 때는 점선으로 "아직 아니다"를 말한다
     ctx.strokeStyle = tooSmall ? 'rgba(120,120,130,.8)' : color;

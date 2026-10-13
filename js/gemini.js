@@ -410,7 +410,7 @@ async function callGemini({ model, system, text: userText, maxTokens = 900, temp
  * 스트리밍이면 2초 안에 첫 줄이 뜨고 나머지가 채워진다. 총 시간은 같지만
  * **읽기 시작하는 시점**이 20배 빨라진다.
  */
-async function callGeminiStream({ model, system, text: userText, maxTokens = 900, temperature = 0.3, onChunk }) {
+async function callGeminiStream({ model, system, text: userText, maxTokens = 900, temperature = 0.3, onChunk, signal }) {
   const keys = await usableKeys();
   if (!keys.length) {
     const rc = await rateCheck();
@@ -420,7 +420,7 @@ async function callGeminiStream({ model, system, text: userText, maxTokens = 900
   let lastErr = null;
   for (const key of keys) {
     try {
-      return await streamOnce({ key, model, system, text: userText, maxTokens, temperature, onChunk });
+      return await streamOnce({ key, model, system, text: userText, maxTokens, temperature, onChunk, signal });
     } catch (e) {
       lastErr = e;
       if (e.message === 'KEY_RATE' || e.message === 'KEY_BAD') continue;
@@ -432,11 +432,11 @@ async function callGeminiStream({ model, system, text: userText, maxTokens = 900
   throw new Error(`RATE_WAIT:${rc.waitSec || 30}`);
 }
 
-async function streamOnce({ key, model, system, text: userText, maxTokens, temperature, onChunk }) {
+async function streamOnce({ key, model, system, text: userText, maxTokens, temperature, onChunk, signal }) {
   logOf(key).push(Date.now());
   const t0 = Date.now();
   const res = await sendWithFallback({
-    key, model, system, text: userText, maxTokens, temperature,
+    key, model, system, text: userText, maxTokens, temperature, signal,
     url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
   });
   if (!res.body) {                       // 스트림을 못 쓰면 평소 방식으로
@@ -482,13 +482,15 @@ async function streamOnce({ key, model, system, text: userText, maxTokens, tempe
  * **선택적인 필드부터 차례로 떼어내며 통하는 본문을 찾는다**(tier 0→1→2).
  * 통하면 그 등급을 기억해 다음부터는 한 번에 보낸다.
  */
-async function sendWithFallback({ key, model, system, text, maxTokens, temperature, url }) {
+async function sendWithFallback({ key, model, system, text, maxTokens, temperature, url, signal }) {
   for (;;) {
     const body = buildBody({ model, system, text, maxTokens, temperature });
+    // signal — 사용자가 중간에 그만두면 **진짜로 끊는다**. 안 끊으면 할당량만 먹는다.
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify(body),
+      signal,
     });
     if (res.ok) return res;
     const detail = await res.text().catch(() => '');
@@ -742,7 +744,7 @@ const BREAK_SYSTEM = `당신은 의대생에게 임상 vignette 푸는 법을 �
  * 지문을 단서·인상·선지 기준으로 뜯는다.
  * @returns {Promise<{clues:Array, impression:string, options:Array}>}
  */
-export async function breakdown(question, retried = false, onProgress = null) {
+export async function breakdown(question, retried = false, onProgress = null, signal = null) {
   if (!(await hasKey())) throw new Error('NO_KEY');
   // 형식이 정해진 변환이라 큰 모델이 필요 없다 — 가벼운 쪽이 몇 배 빠르다
   const model = await modelFor({ light: true });
@@ -763,6 +765,7 @@ export async function breakdown(question, retried = false, onProgress = null) {
       model, system: BREAK_SYSTEM, maxTokens: 1100, temperature: 0.2,
       text: `[지문]\n${question.q}\n\n[선지]\n${opts}`,
       onChunk: onProgress ? (_piece, full) => onProgress(parseBreakdown(full, question)) : null,
+      signal,
     });
     answerCache.set(cacheKey, text);
     if (answerCache.size > 80) answerCache.delete(answerCache.keys().next().value);
@@ -775,7 +778,7 @@ export async function breakdown(question, retried = false, onProgress = null) {
       if (e.message === 'MODEL_BUSY') markBusy(model); else markDead(model);
       if (!retried) {
         const next = await modelFor({ light: true });
-        if (next !== model) return breakdown(question, true, onProgress);
+        if (next !== model) return breakdown(question, true, onProgress, signal);
       }
       throw new Error(friendlyModelError(e.message, model));
     }

@@ -61,6 +61,9 @@ function show(id) {
   document.body.dataset.screen = id;
   window.scrollTo(0, 0);
   updateAskDock();                   // AI 답변 단추는 읽기 화면에서만 뜬다
+  // 막대는 그 화면일 때만 보이므로, 화면이 바뀐 **뒤에야** 폭을 잴 수 있다.
+  // 모듈이 뜰 때 재면 전부 0이라 머리줄이 막대 밑에 깔린다(2026-10-13).
+  document.querySelectorAll('.read-tools').forEach(reserveForTools);
 }
 
 // ---------- 테마 · 표시 설정 ----------
@@ -964,7 +967,7 @@ async function openExam(subject, ex) {
       questions,
       title: currentExam.title,
       onFinish: showResult,
-      onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); loadList(false); },
+      onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); stopTimer(); loadList(false); },
       onRender: onQuestionRender,
       meta: { subject, kind: ex.kind || '' },
     });
@@ -1068,6 +1071,7 @@ function onQuestionRender(q, idx, { answered }) {
   if (!document.getElementById('overviewPanel').classList.contains('hidden')) {
     highlightOverviewCurrent();
   }
+  resetTimerForQuestion();      // "문항마다 다시 시작"이 켜져 있을 때만 움직인다
 }
 
 // ---------- 위키 패널 ----------
@@ -1680,9 +1684,13 @@ document.getElementById('toolCapture').onclick = () => {
 // 지문을 단서별로 끊어 "시험에서 이게 뭘 뜻하는지"를 붙인다.
 // 답을 알려주는 게 아니라 읽는 법을 훈련하는 용도(2026-10-10 요청).
 let breakdownBusy = false;
+let breakdownAbort = null;     // 뜯어보는 중에 그만두면 요청까지 끊는다(2026-10-13)
 
 async function runBreakdown() {
-  if (!quiz || breakdownBusy) return;
+  if (!quiz) return;
+  // 뜯어보는 중에 또 누르면 **그만둔다**. 전에는 아무 반응이 없어서, 안 보고 싶어도
+  // 다 뜰 때까지 기다려야 했다(2026-10-13 지적). 요청도 실제로 끊어 할당량을 아낀다.
+  if (breakdownBusy) { cancelBreakdown(); return; }
   const q = quiz.all[quiz.order[quiz.cur]];
   const el = document.getElementById('breakdown');
   // 뜯어보기는 "선지를 어떤 기준으로 쳐내는가"를 보여주는 기능이다 —
@@ -1699,6 +1707,7 @@ async function runBreakdown() {
     return;
   }
   breakdownBusy = true;
+  breakdownAbort = typeof AbortController === 'function' ? new AbortController() : null;
   el.dataset.forNum = String(q.num);
   el.classList.remove('hidden');
   document.getElementById('toolBreak').classList.add('active');
@@ -1715,18 +1724,33 @@ async function runBreakdown() {
     }
   } catch { /* 없으면 아래에서 AI로 */ }
 
-  el.innerHTML = '<div class="bd-loading">지문을 뜯어보는 중…</div>';
+  // 기다리는 동안에도 그만둘 수 있다는 걸 보여준다
+  el.innerHTML = '';
+  {
+    const load = document.createElement('div');
+    load.className = 'bd-loading';
+    load.textContent = '지문을 뜯어보는 중…';
+    const stop = document.createElement('button');
+    stop.className = 'bd-stop';
+    stop.textContent = '그만';
+    stop.onclick = cancelBreakdown;
+    load.appendChild(stop);
+    el.appendChild(load);
+  }
   if (!(await gem.hasKey())) { askNoKey(q.q); breakdownBusy = false; return; }
   try {
     // 스트리밍 — 줄이 오는 대로 다시 그린다. 다 기다리면 40초가 걸렸다(2026-10-10).
     let painted = false;
     const data = await gem.breakdown(q, false, (partial) => {
+      if (breakdownAbort && breakdownAbort.signal.aborted) return;
       if (!partial.clues.length && !partial.impression && !partial.options.length) return;
       renderBreakdown(el, partial, q);
       painted = true;
-    });
+    }, breakdownAbort ? breakdownAbort.signal : null);
+    if (breakdownAbort && breakdownAbort.signal.aborted) return;
     if (!painted || data.clues.length || data.options.length) renderBreakdown(el, data, q);
   } catch (e) {
+    if (e.name === 'AbortError' || (breakdownAbort && breakdownAbort.signal.aborted)) return;
     const wait = /^RATE_WAIT:(\d+)$/.exec(e.message);
     el.innerHTML = '';
     const w = document.createElement('div');
@@ -1735,8 +1759,22 @@ async function runBreakdown() {
     el.appendChild(w);
   } finally {
     breakdownBusy = false;
+    breakdownAbort = null;
     if (pen) requestAnimationFrame(() => pen.resize());
   }
+}
+
+/** 뜯어보기 그만두기 — 화면은 **즉시** 닫고, 네트워크 요청도 끊는다. */
+function cancelBreakdown() {
+  if (breakdownAbort) { try { breakdownAbort.abort(); } catch {} }
+  breakdownBusy = false;
+  breakdownAbort = null;
+  const el = document.getElementById('breakdown');
+  el.classList.add('hidden');
+  el.innerHTML = '';
+  el.dataset.forNum = '';
+  document.getElementById('toolBreak').classList.remove('active');
+  if (pen) requestAnimationFrame(() => pen.resize());
 }
 
 /**
@@ -1929,6 +1967,55 @@ function scrollToClue(n) {
 
 document.getElementById('toolBreak').onclick = runBreakdown;
 
+
+// ═══════════ 손잡이가 가까이 오면 깨어난다 ═══════════
+//
+// 2px 선 하나를 10px 칸에 그려두니 아이패드에서 **잡기가 너무 어려웠다**
+// (2026-10-13: "퀴즈 및 문제 풀 때 사이즈 조절이 원활하지 않음").
+//
+// 요청대로 "펜으로 가까이 가면 그쪽이 딱 활성화되는" 방식으로 바꾼다. 셋이 함께 움직인다:
+//   ① 눌리는 범위를 양옆 ±11px로 넓힌다(CSS ::after) — 보이는 선은 그대로 가늘다.
+//   ② 손·펜이 GRIP_NEAR 안으로 들어오면 굵어지고 색이 들어온다.
+//   ③ 끄는 동안에는 끝에서 끝까지 선이 선다.
+// ①만으로도 잡히긴 하지만, 어디를 잡아야 하는지가 안 보이면 **시도 자체를 안 하게 된다**.
+
+const GRIP_NEAR = 44;      // 이 거리 안에 들어오면 깨운다(px)
+
+/** 점과 사각형 사이 거리. 안에 있으면 0. */
+function distToRect(x, y, r) {
+  const dx = Math.max(r.left - x, 0, x - r.right);
+  const dy = Math.max(r.top - y, 0, y - r.bottom);
+  return Math.hypot(dx, dy);
+}
+
+let gripRaf = 0;
+function wakeGrips(x, y) {
+  if (gripRaf) return;
+  gripRaf = requestAnimationFrame(() => {
+    gripRaf = 0;
+    for (const g of document.querySelectorAll('.resize-grip')) {
+      if (g.classList.contains('dragging')) continue;
+      const r = g.getBoundingClientRect();
+      if (!r.width && !r.height) { g.classList.remove('near'); continue; }
+      g.classList.toggle('near', distToRect(x, y, r) <= GRIP_NEAR);
+    }
+  });
+}
+// 펜은 닿기 전(hover)에도 좌표가 온다 — 그래서 "가까이 가면 켜진다"가 성립한다.
+// 손가락은 닿아야 오므로, 넓힌 눌림 범위(①)가 그때를 받쳐준다.
+document.addEventListener('pointermove', (e) => wakeGrips(e.clientX, e.clientY), { passive: true });
+document.addEventListener('pointerleave', () => {
+  document.querySelectorAll('.resize-grip.near').forEach((g) => g.classList.remove('near'));
+});
+
+/** 끄는 동안 티가 나게 — 어디를 밀고 있는지 보인다. */
+function markGripDragging(el, on) {
+  if (!el) return;
+  el.classList.toggle('dragging', on);
+  document.body.classList.toggle('resizing', on);
+  if (!on) el.classList.remove('near');
+}
+
 // ---------- 패널 크기 조절 ----------
 // 사용자가 "창이 2~3개 생기는데 크기 조절이 됐으면" 요청. 끌어서 조절하고 기억한다.
 function initResizers() {
@@ -1960,6 +2047,7 @@ function initResizers() {
   };
   const onUp = () => {
     if (!drag) return;
+    markGripDragging(drag.el, false);
     drag = null;
     localStorage.setItem('side_w', root.style.getPropertyValue('--side-w') || '');
     localStorage.setItem('ai_h', root.style.getPropertyValue('--ai-h') || '');
@@ -1972,8 +2060,9 @@ function initResizers() {
     e.stopPropagation();
     const side = document.querySelector('#quizScreen .side-col');
     const ai = document.getElementById('aiPanel');
+    markGripDragging(e.currentTarget, true);
     drag = {
-      kind, x: e.clientX, y: e.clientY,
+      kind, el: e.currentTarget, x: e.clientX, y: e.clientY,
       startW: side ? side.getBoundingClientRect().width : 360,
       startH: ai ? ai.getBoundingClientRect().height : 200,
     };
@@ -3146,19 +3235,28 @@ function buildPaneTabs(pi, p) {
 /** 가운데 손잡이 — 끌어서 비율을 바꾼다. 더블탭하면 50:50. */
 function buildPaneResizer() {
   const r = document.createElement('div');
-  r.className = 'pane-split-resizer';
-  r.title = '끌어서 비율 조절 · 두 번 눌러 반반';
+  r.className = 'pane-split-resizer resize-grip';
+  r.dataset.axis = window.innerWidth <= 760 ? 'y' : 'x';   // CSS의 위아래 분할 기준과 같게
+  r.title = '끌어서 비율 조절 (두 번 누르면 반반)';
+  r.appendChild(Object.assign(document.createElement('span'), { className: 'rg-dots' }));
   const host = document.getElementById('readPanes');
   r.addEventListener('pointerdown', (e) => {
     const box = host.getBoundingClientRect();
     r.setPointerCapture(e.pointerId);
+    markGripDragging(r, true);
+    // 좁은 화면에서는 창이 위아래로 선다 — 그때는 세로로 민다
+    const vertical = r.dataset.axis === 'y';
     const move = (ev) => {
-      const ratio = Math.max(0.2, Math.min(0.8, (ev.clientX - box.left) / box.width));
-      document.documentElement.style.setProperty('--pane-split', `${(ratio * 100).toFixed(1)}%`);
+      const ratio = vertical
+        ? (ev.clientY - box.top) / box.height
+        : (ev.clientX - box.left) / box.width;
+      document.documentElement.style.setProperty('--pane-split',
+        `${(Math.max(0.2, Math.min(0.8, ratio)) * 100).toFixed(1)}%`);
     };
     const up = () => {
       r.removeEventListener('pointermove', move);
       r.removeEventListener('pointerup', up);
+      markGripDragging(r, false);
       localStorage.setItem('pane_split',
         getComputedStyle(document.documentElement).getPropertyValue('--pane-split').trim());
       if (readerPen) readerPen.resize();
@@ -3414,17 +3512,33 @@ function initScrap() {
   });
   document.getElementById('scClose').onclick = closeScrap;
 
-  // 붙여넣기 — 글은 그대로 들어가고, 그림은 따로 모은다
-  document.getElementById('scText').addEventListener('paste', async (e) => {
+  // 붙여넣기 — 글은 그대로 들어가고, 그림은 따로 모은다.
+  // **창 전체**가 받는다. 글 상자에만 걸어두면 버튼을 한 번 누른 뒤 붙여넣을 때
+  // 초점이 글 상자 밖에 있어 아무 일도 안 일어난다(2026-10-13).
+  document.getElementById('scrapFloat').addEventListener('paste', async (e) => {
     const items = [...(e.clipboardData?.items || [])];
     const imgs = items.filter((it) => it.kind === 'file' && /^image\//.test(it.type));
-    if (!imgs.length) return;                  // 글은 브라우저 기본 동작에 맡긴다
+    const ta = document.getElementById('scText');
+    if (!imgs.length) {
+      // 글 — 상자 안이면 브라우저 기본 동작에 맡기고, 밖이면 우리가 넣는다
+      if (document.activeElement === ta) return;
+      const t = e.clipboardData && e.clipboardData.getData('text/plain');
+      if (!t) return;
+      e.preventDefault();
+      ta.value = ta.value ? `${ta.value}\n\n${t}` : t;
+      document.getElementById('scStatus').textContent = `${t.length}자 붙여넣었습니다`;
+      return;
+    }
     e.preventDefault();
     for (const it of imgs) await addShot(it.getAsFile());
     document.getElementById('scStatus').textContent = `그림 ${scrapShots.length}장`;
   });
 
-  // 아이패드는 붙여넣기 메뉴가 안 뜰 때가 있다 — 버튼으로도 읽는다
+  // 클립보드 읽기 — 아이패드에서는 **사파리가 "붙여넣기?"를 한 번 더 묻는다**.
+  // 우리가 띄우는 팝업이 아니라 OS 권한 창이라 없앨 수가 없다(2026-10-13 지적).
+  // 그래서 ① 창을 열면 글 상자에 바로 초점을 둬서 **길게 눌러 붙여넣는 길**이 먼저 보이게 하고,
+  //        ② 이 버튼에는 "한 번 물어봅니다"를 적어 뒀다.
+  // 한 번 허용하면 잠시 동안은 안 묻는다.
   document.getElementById('scPaste').onclick = async () => {
     const st = document.getElementById('scStatus');
     try {
@@ -3441,8 +3555,10 @@ function initScrap() {
         }
       }
       st.textContent = n ? `${n}건 붙여넣었습니다` : '클립보드가 비어 있습니다';
+      document.getElementById('scText').focus();
     } catch {
-      st.textContent = '클립보드를 못 읽었습니다 — 글 상자를 길게 눌러 붙여넣기 하세요.';
+      st.textContent = '클립보드를 못 읽었습니다 — 글 상자를 길게 눌러 붙여넣으세요.';
+      document.getElementById('scText').focus();
     }
   };
 
@@ -3482,6 +3598,7 @@ async function saveScrap() {
   if (ctx.path) lines.push(`원본: ${ctx.path}`);
   lines.push(`수집일시: 20${stamp} ${p2(now.getHours())}:${p2(now.getMinutes())}`);
   lines.push('tags: [달모/모아두기]');
+  lines.push('처리: 대기');          // vault가 아직 안 본 것을 찾는 표시
   lines.push('---', '');
   lines.push(`# ${ctx.title || '모아둔 메모'}${ctx.where ? ` — ${ctx.where}` : ''}`, '');
   lines.push('> [!note] 아직 정리 안 된 수집물');
@@ -3497,22 +3614,14 @@ async function saveScrap() {
   });
 
   // 네트워크가 없으면 아웃박스로 — 모아둔 게 사라지면 안 된다
-  let ok = 0;
-  let queued = 0;
-  for (const p of payloads) {
-    try { await createFile(p.path, p.content, p.message); ok++; }
-    catch { await enqueue(p); queued++; }
-  }
-  st.textContent = queued
-    ? `⚠️ ${ok}건 저장, ${queued}건은 대기열로 (네트워크 복구 시 자동 전송)`
-    : `✅ vault에 모았습니다 (${ok}건)`;
-  if (queued) refreshSyncBar();
+  const r = await saveToVault(payloads, { statusEl: st });
 
   ta.value = '';
   scrapShots.forEach((sh) => URL.revokeObjectURL(sh.url));
   scrapShots = [];
   renderShots();
-  setTimeout(closeScrap, queued ? 2600 : 1100);
+  // 대기열로 간 경우엔 그 안내를 읽을 시간을 준다
+  setTimeout(closeScrap, r.queued.length ? 2600 : 1100);
 }
 
 document.getElementById('readScrap').onclick = openScrap;
@@ -5000,16 +5109,39 @@ let searchOpt = { regex: false, caseSensitive: false };
 let docHits = [];               // 이 문서 안에서 찾은 자리들
 let docHitAt = -1;
 
-/** 지금 읽는 노트가 들어 있는 폴더. 없으면 null. */
+/**
+ * 지금 화면에 떠 있는 "그 문서".
+ *
+ * 노트 읽기면 읽는 노트, **퀴즈·모의고사면 옆에 뜬 관련 노트**다.
+ * 문제는 그 위키를 바탕으로 만들어지므로, 풀다가 찾을 곳도 거기다 — 그런데
+ * 퀴즈 화면에서는 "이 문서"가 아예 안 눌렸다(2026-10-13 지적).
+ * @returns {{title, path, sections}|null}
+ */
+function currentDoc() {
+  if (reader && reader.note && document.body.dataset.screen === 'readScreen') {
+    return { title: reader.note.title, path: reader.note.path, sections: reader.note.sections };
+  }
+  const r = wikiState && wikiState.refs;
+  if (r && r.sections && r.sections.length) {
+    return { title: r.noteName, path: r.notePath || '', sections: r.sections };
+  }
+  if (reader && reader.note) {
+    return { title: reader.note.title, path: reader.note.path, sections: reader.note.sections };
+  }
+  return null;
+}
+
+/** 그 문서가 들어 있는 폴더. 없으면 null. */
 function currentDir() {
-  if (!(reader && reader.note && reader.note.path)) return null;
-  const p = reader.note.path;
-  return p.slice(0, p.lastIndexOf('/'));
+  const d = currentDoc();
+  if (!(d && d.path)) return null;
+  return d.path.slice(0, d.path.lastIndexOf('/'));
 }
 
 function setScope(scope) {
-  // 노트를 안 보고 있으면 "이 문서"·"이 폴더"는 의미가 없다 — 전체로 돌린다
-  const canDoc = !!(reader && reader.note);
+  // 볼 문서가 없으면 "이 문서"·"이 폴더"는 의미가 없다 — 전체로 돌린다
+  const doc = currentDoc();
+  const canDoc = !!doc;
   searchScope = (scope === 'doc' || scope === 'dir') && !canDoc ? 'all' : scope;
   document.querySelectorAll('#searchSheet .scope-btn[data-scope]').forEach((b) => {
     b.classList.toggle('on', b.dataset.scope === searchScope);
@@ -5017,7 +5149,7 @@ function setScope(scope) {
   });
   const dir = currentDir();
   sEl('searchInput').placeholder =
-    searchScope === 'doc' ? `${reader.note.title} 안에서 찾기`
+    searchScope === 'doc' ? `${doc.title} 안에서 찾기`
       : searchScope === 'dir' ? `${(dir || '').split('/').pop()} 폴더에서 찾기`
         : '열어본 모든 자료에서 찾기';
   runSearch(sEl('searchInput').value);
@@ -5029,7 +5161,7 @@ function setScope(scope) {
  */
 function openSearch(scope) {
   sEl('searchSheet').classList.remove('hidden');
-  setScope(scope || (reader && reader.note ? 'doc' : 'all'));
+  setScope(scope || (currentDoc() ? 'doc' : 'all'));
   const inp = sEl('searchInput');
   inp.focus();
   inp.select();
@@ -5039,6 +5171,7 @@ function closeSearch() {
   clearDocMarks();
 }
 sEl('searchBtn').onclick = () => openSearch();
+document.getElementById('toolFind').onclick = () => openSearch();
 sEl('searchClose').onclick = closeSearch;
 sEl('searchSheet').onclick = (e) => { if (e.target.id === 'searchSheet') closeSearch(); };
 document.querySelectorAll('#searchSheet .scope-btn[data-scope]')
@@ -5145,9 +5278,10 @@ function runDocSearch(q) {
   docHits = []; docHitAt = -1;
   const match = matcher(q, searchOpt);
   if (!match) { msg.textContent = '정규식이 올바르지 않습니다.'; return; }
-  if (!(reader && reader.note)) { msg.textContent = '열려 있는 노트가 없습니다.'; return; }
+  const doc = currentDoc();
+  if (!doc) { msg.textContent = '열려 있는 노트가 없습니다.'; return; }
 
-  reader.note.sections.forEach((sec, i) => {
+  doc.sections.forEach((sec, i) => {
     for (const at of findAll(sec.text, match, 50)) docHits.push({ sec: i, ...at });
   });
   if (!docHits.length) { msg.textContent = '이 문서에는 없습니다.'; clearDocMarks(); return; }
@@ -5155,7 +5289,7 @@ function runDocSearch(q) {
 
   let lastSec = -1;
   docHits.forEach((h, idx) => {
-    const sec = reader.note.sections[h.sec];
+    const sec = doc.sections[h.sec];
     if (h.sec !== lastSec) {
       lastSec = h.sec;
       const head = document.createElement('div');
@@ -5190,19 +5324,35 @@ function goDocHit(idx, { keepFocus = false } = {}) {
       `${docHitAt + 1}/${docHits.length}군데 — Enter로 다음, Shift+Enter로 이전`;
     if (!keepFocus) sEl('searchInput').focus();
   };
-  if (reader.secIdx !== h.sec) { reader.secIdx = h.sec; renderReader(); setTimeout(go, 80); } else go();
+  // 그 자리가 다른 섹션이면 먼저 그리로 넘긴다. 노트 읽기와 퀴즈 옆 위키 패널은
+  // 넘기는 방법이 다르다 — 어느 쪽이 떠 있든 같은 Enter로 다음 자리에 가야 한다.
+  if (document.body.dataset.screen === 'readScreen' && reader) {
+    if (reader.secIdx !== h.sec) { reader.secIdx = h.sec; renderReader(); setTimeout(go, 80); return; }
+  } else if (wikiState && wikiState.refs) {
+    if (wikiState.secIdx !== h.sec) {
+      wikiState.secIdx = h.sec;
+      wikiState.unlocked = true;        // 찾아서 간 자리는 보여줘야 뜻이 있다
+      renderWikiSection();
+      setTimeout(go, 80);
+      return;
+    }
+  }
+  go();
 }
 function stepDocHit(d) {
   if (!docHits.length) { runSearch(sEl('searchInput').value); return; }
   goDocHit(docHitAt + d);
 }
 
-/** 본문에서 그 자리를 노랗게 칠한다. `.tok`을 세어 글자 위치를 찾는다. */
+/** 본문에서 그 자리를 노랗게 칠한다. 읽기 화면이면 본문, 퀴즈면 옆 위키 패널. */
 function markDocHit(h) {
   clearDocMarks();
-  const body = document.getElementById('readBody');
-  if (!body) return;
-  const sec = reader.note.sections[h.sec];
+  const body = document.body.dataset.screen === 'readScreen'
+    ? document.getElementById('readBody')
+    : (document.getElementById('wikiBody') || document.getElementById('readBody'));
+  const doc = currentDoc();
+  if (!body || !doc) return;
+  const sec = doc.sections[h.sec];
   const target = sec.text.slice(h.at, h.at + h.len).replace(/\s+/g, '');
   if (!target) return;
   const walk = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
@@ -5342,6 +5492,10 @@ function buildMarkdown(res) {
   const tagList = ['달모/모의고사풀이', ...usedColors.map((c) => `달모/${OV_TAGS[c - 1].name}`)];
   if (res.items.some((x) => x.bookmarked)) tagList.push('달모/다시볼것');
   lines.push(`tags: [${tagList.join(', ')}]`);
+  // vault 쪽이 "아직 안 본 것"을 확실히 찾게 하는 표시. 사람이 세는 목록(처리기록 파일)은
+  // 반드시 어긋난다 — 파일 자신이 상태를 들고 있게 한다(2026-10-13).
+  // /lecture-integrate·/log-wrong-answer가 반영한 뒤 `처리: 반영됨 (날짜)`으로 바꾼다.
+  lines.push('처리: 대기');
   lines.push('---');
   lines.push('');
   lines.push(`# ${topic} 모의고사 풀이 기록`);
@@ -5409,40 +5563,35 @@ function buildMarkdown(res) {
   return { path, content: lines.join('\n'), message: `iPad 모의고사 풀이: ${topic} ${res.correct}/${res.total}` };
 }
 
-document.getElementById('saveToVaultBtn').onclick = async () => {
+document.getElementById('saveToVaultBtn').onclick = async (e) => {
   if (!lastResult) return;
-  const msg = document.getElementById('saveMsg');
-  msg.textContent = '저장 중…';
-
-  // 풀이기록 + (물어본 게 있으면) 질문기록을 각각 새 파일로 저장한다.
-  const payloads = [buildMarkdown(lastResult)];
-  if (askItems.length) {
-    payloads.push(buildQaMarkdown({
-      subject: currentExam.subject,
-      lecture: prettyExamName(currentExam.file),
-      examPath: currentExam.path,
-      items: askItems,
-    }));
-  }
-
-  const saved = [];
-  const queued = [];
-  for (const p of payloads) {
-    try {
-      const r = await createFile(p.path, p.content, p.message);
-      saved.push(r.path.split('/').pop());
-    } catch (e) {
-      await enqueue(p);
-      queued.push(p.path.split('/').pop());
+  const btn = e.currentTarget;
+  if (btn.disabled) return;                 // 두 번 눌러 같은 걸 두 번 올리지 않게
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = '저장 중…';
+  try {
+    // 풀이기록 + (물어본 게 있으면) 질문기록을 각각 새 파일로 저장한다.
+    const payloads = [buildMarkdown(lastResult)];
+    if (askItems.length) {
+      payloads.push(buildQaMarkdown({
+        subject: currentExam.subject,
+        lecture: prettyExamName(currentExam.file),
+        examPath: currentExam.path,
+        items: askItems,
+      }));
     }
-  }
-  if (queued.length) {
-    msg.textContent = `⚠️ ${saved.length}건 저장, ${queued.length}건은 대기열로 (네트워크 복구 시 자동 전송)`;
-    refreshSyncBar();
-  } else {
-    msg.textContent = `✅ 저장됨 — ${saved.join(', ')}`;
+    const r = await saveToVault(payloads, { statusEl: document.getElementById('saveMsg') });
+    // 대기열에 들어간 것도 **내용은 남아 있다** — 질문기록을 비우고 이어풀기를 접는 건
+    // 그 내용이 어딘가(서버든 기기 큐든)에 확실히 들어간 뒤여야 한다. 큐도 그 조건을 만족한다.
     askItems = [];
     clearSession(currentExam.path).catch(() => {});
+    btn.textContent = r.ok ? '✅ 저장됨' : '📥 대기열에 넣음';
+    setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 2500);
+  } catch (err) {
+    btn.textContent = label;
+    btn.disabled = false;
+    throw err;
   }
 };
 
@@ -5461,6 +5610,87 @@ document.getElementById('exportBtn').onclick = async () => {
     a.click();
   }
 };
+
+
+// ═══════════ vault로 보내기 — 한 군데서 ═══════════
+//
+// 왜 모았나(2026-10-13): 저장 경로가 세 군데(모의고사 풀이·모아두기·질문기록)로 흩어져
+// 있었고, 각자 조금씩 다르게 알려줬다. 사용자는 **눌렀는데 아무 일도 안 일어난 것처럼**
+// 느꼈다("저장이 되었는지 피드백이 없어서 혼란스러움").
+//
+// 실패도 한 가지가 아니다. 셋을 구별해서 말해야 한다:
+//   ① 인터넷이 없다      → 대기열. 연결되면 알아서 올라간다. **잃는 것이 없다.**
+//   ② 토큰이 없다/만료    → 대기열에 넣되 설정을 열어줘야 한다.
+//   ③ 그 밖의 거절(권한·충돌) → 대기열에 넣고 이유를 보여준다.
+// 전부 "대기열로"라고만 하면 ②는 영영 안 올라간다.
+
+/** 지금 인터넷이 끊긴 상태인가. navigator.onLine은 거짓 양성이 많아 오류 문구도 같이 본다. */
+function looksOffline(err) {
+  if (navigator.onLine === false) return true;
+  return /NetworkError|Failed to fetch|Load failed|ERR_INTERNET|network|offline|타임아웃|timeout/i
+    .test(String((err && err.message) || err || ''));
+}
+
+/**
+ * 파일 여러 개를 vault로 보낸다. 실패하면 대기열에 넣는다 — **내용은 절대 버리지 않는다**.
+ * @returns {{saved:string[], queued:string[], offline:boolean, needSetup:boolean, why:string}}
+ */
+async function pushToVault(payloads) {
+  const saved = [];
+  const queued = [];
+  let offline = false;
+  let needSetup = false;
+  let why = '';
+  for (const p of payloads) {
+    try {
+      const r = await createFile(p.path, p.content, p.message);
+      saved.push(r.path.split('/').pop());
+    } catch (e) {
+      const m = String((e && e.message) || e);
+      if (looksOffline(e)) offline = true;
+      else if (/NO_TOKEN|401|403|Bad credentials/i.test(m)) needSetup = true;
+      else if (!why) why = m.slice(0, 90);
+      await enqueue(p);                       // 어떤 경우든 큐에 남긴다
+      queued.push(p.path.split('/').pop());
+    }
+  }
+  if (queued.length) refreshSyncBar();
+  return { saved, queued, offline, needSetup, why };
+}
+
+/** 저장 결과를 사람 말로. 화면 글귀와 토스트가 **같은 말**을 하게 한다. */
+function vaultSaveMessage(r) {
+  if (!r.queued.length) {
+    return { ok: true, text: `✅ vault에 저장했습니다 — ${r.saved.join(', ')}` };
+  }
+  if (r.offline) {
+    return { ok: false, text: `📥 인터넷이 없어 ${r.queued.length}건을 기기에 넣어뒀습니다 — 연결되면 자동으로 올라갑니다. 앱을 꺼도 남아 있습니다.` };
+  }
+  if (r.needSetup) {
+    return { ok: false, needSetup: true,
+      text: `🔑 저장 권한이 없어 ${r.queued.length}건을 기기에 넣어뒀습니다 — 설정에서 토큰을 다시 넣어주세요.` };
+  }
+  return { ok: false,
+    text: `⚠️ ${r.saved.length}건 저장, ${r.queued.length}건은 기기에 넣어뒀습니다${r.why ? ` (${r.why})` : ''} — 위의 "지금 보내기"로 다시 시도할 수 있습니다.` };
+}
+
+/**
+ * 보내고, **보이게** 알려준다.
+ * 토스트를 항상 띄운다 — 결과 화면 아래쪽 작은 글씨는 눈에 안 들어온다.
+ */
+async function saveToVault(payloads, { statusEl = null } = {}) {
+  if (statusEl) statusEl.textContent = '저장 중…';
+  const r = await pushToVault(payloads);
+  const m = vaultSaveMessage(r);
+  if (statusEl) {
+    statusEl.textContent = m.text;
+    statusEl.classList.toggle('save-ok', !!m.ok);
+    statusEl.classList.toggle('save-warn', !m.ok);
+  }
+  toast(m.text);
+  if (m.needSetup) setTimeout(openSetup, 1400);
+  return { ...r, ...m };
+}
 
 // ---------- 아웃박스(동기화 대기열) ----------
 async function refreshSyncBar() {
@@ -5535,6 +5765,105 @@ function alertBox(text) {
 }
 
 
+// ═══════════ 타이머 ═══════════
+//
+// "딴짓을 많이해서리" — 점수에 반영하는 물건이 아니다(2026-10-13 요청). 한 세트를
+// 정해둔 시간 안에 끝내자는 **스스로와의 약속**이고, 지나면 조용히 알려주기만 한다.
+// 그래서 일부러 안 넣은 것들: 자동 제출, 남은 시간으로 채점, 못 지켰다는 기록.
+// 공부를 재촉하는 장치가 되면 오히려 안 켜게 된다.
+
+let timer = null;      // {min, perQ, endAt, paused, left}
+let timerTick = 0;
+
+const mmss = (ms) => {
+  const t = Math.max(0, Math.round(ms / 1000));
+  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+};
+
+function paintTimer() {
+  const pill = document.getElementById('timerPill');
+  if (!timer) { pill.classList.add('hidden'); return; }
+  pill.classList.remove('hidden');
+  const left = timer.paused ? timer.left : timer.endAt - Date.now();
+  pill.textContent = (timer.paused ? '⏸ ' : '') + mmss(left);
+  // 1분 남으면 노랑, 지나면 빨강 — 숫자만으로는 곁눈으로 안 보인다
+  pill.classList.toggle('warn', left <= 60000 && left > 0);
+  pill.classList.toggle('over', left <= 0);
+  if (left <= 0 && !timer.rang) {
+    timer.rang = true;
+    toast(`⏰ ${timer.min}분이 지났습니다 — 마무리하고 넘어갈까요?`);
+    try { navigator.vibrate && navigator.vibrate([120, 60, 120]); } catch {}
+  }
+}
+
+function startTimer(min, perQ) {
+  timer = { min, perQ, endAt: Date.now() + min * 60000, paused: false, left: 0, rang: false };
+  clearInterval(timerTick);
+  timerTick = setInterval(paintTimer, 1000);
+  paintTimer();
+  localStorage.setItem('timer_pref', JSON.stringify({ min, perQ }));
+}
+function stopTimer() {
+  timer = null;
+  clearInterval(timerTick);
+  timerTick = 0;
+  paintTimer();
+}
+/** 문항을 넘길 때 — "문항마다 다시 시작"이 켜져 있으면 되감는다. */
+function resetTimerForQuestion() {
+  if (!timer || !timer.perQ) return;
+  timer.endAt = Date.now() + timer.min * 60000;
+  timer.rang = false;
+  timer.paused = false;
+  paintTimer();
+}
+
+function openTimerSheet() {
+  const sheet = document.getElementById('timerSheet');
+  let pref = { min: 20, perQ: false };
+  try { pref = { ...pref, ...JSON.parse(localStorage.getItem('timer_pref') || '{}') }; } catch {}
+  const cur = timer ? timer.min : pref.min;
+  document.querySelectorAll('#timerSeg .btn').forEach((b) =>
+    b.classList.toggle('active', Number(b.dataset.min) === cur));
+  document.getElementById('timerPerQ').checked = timer ? timer.perQ : pref.perQ;
+  document.getElementById('timerOff').disabled = !timer;
+  sheet.classList.remove('hidden');
+}
+
+function initTimer() {
+  document.getElementById('toolTimer').onclick = openTimerSheet;
+  document.getElementById('timerClose').onclick = () =>
+    document.getElementById('timerSheet').classList.add('hidden');
+  document.getElementById('timerSheet').onclick = (e) => {
+    if (e.target.id === 'timerSheet') e.target.classList.add('hidden');
+  };
+  document.querySelectorAll('#timerSeg .btn').forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll('#timerSeg .btn').forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+    };
+  });
+  document.getElementById('timerStart').onclick = () => {
+    const on = document.querySelector('#timerSeg .btn.active');
+    startTimer(Number(on ? on.dataset.min : 20), document.getElementById('timerPerQ').checked);
+    document.getElementById('timerSheet').classList.add('hidden');
+    document.getElementById('toolTimer').classList.add('active');
+    toast(`${timer.min}분 타이머를 켰습니다${timer.perQ ? ' (문항마다 다시 시작)' : ''}.`);
+  };
+  document.getElementById('timerOff').onclick = () => {
+    stopTimer();
+    document.getElementById('timerSheet').classList.add('hidden');
+    document.getElementById('toolTimer').classList.remove('active');
+  };
+  // 알약을 누르면 잠깐 멈춤 — 화장실 다녀오는 동안 타이머가 도는 건 의미가 없다
+  document.getElementById('timerPill').onclick = () => {
+    if (!timer) return;
+    if (timer.paused) { timer.endAt = Date.now() + timer.left; timer.paused = false; }
+    else { timer.left = timer.endAt - Date.now(); timer.paused = true; }
+    paintTimer();
+  };
+}
+
 // ═══════════ 떠 있는 도구막대 · 창 버튼 자리 ═══════════
 //
 // 왜 이렇게 바꿨나(2026-10-13): 아이패드에서 창을 줄여 쓰면 시스템이 왼쪽 위에
@@ -5576,13 +5905,34 @@ document.querySelectorAll('#winSeg .btn').forEach((b) => {
 // 네 변 중 하나에 붙는다(tl/tr/bl/br은 모서리, l/r은 세로 막대).
 const DOCKS = ['tr', 'tl', 'br', 'bl', 'l', 'r'];
 
-function dockTools(dock) {
-  const el = document.getElementById('readTools');
+function dockTools(dock, el = document.getElementById('readTools'), key = 'read_tools_dock') {
   if (!el || !DOCKS.includes(dock)) return;
   el.dataset.dock = dock;
   el.style.removeProperty('--rt-x');
   el.style.removeProperty('--rt-y');
-  localStorage.setItem('read_tools_dock', dock);
+  localStorage.setItem(key, dock);
+  reserveForTools(el);
+}
+
+/**
+ * 머리줄 오른쪽 끝(점수·타이머)이 떠 있는 막대에 **가리지 않게** 자리를 비운다.
+ *
+ * 막대가 뜨면서 생긴 문제다 — 머리줄은 자기 위에 뭐가 떠 있는지 모른다(2026-10-13).
+ * 막대를 옮기면 비웠던 자리도 같이 돌려준다.
+ */
+function reserveForTools(el) {
+  const screen = el.closest('section');
+  if (!screen) return;
+  const head = screen.querySelector(':scope > header');
+  if (!head) return;
+  const top = el.dataset.dock === 'tr' || el.dataset.dock === 'tl';
+  requestAnimationFrame(() => {
+    const w = top ? Math.round(el.getBoundingClientRect().width) + 20 : 0;
+    head.style.setProperty(el.dataset.dock === 'tl' ? 'padding-left' : 'padding-right',
+      w ? `${w}px` : '');
+    // 반대쪽에 남아 있던 여백은 돌려준다
+    head.style.setProperty(el.dataset.dock === 'tl' ? 'padding-right' : 'padding-left', '');
+  });
 }
 
 /** 놓은 자리에서 가장 가까운 변을 고른다. */
@@ -5596,16 +5946,23 @@ function nearestDock(cx, cy) {
   return cx < W / 2 ? 'bl' : 'br';
 }
 
-function initReadTools() {
-  const el = document.getElementById('readTools');
-  const grip = document.getElementById('rtGrip');
+function initReadTools(panelId = 'readTools', gripId = 'rtGrip', key = 'read_tools_dock') {
+  const el = document.getElementById(panelId);
+  const grip = document.getElementById(gripId);
   if (!el || !grip) return;
-  dockTools(localStorage.getItem('read_tools_dock') || 'tr');
+  dockTools(localStorage.getItem(key) || 'tr', el, key);
+  // 막대는 그 화면일 때만 보인다 — 숨어 있을 땐 폭이 0이라 지금 재면 소용없다.
+  // 보이게 되는 순간 다시 재서 머리줄 자리를 비운다(2026-10-13).
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => reserveForTools(el)).observe(el);
+  }
 
   grip.addEventListener('pointerdown', (e) => {
     const r = el.getBoundingClientRect();
     const dx = e.clientX - r.left, dy = e.clientY - r.top;
-    grip.setPointerCapture(e.pointerId);
+    // 포인터를 묶어둬야 손이 막대 밖으로 나가도 move가 계속 온다.
+    // 합성 이벤트(테스트)로는 묶을 포인터가 없어 던진다 — 그래도 끌기는 돼야 한다.
+    try { grip.setPointerCapture(e.pointerId); } catch {}
     el.classList.add('dragging');
     const move = (ev) => {
       el.dataset.dock = 'free';
@@ -5618,7 +5975,7 @@ function initReadTools() {
       grip.removeEventListener('pointercancel', up);
       el.classList.remove('dragging');
       const rr = el.getBoundingClientRect();
-      dockTools(nearestDock(rr.left + rr.width / 2, rr.top + rr.height / 2));
+      dockTools(nearestDock(rr.left + rr.width / 2, rr.top + rr.height / 2), el, key);
     };
     grip.addEventListener('pointermove', move);
     grip.addEventListener('pointerup', up);
@@ -5626,9 +5983,10 @@ function initReadTools() {
     e.preventDefault();
   });
   // 두 번 누르면 원래 자리(오른쪽 위)로 — 어디로 갔는지 모를 때 되돌리는 길
-  grip.addEventListener('dblclick', () => dockTools('tr'));
+  grip.addEventListener('dblclick', () => dockTools('tr', el, key));
 }
 initReadTools();
+initReadTools('quizTools', 'qtGrip', 'quiz_tools_dock');
 
 // ═══════════ 키보드 · 마우스 ═══════════
 //
@@ -5667,7 +6025,7 @@ document.addEventListener('keydown', (e) => {
 
   if (mod && (e.key === 'f' || e.key === 'F')) {       // ⌘F / ⌘⇧F
     e.preventDefault();
-    openSearch(e.shiftKey ? 'all' : (inReader() ? 'doc' : 'all'));
+    openSearch(e.shiftKey ? 'all' : undefined);        // 기본은 "지금 떠 있는 문서"
     return;
   }
   if (mod && (e.key === 'o' || e.key === 'O') && inReader()) {   // ⌘O — 다른 노트
@@ -5850,6 +6208,7 @@ function hideSplash() {
   await applyTheme();
   await loadDisplay();
   await loadWinMode();
+  initTimer();
   await loadReadPos();
   initServiceWorker();
   gem.loadDeadModels().catch(() => {});

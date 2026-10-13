@@ -92,6 +92,8 @@ export function buildQaMarkdown({ subject, lecture, examPath, items }) {
   L.push(`과목: ${subject}`);
   L.push(`강의: ${lecture}`);
   L.push(`작성: 20${yy}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}:${p(now.getMinutes())}`);
+  L.push('tags: [달모/질문기록]');
+  L.push('처리: 대기');          // vault가 아직 안 본 것을 찾는 표시(2026-10-13)
   L.push('---');
   L.push('');
   L.push(`# ${lecture} — 풀면서 모르던 것 (${items.length}건)`);
