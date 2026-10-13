@@ -1934,7 +1934,8 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
    같은 문서의 다른 대목을 견주거나, 다른 문서를 나란히 본다.
    창은 1개 또는 2개. 가운데 손잡이를 끌어 비율을 바꾸고, 두 번 누르면 반반. */
 
-.read-panes { flex: 1 1 auto; min-width: 0; display: flex; gap: 0; }
+/* position:relative — 떨구기 미리보기(.drop-split::after)가 이 상자를 기준으로 선다 */
+.read-panes { flex: 1 1 auto; min-width: 0; display: flex; gap: 0; position: relative; }
 .read-panes.two { --split: var(--pane-split, 50%); }
 .read-pane { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 .read-panes.two > .read-pane:first-child { flex: 0 0 calc(var(--split) - 5px); }
@@ -1982,10 +1983,28 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
 }
 .pane-split-resizer:active::before { background: var(--accent); }
 
-/* ── 끌어다 놓기 미리보기 ── */
+/* ── 끌어다 놓기 미리보기 ── (2026-10-13)
+   어디에 놓으면 어떻게 되는지 끌면서 보여준다:
+   창 위에 있으면 그 창이 밝아지고(= 탭 추가), 한 창일 때 오른쪽이면 갈라질 자리가 뜬다. */
 .read-panes.drop-ready { outline: 2px dashed var(--border); outline-offset: -4px; border-radius: var(--r-3); }
-.read-panes.drop-left { outline-color: var(--accent); box-shadow: inset 50% 0 0 -2px color-mix(in srgb, var(--accent) 12%, transparent); }
-.read-panes.drop-right { outline-color: var(--accent); box-shadow: inset -50% 0 0 -2px color-mix(in srgb, var(--accent) 12%, transparent); }
+.read-pane.drop-into .read-card {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--card));
+}
+.read-panes.drop-split { outline-color: var(--accent); }
+.read-panes.drop-split::after {
+  content: '여기에 놓으면 화면이 갈라집니다';
+  position: absolute; right: 0; top: 0; bottom: 0; width: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-left: 2px dashed var(--accent);
+  color: var(--accent); font-size: 13px; font-weight: 700;
+  pointer-events: none; border-radius: 0 var(--r-3) var(--r-3) 0;
+}
+
+/* 끄는 동안 — 가림막이 창을 덮고 있으면 dragover가 창에 닿지 않는다 */
+body.dragging-doc .dd-scrim { pointer-events: none; opacity: 0; }
+body.dragging-doc .doc-drawer { opacity: .55; }
 
 /* ── 문서 목록 서랍 ── */
 .doc-drawer {
@@ -2009,6 +2028,7 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
   font-size: 10.5px; font-weight: 800; color: var(--sub); text-transform: uppercase;
   letter-spacing: .04em; padding: 12px 6px 5px;
 }
+.dd-group.here { color: var(--accent); }
 .dd-item {
   display: block; width: 100%; text-align: left;
   min-height: 40px; padding: 9px 10px; margin-bottom: 2px;
@@ -2025,3 +2045,11 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
   .pane-split-resizer { flex-basis: 12px; cursor: row-resize; }
   .pane-split-resizer::before { inset: 4px 20%; }
 }
+
+/* ── 펜 버튼: 아이콘이 지금 모드를 보여준다 (2026-10-13) ──
+   펜 → 지우개 → 끔으로 돈다. 전에는 늘 펜 모양이라 뭐가 켜졌는지 알 수 없었다. */
+#readPen .erase-ic { display: none; }
+#readPen.erasing .pen-ic { display: none; }
+#readPen.erasing .erase-ic { display: inline; }
+/* 펜을 끄면 캔버스가 손가락·펜을 통과시킨다 — 글을 긁어 복사할 때 거슬리지 않게 */
+.penlayer.pen-off { visibility: hidden; }

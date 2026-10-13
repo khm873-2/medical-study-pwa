@@ -3189,16 +3189,109 @@ await run('분할 읽기', async () => {
         ok: document.querySelectorAll('.dd-item').length === 1,
         detail: String(document.querySelectorAll('.dd-item').length) });
 
-      // 눌러서 열면 지금 창의 새 탭이 된다
-      document.querySelector('.dd-item').click();
-      await new Promise((r) => setTimeout(r, 600));
+      // 지금 보는 과목이 맨 위에 와야 한다 — 28개 과목을 매번 스크롤할 수 없다
+      search.value = '';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 150));
+      const first = document.querySelector('.dd-group');
+      out.push({ name: '지금 보는 과목이 맨 위에 온다',
+        ok: !!first && /지금 보는 과목/.test(first.textContent), detail: first ? first.textContent : '없음' });
+
+      // 눌러서 열면 지금 창의 새 탭이 된다 — **지금 안 열려 있는** 노트로 확인한다
+      const open = new Set([...document.querySelectorAll('.pane-tab .pt-name')].map((x) => x.textContent));
+      const fresh = [...document.querySelectorAll('.dd-item')].find((x) => !open.has(x.textContent))
+        || document.querySelectorAll('.dd-item')[1];
+      const freshName = fresh.textContent;
+      fresh.click();
+      await new Promise((r) => setTimeout(r, 700));
       out.push({ name: '누르면 서랍이 닫힌다', ok: dd.classList.contains('hidden') });
       out.push({ name: '제목이 그 노트로 바뀐다',
-        ok: /나노트/.test(document.getElementById('readTitle').textContent),
-        detail: document.getElementById('readTitle').textContent });
+        ok: document.getElementById('readTitle').textContent.includes(freshName),
+        detail: `${freshName} / ${document.getElementById('readTitle').textContent}` });
       return out;
     });
   }
+
+  // ── 두 창일 때 떨구면 그 창에 탭이 붙는가 (2026-10-13) ──
+  // 가림막(.dd-scrim)이 화면을 덮고 있어서 #readPanes가 dragover를 못 받고 있었다 —
+  // 드래그 떨구기가 한 번도 동작한 적이 없었다.
+  await run('떨구기', async () => {
+    const out = [];
+    // 창 둘로 만든다
+    if (document.querySelectorAll('#readPanes .read-pane').length < 2) {
+      document.getElementById('readSplitBtn').click();
+      await new Promise((r) => setTimeout(r, 450));
+    }
+    out.push({ name: '창이 둘이다', ok: document.querySelectorAll('#readPanes .read-pane').length === 2 });
+
+    document.getElementById('readDocs').click();
+    await new Promise((r) => setTimeout(r, 400));
+    // 오른쪽 창에 **아직 없는** 노트를 끌어야 탭이 는다
+    const rightPane = document.querySelectorAll('#readPanes .read-pane')[1];
+    const openRight = new Set([...rightPane.querySelectorAll('.pane-tab .pt-name')].map((x) => x.textContent));
+    const item = [...document.querySelectorAll('.dd-item')].find((x) => !openRight.has(x.textContent))
+      || document.querySelector('.dd-item');
+    item.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: new DataTransfer() }));
+    await new Promise((r) => setTimeout(r, 80));
+    out.push({ name: '끄는 동안 가림막이 비켜준다(이게 없으면 떨굴 수가 없다)',
+      ok: document.body.classList.contains('dragging-doc')
+        && getComputedStyle(document.querySelector('.dd-scrim')).pointerEvents === 'none' });
+
+    // 오른쪽 창 한가운데에 떨군다
+    const right = document.querySelectorAll('#readPanes .read-pane')[1];
+    const r = right.getBoundingClientRect();
+    const at = { clientX: Math.round(r.left + r.width / 2), clientY: Math.round(r.top + r.height / 2) };
+    const host = document.getElementById('readPanes');
+    host.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer(), ...at }));
+    await new Promise((r2) => setTimeout(r2, 80));
+    out.push({ name: '어느 창에 들어갈지 그 창이 밝아진다', ok: right.classList.contains('drop-into') });
+    out.push({ name: '창이 둘이면 "갈라짐" 안내는 안 뜬다(더 갈라질 수 없다)',
+      ok: !host.classList.contains('drop-split') });
+
+    const tabsBefore = right.querySelectorAll('.pane-tab').length;
+    host.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer(), ...at }));
+    await new Promise((r2) => setTimeout(r2, 800));
+    const right2 = document.querySelectorAll('#readPanes .read-pane')[1];
+    out.push({ name: '떨구면 그 창에 탭이 붙는다',
+      ok: right2.querySelectorAll('.pane-tab').length === tabsBefore + 1,
+      detail: `${tabsBefore} → ${right2.querySelectorAll('.pane-tab').length}` });
+    out.push({ name: '창은 여전히 둘이다(새로 갈라지지 않는다)',
+      ok: document.querySelectorAll('#readPanes .read-pane').length === 2 });
+    out.push({ name: '떨구면 서랍이 닫힌다',
+      ok: document.getElementById('docDrawer').classList.contains('hidden') });
+    return out;
+  });
+
+  await run('도구막대 정리 · 펜 모드', async () => {
+    const out = [];
+    const ids = [...document.querySelectorAll('#readScreen > header button')].map((b) => b.id);
+    out.push({ name: '스피커(읽어주기) 버튼을 뺐다', ok: !ids.includes('readTts'), detail: ids.join(',') });
+    out.push({ name: '나누기·문서는 왼쪽(제목 앞)에 모았다',
+      ok: ids.indexOf('readSplitBtn') < ids.indexOf('readAwake')
+        && ids.indexOf('readDocs') < ids.indexOf('readAwake'), detail: ids.join(',') });
+    const h1 = document.getElementById('readTitle');
+    const splitBtn = document.getElementById('readSplitBtn');
+    out.push({ name: '나누기 버튼이 제목보다 앞에 있다',
+      ok: splitBtn.compareDocumentPosition(h1) & Node.DOCUMENT_POSITION_FOLLOWING });
+
+    // 펜 — 누를 때마다 펜 → 지우개 → 끔
+    const pen = document.getElementById('readPen');
+    out.push({ name: '처음엔 펜(아이콘이 펜)', ok: !pen.classList.contains('erasing') });
+    out.push({ name: '펜이 켜져 있다고 보인다', ok: pen.classList.contains('active') });
+    pen.click();
+    out.push({ name: '누르면 지우개로 — 아이콘이 지우개로 바뀐다', ok: pen.classList.contains('erasing') });
+    out.push({ name: '지우개 아이콘이 실제로 보인다',
+      ok: getComputedStyle(pen.querySelector('.erase-ic')).display !== 'none'
+        && getComputedStyle(pen.querySelector('.pen-ic')).display === 'none' });
+    pen.click();
+    out.push({ name: '한 번 더 누르면 꺼진다', ok: !pen.classList.contains('active') });
+    out.push({ name: '꺼지면 캔버스가 비켜준다(글을 긁을 수 있게)',
+      ok: !!document.querySelector('.penlayer.pen-off') });
+    pen.click();
+    out.push({ name: '또 누르면 펜으로 돌아온다',
+      ok: pen.classList.contains('active') && !pen.classList.contains('erasing') });
+    return out;
+  });
 
   await page.evaluate(async () => {
     if (window.__realFetch) window.fetch = window.__realFetch;

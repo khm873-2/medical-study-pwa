@@ -2525,12 +2525,27 @@ function renderDocList(groups, q) {
   const needle = String(q || '').trim().toLowerCase();
   list.innerHTML = '';
   let shown = 0;
-  for (const g of groups) {
+
+  // 지금 보고 있는 노트와 **같은 과목**을 맨 위로 — 응급을 보는 중이면 응급이 먼저다.
+  // 서랍에 28개 과목이 깔리면 매번 스크롤해 내려가야 한다(2026-10-13 요청).
+  const here = reader && reader.note ? reader.note.path.split('/') : [];
+  const hereSubject = here[1] || '';
+  const hereRoot = here[0] || '';
+  const sorted = [...groups].sort((a, b) => {
+    const sa = a.subject === hereSubject, sb = b.subject === hereSubject;
+    if (sa !== sb) return sa ? -1 : 1;                 // 같은 과목이 먼저
+    const ra = a.root === hereRoot, rb = b.root === hereRoot;
+    if (ra !== rb) return ra ? -1 : 1;                 // 그 다음 같은 뿌리(위키/예습)
+    return 0;                                          // 나머지는 원래 순서
+  });
+
+  for (const g of sorted) {
     const hits = g.notes.filter((n) => !needle || n.name.toLowerCase().includes(needle));
     if (!hits.length) continue;
     const h = document.createElement('div');
-    h.className = 'dd-group';
-    h.textContent = `${ROOT_LABEL[g.root] || g.root} · ${g.subject.replace(/_/g, ' ')}`;
+    h.className = `dd-group${g.subject === hereSubject ? ' here' : ''}`;
+    h.textContent = `${ROOT_LABEL[g.root] || g.root} · ${g.subject.replace(/_/g, ' ')}`
+      + (g.subject === hereSubject ? '  — 지금 보는 과목' : '');
     list.appendChild(h);
     hits.slice(0, needle ? 40 : 200).forEach((n) => {
       const b = document.createElement('button');
@@ -2550,10 +2565,13 @@ function renderDocList(groups, q) {
         e.dataTransfer.effectAllowed = 'copy';
         e.dataTransfer.setData('text/plain', n.path);
         document.getElementById('readPanes').classList.add('drop-ready');
+        // 가림막이 화면을 덮고 있으면 창이 dragover를 못 받는다 — 끄는 동안 비켜준다
+        document.body.classList.add('dragging-doc');
       });
       b.addEventListener('dragend', () => {
         docDragNote = null;
-        document.getElementById('readPanes').classList.remove('drop-ready', 'drop-left', 'drop-right');
+        document.body.classList.remove('dragging-doc');
+        clearDropHint();
       });
       list.appendChild(b);
       shown++;
@@ -2562,32 +2580,72 @@ function renderDocList(groups, q) {
   if (!shown) list.innerHTML = '<p class="muted" style="padding:12px">찾는 노트가 없습니다.</p>';
 }
 
-/** 창 영역에 떨구면 — 왼쪽 절반이면 왼쪽 창, 오른쪽 절반이면 갈라서 오른쪽 창. */
+/**
+ * 떨구기 — 어느 창에 넣을지는 **떨군 자리**가 정한다.
+ *
+ *   창이 하나: 왼쪽 절반 → 그 창에 탭 추가 / 오른쪽 절반 → 갈라서 새 창
+ *   창이 둘  : 떨군 그 창에 탭 추가 (탭 줄에 놓아도 된다)
+ *
+ * ⚠️ 서랍의 가림막(.dd-scrim)이 화면을 통째로 덮고 있어서 `#readPanes`가 dragover를
+ *    아예 못 받고 있었다 — 드래그로 떨구기가 **한 번도 동작한 적이 없다**(2026-10-13
+ *    발견). 끄는 동안 가림막을 통과시키고 서랍은 흐리게 비켜준다.
+ */
+function paneAtPoint(x, y) {
+  const els = document.querySelectorAll('#readPanes .read-pane');
+  for (const el of els) {
+    const r = el.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return Number(el.dataset.pane);
+  }
+  return null;
+}
+
+/** 떨구면 어떻게 될지 — {pane, split} */
+function dropPlan(x, y) {
+  const host = document.getElementById('readPanes');
+  const r = host.getBoundingClientRect();
+  if (panes.length >= 2) {
+    const pi = paneAtPoint(x, y);
+    return { pane: pi == null ? activePane : pi, split: false };
+  }
+  const right = (x - r.left) / r.width > 0.5;
+  return right ? { pane: 1, split: true } : { pane: 0, split: false };
+}
+
+function paintDropHint(plan) {
+  const host = document.getElementById('readPanes');
+  host.classList.toggle('drop-split', !!(plan && plan.split));
+  document.querySelectorAll('#readPanes .read-pane').forEach((el) => {
+    el.classList.toggle('drop-into', !!plan && !plan.split && Number(el.dataset.pane) === plan.pane);
+  });
+}
+function clearDropHint() {
+  const host = document.getElementById('readPanes');
+  host.classList.remove('drop-ready', 'drop-split');
+  document.querySelectorAll('#readPanes .read-pane').forEach((el) => el.classList.remove('drop-into'));
+}
+
 function initDocDrop() {
   const host = document.getElementById('readPanes');
-  const side = (e) => (e.clientX - host.getBoundingClientRect().left) / host.getBoundingClientRect().width;
   host.addEventListener('dragover', (e) => {
     if (!docDragNote) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
-    const right = side(e) > 0.5;
-    host.classList.toggle('drop-right', right);
-    host.classList.toggle('drop-left', !right);
+    paintDropHint(dropPlan(e.clientX, e.clientY));
   });
-  host.addEventListener('dragleave', (e) => {
-    if (e.target === host) host.classList.remove('drop-left', 'drop-right');
-  });
+  host.addEventListener('dragleave', (e) => { if (e.target === host) clearDropHint(); });
   host.addEventListener('drop', async (e) => {
     if (!docDragNote) return;
     e.preventDefault();
     const n = docDragNote;
-    const right = side(e) > 0.5;
+    const plan = dropPlan(e.clientX, e.clientY);
     docDragNote = null;
-    host.classList.remove('drop-ready', 'drop-left', 'drop-right');
+    clearDropHint();
     closeDocDrawer();
-    const note = await loadNote(n.path);
-    if (right && panes.length < 2) splitPane(note);          // 갈라진다
-    else { openInPane(note, { pane: right ? Math.min(1, panes.length - 1) : 0 }); renderPanes(); }
+    try {
+      const note = await loadNote(n.path);
+      if (plan.split && panes.length < 2) splitPane(note);
+      else { openInPane(note, { pane: Math.min(plan.pane, panes.length - 1) }); renderPanes(); }
+    } catch (err) { toast(`노트를 열지 못했습니다: ${err.message}`); }
   });
 }
 
@@ -2842,6 +2900,7 @@ function ensureReaderPen() {
     onCard: (box) => makeCardsFromBox(box),
     onCapture: (box) => captureFromPen(readerPen, box),
   });
+  setPenMode(penMode);        // 창을 바꿔 펜을 새로 만들어도 모드는 유지된다
 }
 
 // ---------- 읽다가 바로 카드 만들기 ----------
@@ -3183,7 +3242,6 @@ async function startDeck(cards, title, { backTo = 'list' } = {}) {
 document.getElementById('readBack').onclick = () => {
   if (readerPen) { readerPen.destroy(); readerPen = null; }
   keepAwake(false);
-  stopTts();
   panes = [];
   activePane = 0;
   reader = null;
@@ -3195,13 +3253,30 @@ document.getElementById('readPrev').onclick = () => {
 document.getElementById('readNext').onclick = () => {
   if (reader && reader.secIdx < reader.note.sections.length - 1) { reader.secIdx++; renderReader(); }
 };
-// 읽기 모드에선 펜이 항상 살아 있다 — 이 버튼은 지우개 토글로만 쓴다.
+// 펜 버튼 — 누를 때마다 **펜 → 지우개 → 끔**으로 돈다(2026-10-13).
+//
+// 전에는 "펜은 항상 켜져 있고 이 버튼은 지우개 토글"이었다. 버튼 모양이 늘 펜이라
+// 지금 뭐가 켜져 있는지 알 수 없었고, 펜을 아예 끄는 길도 없었다.
+// 이제 **아이콘이 지금 모드를 보여준다** — 지우개면 지우개 모양으로 바뀐다.
+let penMode = 'pen';          // 'pen' | 'erase' | 'off'
+
+function setPenMode(m) {
+  penMode = m;
+  const btn = document.getElementById('readPen');
+  btn.classList.toggle('erasing', m === 'erase');     // 아이콘이 지우개로 바뀐다
+  btn.classList.toggle('active', m !== 'off');
+  btn.title = m === 'pen' ? '펜 (눌러서 지우개)'
+    : m === 'erase' ? '지우개 (눌러서 끔)' : '펜 꺼짐 (눌러서 펜)';
+  if (readerPen) {
+    readerPen.setErasing(m === 'erase');
+    readerPen.canvas.classList.toggle('pen-off', m === 'off');
+  }
+}
+
 document.getElementById('readPen').onclick = () => {
-  if (!readerPen) return;
-  const on = !readerPen.erasing;
-  readerPen.setErasing(on);
-  document.getElementById('readPen').classList.toggle('active', on);
-  toast(on ? '지우개 켜짐' : '펜으로 돌아왔습니다');
+  const next = penMode === 'pen' ? 'erase' : penMode === 'erase' ? 'off' : 'pen';
+  setPenMode(next);
+  toast(next === 'pen' ? '펜' : next === 'erase' ? '지우개' : '펜 끔');
 };
 document.getElementById('readAwake').onclick = async () => {
   const btn = document.getElementById('readAwake');
@@ -3362,27 +3437,6 @@ async function askInReader(term) {
     status.textContent = '';
   }
 }
-
-// ---- TTS ----
-let ttsOn = false;
-function stopTts() {
-  try { window.speechSynthesis.cancel(); } catch {}
-  ttsOn = false;
-  document.getElementById('readTts').classList.remove('active');
-}
-document.getElementById('readTts').onclick = () => {
-  if (!('speechSynthesis' in window)) { toast('이 기기는 읽어주기를 지원하지 않습니다.'); return; }
-  if (ttsOn) { stopTts(); return; }
-  const text = document.getElementById('readBody').textContent.replace(/\s+/g, ' ').trim();
-  if (!text) return;
-  const u = new SpeechSynthesisUtterance(text.slice(0, 4000));
-  u.lang = 'ko-KR';
-  u.rate = 1.05;
-  u.onend = () => stopTts();
-  window.speechSynthesis.speak(u);
-  ttsOn = true;
-  document.getElementById('readTts').classList.add('active');
-};
 
 // ---- 플래시카드 ----
 async function loadCardsTab() {
