@@ -121,8 +121,22 @@ const mk = (id, over = {}) => ({
   ok('10-13에 강의 4개', d1013.length === 4, `${d1013.length}개: ${d1013.map((x) => x.name).join(' / ')}`);
   ok('10-13 예습노트 링크가 붙는다',
     d1013.filter((g) => g.note).length === 4, JSON.stringify(d1013.map((g) => g.note)));
-  ok('예습노트 링크가 실제 파일명 꼴',
-    d1013.every((g) => /^\d{4}_응급중환자_/.test(g.note)), JSON.stringify(d1013.map((g) => g.note)));
+  // 파일명 "꼴"을 재면 안 된다 — 예습노트가 위키로 **승격**되면 날짜 머리가 떨어진다
+  // (2026-10-13: 임상독성학 총론·각론이 그렇게 됐고 이 검사가 거짓 실패를 냈다).
+  // 진짜 중요한 건 그 링크가 **실제로 열리는 파일**을 가리키느냐다.
+  {
+    const roots = ['98_예습노트_보관/응급_중환자', '02_Wiki/응급_중환자'];
+    const have = new Set();
+    for (const r of roots) {
+      try {
+        for (const f of readdirSync(`${VAULT}/${r}`)) {
+          if (f.endsWith('.md')) have.add(f.replace(/\.md$/, '').normalize('NFC'));
+        }
+      } catch {}
+    }
+    const miss = d1013.map((g) => g.note).filter((n) => !have.has(String(n).normalize('NFC')));
+    ok('**예습노트 링크가 실제 파일을 가리킨다**', miss.length === 0, JSON.stringify(miss));
+  }
   ok('교시·담당이 들어온다',
     d1013.every((g) => g.period) && d1013.every((g) => /응급의학과/.test(g.teacher)));
 

@@ -64,7 +64,8 @@ body {
 .hidden { display: none !important; }
 
 /* ---- 공통 ---- */
-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0 14px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: calc(4px + var(--win-top)) 0 14px; }
 header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icon-btn { border: none; background: none; font-size: 20px; cursor: pointer; color: var(--sub); padding: 8px; border-radius: 8px; min-width: 40px; min-height: 40px; }
 .icon-btn:active { background: var(--badge-bg); }
@@ -927,7 +928,7 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
   position: sticky; top: 0; z-index: 60;
   gap: 5px;
   background: var(--bg);
-  padding-top: calc(env(safe-area-inset-top) + 4px);
+  padding-top: calc(env(safe-area-inset-top) + 4px + var(--win-top));
   margin: calc(-1 * (env(safe-area-inset-top) + 10px)) -10px 0;
   padding-left: 10px; padding-right: 10px;
   border-bottom: 1px solid var(--border);
@@ -2041,11 +2042,13 @@ body.dragging-doc .doc-drawer { opacity: .55; }
 .dd-hint { font-size: 11.5px; padding: 0 14px 8px; }
 .dd-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px calc(env(safe-area-inset-bottom) + 12px); }
 .dd-item {
-  display: block; text-align: left; margin-left: 10px; width: calc(100% - 10px);
+  /* 이름 · 날짜 · 갈래를 한 줄에 — 가운데 이름만 늘어난다 */
+  display: flex; align-items: baseline; gap: 7px;
+  text-align: left; margin-left: 10px; width: calc(100% - 10px);
   min-height: 40px; padding: 9px 10px; margin-bottom: 2px;
   background: none; border: 1px solid transparent; border-radius: 9px;
   font-family: inherit; font-size: 13px; color: var(--text); cursor: grab;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  overflow: hidden;
 }
 .dd-item:active { background: var(--badge-bg); cursor: grabbing; }
 
@@ -2139,14 +2142,19 @@ body.dragging-doc .doc-drawer { opacity: .55; }
 .txt-btn:active { background: var(--card); }
 .txt-btn.active { background: var(--card); color: var(--accent); box-shadow: var(--sh-1); }
 
-/* 아이콘 버튼 — 경계는 주되 작고 가볍게 */
-#readScreen > header .icon-btn {
+/* 아이콘 버튼 — 경계는 주되 작고 가볍게.
+   도구막대가 머리줄에서 떨어져 나왔으므로 둘 다 같은 모양이어야 한다(2026-10-13). */
+#readScreen > header .icon-btn,
+.read-tools .icon-btn {
   min-width: 32px; min-height: 32px; padding: 5px;
   border: 1px solid var(--border); background: var(--card); border-radius: 8px;
 }
-#readScreen > header .icon-btn .ic { width: 19px; height: 19px; }
-#readScreen > header .icon-btn:active { background: var(--badge-bg); }
-#readScreen > header .icon-btn.active {
+#readScreen > header .icon-btn .ic,
+.read-tools .icon-btn .ic { width: 19px; height: 19px; }
+#readScreen > header .icon-btn:active,
+.read-tools .icon-btn:active { background: var(--badge-bg); }
+#readScreen > header .icon-btn.active,
+.read-tools .icon-btn.active {
   background: var(--accent); border-color: var(--accent); color: #fff;
 }
 #readScreen > header #readBack {
@@ -2172,8 +2180,10 @@ body.dragging-doc .doc-drawer { opacity: .55; }
    머리줄 아이콘이 9개까지 늘었는데 늘 쓰는 건 서넛뿐이다. 나머지는 접는다.
    접힌 메뉴는 **글씨로 설명까지** 붙일 수 있어 오히려 찾기 쉽다. */
 .more-menu {
-  position: absolute; right: 10px; z-index: 80;
-  margin-top: 4px; width: min(290px, calc(100vw - 24px));
+  /* 도구막대가 떠다니므로 메뉴도 그 버튼을 따라간다(자리는 JS가 잡는다) */
+  position: fixed; z-index: 95;
+  left: var(--mm-x, auto); top: var(--mm-y, auto);
+  width: min(290px, calc(100vw - 24px));
   padding: 6px;
   background: var(--card); border: 1px solid var(--border);
   border-radius: var(--r-3); box-shadow: var(--sh-3);
@@ -2293,3 +2303,60 @@ mark.find-mark { background: #fde68a; color: inherit; border-radius: 2px; paddin
   padding: 4px 9px; font-size: 12px; border-radius: 999px;
   background: var(--accent); color: #fff;
 }
+
+/* ── 창 버튼(●●●) 자리 ──
+   아이패드에서 창을 줄여 쓰면 시스템이 왼쪽 위에 창 버튼을 그려 넣는다. 그게
+   뒤로가기·찾기를 덮어 **아예 못 눌렀다**(2026-10-13). 다른 앱들처럼 머리줄을
+   그 아래로 한 칸 내린다. 변수 하나라 화면마다 빠뜨릴 일이 없다. */
+:root { --win-top: 0px; }
+body[data-win-controls] { --win-top: 32px; }
+
+/* ── 떠 있는 도구막대 ──
+   머리줄에 박아두면 창을 줄일 때마다 가린다. 떼어내 네 변 중 아무 데나 붙인다. */
+/* ⚠️ #readScreen 안에 두면 화면 전환 애니메이션(transform)이 걸린 동안
+   position:fixed의 기준이 그 section으로 바뀌어 막대가 같이 스크롤된다. 최상위에 둔다. */
+.read-tools {
+  position: fixed; z-index: 90; display: none;
+  align-items: center; gap: 2px;
+  padding: 4px 6px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 999px; box-shadow: var(--sh-2);
+}
+body[data-screen="readScreen"] .read-tools { display: flex; }
+.read-tools[data-dock="tr"] { top: calc(8px + var(--win-top)); right: 12px; }
+.read-tools[data-dock="tl"] { top: calc(8px + var(--win-top)); left: 12px; }
+.read-tools[data-dock="br"] { bottom: calc(74px + env(safe-area-inset-bottom)); right: 12px; }
+.read-tools[data-dock="bl"] { bottom: calc(74px + env(safe-area-inset-bottom)); left: 12px; }
+.read-tools[data-dock="l"],
+.read-tools[data-dock="r"] { top: 50%; transform: translateY(-50%); flex-direction: column; }
+.read-tools[data-dock="l"] { left: 10px; }
+.read-tools[data-dock="r"] { right: 10px; }
+.read-tools[data-dock="free"] { left: var(--rt-x, 50%); top: var(--rt-y, 10%); transform: none; }
+.read-tools.dragging { opacity: .9; box-shadow: var(--sh-3); }
+.rt-grip {
+  flex: 0 0 auto; width: 14px; height: 22px; margin: 0 2px; border-radius: 4px;
+  cursor: grab; touch-action: none; opacity: .4;
+  background:
+    radial-gradient(circle, currentColor 1.1px, transparent 1.2px) 3px 5px / 5px 6px repeat;
+}
+.read-tools[data-dock="l"] .rt-grip,
+.read-tools[data-dock="r"] .rt-grip { width: 22px; height: 14px; }
+.rt-grip:active { cursor: grabbing; }
+
+/* ── 서랍: 지금 문서의 짝 ──
+   위키가 많아지면 "이 강의의 암기법"을 이름으로 찾는 데 시간이 걸린다(2026-10-13).
+   같은 강의의 다른 얼굴(암기법·Q&A·예습노트)을 맨 위에 모아 둔다. */
+.dd-pair-head {
+  padding: 10px 4px 5px; font-size: 11px; font-weight: 700;
+  color: var(--accent); letter-spacing: .02em;
+}
+.dd-item .dd-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-item .dd-date {
+  flex: 0 0 auto; font-size: 10.5px; color: var(--sub);
+  font-variant-numeric: tabular-nums;
+}
+.dd-item .dd-kind {
+  flex: 0 0 auto; font-size: 10.5px; color: var(--sub);
+  background: var(--badge-bg); border-radius: 6px; padding: 1px 6px;
+}
+.dd-item.pair { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); }

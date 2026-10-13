@@ -205,6 +205,19 @@ ok('.penlayer 규칙이 하나뿐', penLayerRules === 1, `${penLayerRules}개`);
     const names = [...src.matchAll(/^(?:let|const|function)\s+([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]);
     const dup = [...new Set(names.filter((n, i) => names.indexOf(n) !== i))];
     ok(`${f}: 최상위 이름이 중복되지 않는다`, dup.length === 0, dup.join(', '));
+
+    // ★ **가져온 이름과 부딪히는 것**도 같은 죽음이다. app.js가 reader.js에서
+    //   noteKey를 가져다 쓰는데 같은 이름으로 함수를 또 만들어 앱이 통째로 안 떴다
+    //   (2026-10-13). 선언만 보면 중복이 아니라 위 검사로는 안 잡힌다.
+    const imported = [];
+    for (const m of src.matchAll(/^import\s*\{([^}]*)\}\s*from/gms)) {
+      for (const piece of m[1].split(',')) {
+        const nm = piece.trim().split(/\s+as\s+/).pop().trim();
+        if (nm) imported.push(nm);
+      }
+    }
+    const clash = imported.filter((n) => names.includes(n));
+    ok(`${f}: 가져온 이름을 다시 선언하지 않는다`, clash.length === 0, clash.join(', '));
   }
 }
 

@@ -2545,17 +2545,19 @@ async function openDocDrawer() {
   dd.classList.remove('hidden');
   document.getElementById('docScrim').classList.remove('hidden');
   const list = document.getElementById('docList');
-  if (list.dataset.filled !== '1') {
+  // 목록은 한 번만 받아오지만 **그릴 때마다 다시 그린다** — 맨 위의 "지금 문서의 짝"과
+  // 과목 순서가 지금 열어둔 노트에 달려 있어서, 한 번 그려두면 옛 노트 기준으로 굳는다.
+  if (!list.__groups) {
     list.innerHTML = '<p class="muted" style="padding:12px">불러오는 중…</p>';
     try {
-      const groups = await noteList(false);
-      list.dataset.filled = '1';
-      renderDocList(groups, '');
-      list.__groups = groups;
+      list.__groups = await noteList(false);
     } catch (e) {
       list.innerHTML = `<p class="muted" style="padding:12px">${escapeText(e.message)}</p>`;
+      return;
     }
   }
+  document.getElementById('docSearch').value = '';
+  renderDocList(list.__groups, '');
   setTimeout(() => document.getElementById('docSearch').focus(), 80);
 }
 function closeDocDrawer() {
@@ -2565,22 +2567,96 @@ function closeDocDrawer() {
 
 let docOpenGroups = null;      // 펼쳐둔 과목(없으면 지금 보는 과목만)
 
+/**
+ * 노트 이름에서 "같은 강의인가"를 가르는 열쇠를 뽑는다.
+ *
+ *   02_Wiki/응급_중환자/응급중환자_기본소생술BLS.md
+ *   02_Wiki/응급_중환자/암기법/응급중환자_기본소생술BLS_암기법.md
+ *   98_예습노트_보관/응급_중환자/1012_응급중환자_기본소생술BLS.md
+ * 셋은 같은 강의의 세 얼굴이다 — 날짜 머리와 종류 꼬리를 떼면 같은 말이 된다.
+ */
+function lectureKey(name) {
+  return String(name).normalize('NFC')
+    .replace(/^\d{3,4}_/, '')
+    .replace(/_(암기법|QA|Q&A|퀴즈|요약|정리)$/i, '')
+    .replace(/[^0-9A-Za-z가-힣]/g, '')
+    .toLowerCase();
+}
+/** 이름 앞의 날짜 머리(1012_) → "10/12". 없으면 ''. */
+function noteDate(name) {
+  const m = String(name).match(/^(\d{2})(\d{2})_/);
+  return m ? `${Number(m[1])}/${Number(m[2])}` : '';
+}
+/** 노트가 어떤 갈래인가 — 서랍에서 한눈에 가르려고 쓴다. */
+function noteKind(path, name) {
+  if (/\/암기법\//.test(path) || /_암기법$/.test(name)) return { ic: '🧠', t: '암기법' };
+  if (/\/QA\//.test(path) || /_QA$/i.test(name)) return { ic: '❓', t: 'Q&A' };
+  if (path.startsWith('98_예습노트_보관')) return { ic: '📝', t: '예습' };
+  if (/\/국시종합\//.test(path)) return { ic: '🎓', t: '국시' };
+  return { ic: '📘', t: '위키' };
+}
+
+/**
+ * 지금 보는 노트의 **짝** — 같은 강의의 다른 얼굴들.
+ *
+ * 위키가 쌓이면 "이 강의의 암기법"을 이름으로 찾는 데 시간이 걸린다(2026-10-13 지적).
+ * 이름 규칙이 이미 일정하니 계산으로 짝을 지어 맨 위에 올려 둔다.
+ */
+function pairedNotes(groups) {
+  if (!(reader && reader.note)) return [];
+  const mine = reader.note.path;
+  const key = lectureKey(reader.note.title || mine.split('/').pop().replace(/\.md$/, ''));
+  if (key.length < 6) return [];
+  const out = [];
+  for (const g of groups || []) {
+    for (const n of g.notes || []) {
+      if (n.path === mine) continue;
+      const k = lectureKey(n.name);
+      // 똑같거나, 한쪽이 다른 쪽을 품으면 짝으로 본다(예습노트는 제목이 짧게 줄기도 한다)
+      const hit = k === key || (k.length >= 8 && key.includes(k)) || (key.length >= 8 && k.includes(key));
+      if (hit) out.push({ ...n, ...noteKind(n.path, n.name), exact: k === key });
+    }
+  }
+  const rank = { 암기법: 0, 'Q&A': 1, 위키: 2, 국시: 3, 예습: 4 };
+  return out.sort((a, b) => (b.exact - a.exact) || (rank[a.t] - rank[b.t])).slice(0, 8);
+}
+
 function renderDocList(groups, q) {
   const list = document.getElementById('docList');
   const needle = String(q || '').trim().toLowerCase();
   list.innerHTML = '';
 
   // 지금 보고 있는 노트와 **같은 과목**을 맨 위로 — 응급을 보는 중이면 응급이 먼저다.
+  // 암기법·QA는 `응급_중환자 · 암기법`이라는 **별도 묶음**이라 과목 이름만 보면 안 걸렸다 —
+  // 그래서 "노트를 눌러도 암기법이 바로 안 나온다"가 됐다(2026-10-13). 밑동만 보고 가른다.
   const here = reader && reader.note ? reader.note.path.split('/') : [];
   const hereSubject = here[1] || '';
   const hereRoot = here[0] || '';
+  const base = (x) => String(x).split(' · ')[0];
   const sorted = [...groups].sort((a, b) => {
-    const sa = a.subject === hereSubject, sb = b.subject === hereSubject;
+    const sa = base(a.subject) === hereSubject, sb = base(b.subject) === hereSubject;
     if (sa !== sb) return sa ? -1 : 1;
+    // 같은 과목 안에서는 암기법 → Q&A → 본문 순 — 자주 여는 것이 위로
+    if (sa && sb) {
+      const r = (x) => (/암기법$/.test(x.subject) ? 0 : /QA$/.test(x.subject) ? 1 : 2);
+      if (r(a) !== r(b)) return r(a) - r(b);
+    }
     const ra = a.root === hereRoot, rb = b.root === hereRoot;
     if (ra !== rb) return ra ? -1 : 1;
     return 0;
   });
+
+  // ── 지금 문서의 짝 ──
+  if (!needle) {
+    const pairs = pairedNotes(groups);
+    if (pairs.length) {
+      const head = document.createElement('div');
+      head.className = 'dd-pair-head';
+      head.textContent = '지금 문서의 짝';
+      list.appendChild(head);
+      for (const n of pairs) list.appendChild(docItem(n, true));
+    }
+  }
 
   if (docOpenGroups === null) docOpenGroups = new Set();
 
@@ -2589,7 +2665,7 @@ function renderDocList(groups, q) {
     const hits = g.notes.filter((n) => !needle || n.name.toLowerCase().includes(needle));
     if (!hits.length) continue;
     const key = `${g.root}|${g.subject}`;
-    const isHere = g.subject === hereSubject && g.root === hereRoot;
+    const isHere = base(g.subject) === hereSubject && g.root === hereRoot;
     // 지금 보는 과목만 펼쳐둔다. 검색 중에는 걸린 것을 다 펼친다 — 접힌 채로는
     // 찾았는지 알 수가 없다(2026-10-13 요청).
     const open = !!needle || isHere || docOpenGroups.has(key);
@@ -2599,8 +2675,11 @@ function renderDocList(groups, q) {
     head.innerHTML = `<span class="dd-caret">${open ? '▾' : '▸'}</span>`
       + `<span class="dd-gname"></span><span class="dd-gn">${hits.length}</span>`;
     head.querySelector('.dd-gname').textContent =
-      `${ROOT_LABEL[g.root] || g.root} · ${g.subject.replace(/_/g, ' ')}`
-      + (isHere ? '  — 지금 보는 과목' : '');
+      // 지금 과목의 묶음들은 이름을 짧게 — `위키 · 응급 중환자 · 암기법 — 지금 보는 과목`이
+      // 네 줄 연달아 나오면 정작 무엇이 다른지가 안 보인다. 테두리 색이 이미 "여기"를 말한다.
+      (isHere
+        ? (g.subject.includes(' · ') ? g.subject.split(' · ').slice(1).join(' · ') : '지금 보는 과목')
+        : `${ROOT_LABEL[g.root] || g.root} · ${g.subject.replace(/_/g, ' ')}`);
     head.onclick = () => {
       if (docOpenGroups.has(key)) docOpenGroups.delete(key); else docOpenGroups.add(key);
       renderDocList(groups, document.getElementById('docSearch').value);
@@ -2609,38 +2688,60 @@ function renderDocList(groups, q) {
     if (!open) continue;
 
     hits.slice(0, needle ? 40 : 200).forEach((n) => {
-      const b = document.createElement('button');
-      b.className = 'dd-item';
-      b.textContent = n.name;
-      b.title = n.name;
-      b.draggable = true;
-      b.onclick = async () => {
-        closeDocDrawer();
-        try {
-          const note = await loadNote(n.path);
-          openInPane(note, { pane: activePane });
-          renderPanes();
-        } catch (e) { toast(`노트를 열지 못했습니다: ${e.message}`); }
-      };
-      b.addEventListener('dragstart', (e) => {
-        docDragNote = n;
-        e.dataTransfer.effectAllowed = 'copy';
-        e.dataTransfer.setData('text/plain', n.path);
-        document.getElementById('readPanes').classList.add('drop-ready');
-        document.body.classList.add('dragging-doc');
-      });
-      b.addEventListener('dragend', () => {
-        docDragNote = null;
-        document.body.classList.remove('dragging-doc');
-        clearDropHint();
-      });
-      list.appendChild(b);
+      list.appendChild(docItem(n, false));
       shown++;
     });
   }
   if (!shown && !list.children.length) {
     list.innerHTML = '<p class="muted" style="padding:12px">찾는 노트가 없습니다.</p>';
   }
+}
+
+/** 서랍의 노트 한 줄. 짝 목록과 과목 목록이 **같은 것**을 쓴다(동작이 갈라지지 않게). */
+function docItem(n, asPair) {
+  const b = document.createElement('button');
+  b.className = `dd-item${asPair ? ' pair' : ''}`;
+  if (asPair) {
+    const ic = document.createElement('span');
+    ic.className = 'dd-kind';
+    const kind = noteKind(n.path, n.name);
+    ic.textContent = `${kind.ic} ${kind.t}`;
+    b.appendChild(ic);
+  }
+  const t = document.createElement('span');
+  t.className = 'dd-name';
+  t.textContent = n.name;
+  b.appendChild(t);
+  const d = noteDate(n.name);
+  if (d) {
+    const dd = document.createElement('span');
+    dd.className = 'dd-date';
+    dd.textContent = d;
+    b.appendChild(dd);
+  }
+  b.title = n.name;
+  b.draggable = true;
+  b.onclick = async () => {
+    closeDocDrawer();
+    try {
+      const note = await loadNote(n.path);
+      openInPane(note, { pane: activePane });
+      renderPanes();
+    } catch (e) { toast(`노트를 열지 못했습니다: ${e.message}`); }
+  };
+  b.addEventListener('dragstart', (e) => {
+    docDragNote = n;
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('text/plain', n.path);
+    document.getElementById('readPanes').classList.add('drop-ready');
+    document.body.classList.add('dragging-doc');
+  });
+  b.addEventListener('dragend', () => {
+    docDragNote = null;
+    document.body.classList.remove('dragging-doc');
+    clearDropHint();
+  });
+  return b;
 }
 
 /**
@@ -2733,14 +2834,28 @@ function toggleMore() {
   const on = m.classList.contains('hidden');
   m.classList.toggle('hidden', !on);
   document.getElementById('readMore').setAttribute('aria-expanded', String(on));
-  if (on) paintMoreStates();
+  if (on) { paintMoreStates(); placeMoreMenu(); }
 }
+/** 도구막대가 어디로 가 있든 ⋯ 버튼 옆에 붙인다. 화면 밖으로는 안 나간다. */
+function placeMoreMenu() {
+  const m = document.getElementById('readMoreMenu');
+  const b = document.getElementById('readMore').getBoundingClientRect();
+  m.style.setProperty('--mm-x', '0px');
+  m.style.setProperty('--mm-y', '0px');
+  requestAnimationFrame(() => {
+    const r = m.getBoundingClientRect();
+    const x = Math.max(8, Math.min(b.right - r.width, innerWidth - r.width - 8));
+    const below = b.bottom + 6;
+    const y = below + r.height < innerHeight - 8 ? below : Math.max(8, b.top - r.height - 6);
+    m.style.setProperty('--mm-x', `${x}px`);
+    m.style.setProperty('--mm-y', `${y}px`);
+  });
+}
+
 /** 켜고 끄는 항목은 지금 상태를 보여준다 — 눌러봐야 아는 메뉴는 쓸모가 없다. */
 function paintMoreStates() {
   const awake = document.getElementById('readAwake').classList.contains('active');
   document.getElementById('mmAwake').classList.toggle('on', awake);
-  const cap = !!(readerPen && readerPen.capturing);
-  document.getElementById('mmCapture').classList.toggle('on', cap);
   document.getElementById('mmTts').classList.toggle('on', ttsOn);
 }
 
@@ -2754,7 +2869,6 @@ document.addEventListener('pointerdown', (e) => {
 const mm = (id, fn) => { document.getElementById(id).onclick = () => { closeMore(); fn(); }; };
 mm('mmCards', openCardManager);
 mm('mmScrap', openScrap);
-mm('mmCapture', () => document.getElementById('readCapture').click());
 mm('mmAwake', () => document.getElementById('readAwake').click());
 mm('mmTts', () => toggleTts());
 mm('mmTop', () => scrollReadTop());
@@ -3164,7 +3278,7 @@ function readerCardMode(on) {
   if (!readerPen) return;
   readerPen.setCarding(on);
   document.getElementById('readMakeCard').classList.toggle('active', on);
-  document.getElementById('readCapture').classList.remove('active');
+  capBtns().forEach((b) => b.classList.remove('active'));
   document.getElementById('readPen').classList.remove('active');
   capToast(on ? '펜으로 네모를 치면 그 범위로 카드를 만듭니다' : '카드 만들기 끔');
 }
@@ -3177,14 +3291,18 @@ document.getElementById('readMakeCard').onclick = () => {
   readerCardMode(!readerPen.carding);
 };
 
+// 영역 복사 버튼이 둘이다 — 도구막대에 나와 있는 것(readShot)과, 옛 코드가 부르는
+// 숨은 것(readCapture). 둘 다 같은 상태를 보여야 "켜졌나?"가 헷갈리지 않는다.
+const capBtns = () => ['readShot', 'readCapture'].map((id) => document.getElementById(id)).filter(Boolean);
 document.getElementById('readCapture').onclick = () => {
   if (!readerPen) return;
   const on = !readerPen.capturing;
   readerPen.setCapturing(on);
-  document.getElementById('readCapture').classList.toggle('active', on);
+  capBtns().forEach((b) => b.classList.toggle('active', on));
   document.getElementById('readMakeCard').classList.remove('active');
   capToast(on ? '펜으로 네모를 치면 이미지로 복사됩니다' : '캡처 모드 끔');
 };
+document.getElementById('readShot').onclick = () => document.getElementById('readCapture').click();
 
 function makeCardsFromBox(box) {
   if (!reader) return;
@@ -5417,6 +5535,101 @@ function alertBox(text) {
 }
 
 
+// ═══════════ 떠 있는 도구막대 · 창 버튼 자리 ═══════════
+//
+// 왜 이렇게 바꿨나(2026-10-13): 아이패드에서 창을 줄여 쓰면 시스템이 왼쪽 위에
+// ●●● 창 버튼을 그려 넣는다. 그게 **뒤로가기와 찾기를 덮어서 아예 못 눌렀다**.
+// 다른 앱들은 머리줄을 그 아래로 한 칸 내려서 푼다 — 같은 방식을 쓴다.
+// 그리고 도구는 머리줄에서 떼어내 떠 있게 했다. 네 변 중 아무 데나 붙일 수 있어서
+// 가려지면 옮기면 된다. (사용자 제안: "드래그해서 좌 우 상 하 고정된 폭으로 위치바꾸기")
+
+let winMode = 'auto';            // auto | on | off
+
+/** 창 버튼이 머리줄을 덮는 상황인가 — 그러면 머리줄을 그만큼 내린다. */
+function updateWinControls() {
+  let on;
+  if (winMode === 'on') on = true;
+  else if (winMode === 'off') on = false;
+  else {
+    const standalone = matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true;
+    // 전체 화면이면 창 버튼이 없다. 조금이라도 줄여 쓰면 생긴다.
+    on = standalone && (window.innerWidth < screen.width - 8 || window.innerHeight < screen.height - 8);
+  }
+  document.body.toggleAttribute('data-win-controls', on);
+}
+addEventListener('resize', updateWinControls);
+
+async function loadWinMode() {
+  winMode = (await kvGet('win_controls')) || 'auto';
+  document.querySelectorAll('#winSeg .btn').forEach((b) =>
+    b.classList.toggle('active', b.dataset.win === winMode));
+  document.getElementById('winVal').textContent =
+    { auto: '자동', on: '비움', off: '안 비움' }[winMode];
+  updateWinControls();
+}
+document.querySelectorAll('#winSeg .btn').forEach((b) => {
+  b.onclick = async () => { await kvSet('win_controls', b.dataset.win); await loadWinMode(); };
+});
+
+// ── 도구막대 옮기기 ──
+// 네 변 중 하나에 붙는다(tl/tr/bl/br은 모서리, l/r은 세로 막대).
+const DOCKS = ['tr', 'tl', 'br', 'bl', 'l', 'r'];
+
+function dockTools(dock) {
+  const el = document.getElementById('readTools');
+  if (!el || !DOCKS.includes(dock)) return;
+  el.dataset.dock = dock;
+  el.style.removeProperty('--rt-x');
+  el.style.removeProperty('--rt-y');
+  localStorage.setItem('read_tools_dock', dock);
+}
+
+/** 놓은 자리에서 가장 가까운 변을 고른다. */
+function nearestDock(cx, cy) {
+  const W = innerWidth, H = innerHeight;
+  const d = { 좌: cx, 우: W - cx, 상: cy, 하: H - cy };
+  const side = Object.keys(d).reduce((a, b) => (d[a] <= d[b] ? a : b));
+  if (side === '좌') return cy < H / 2 ? 'l' : 'bl';
+  if (side === '우') return cy < H / 2 ? 'r' : 'br';
+  if (side === '상') return cx < W / 2 ? 'tl' : 'tr';
+  return cx < W / 2 ? 'bl' : 'br';
+}
+
+function initReadTools() {
+  const el = document.getElementById('readTools');
+  const grip = document.getElementById('rtGrip');
+  if (!el || !grip) return;
+  dockTools(localStorage.getItem('read_tools_dock') || 'tr');
+
+  grip.addEventListener('pointerdown', (e) => {
+    const r = el.getBoundingClientRect();
+    const dx = e.clientX - r.left, dy = e.clientY - r.top;
+    grip.setPointerCapture(e.pointerId);
+    el.classList.add('dragging');
+    const move = (ev) => {
+      el.dataset.dock = 'free';
+      el.style.setProperty('--rt-x', `${Math.max(4, Math.min(ev.clientX - dx, innerWidth - r.width - 4))}px`);
+      el.style.setProperty('--rt-y', `${Math.max(4, Math.min(ev.clientY - dy, innerHeight - r.height - 4))}px`);
+    };
+    const up = (ev) => {
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', up);
+      grip.removeEventListener('pointercancel', up);
+      el.classList.remove('dragging');
+      const rr = el.getBoundingClientRect();
+      dockTools(nearestDock(rr.left + rr.width / 2, rr.top + rr.height / 2));
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+    e.preventDefault();
+  });
+  // 두 번 누르면 원래 자리(오른쪽 위)로 — 어디로 갔는지 모를 때 되돌리는 길
+  grip.addEventListener('dblclick', () => dockTools('tr'));
+}
+initReadTools();
+
 // ═══════════ 키보드 · 마우스 ═══════════
 //
 // 왜 필요한가: 아이패드에 키보드를 붙이거나 MX Master 같은 버튼 많은 마우스를
@@ -5636,6 +5849,7 @@ function hideSplash() {
   window.__t0 = Date.now();
   await applyTheme();
   await loadDisplay();
+  await loadWinMode();
   await loadReadPos();
   initServiceWorker();
   gem.loadDeadModels().catch(() => {});

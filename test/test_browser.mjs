@@ -1336,12 +1336,25 @@ await run('카드 만들기', async () => {
   out.push({ name: '스크롤해도 도구모음이 화면에 남는다',
     ok: Math.abs(head.getBoundingClientRect().top) <= 2,     // 테두리·반올림으로 1px은 흔들린다
     detail: `top=${Math.round(head.getBoundingClientRect().top)}` });
+  // 도구는 떠 있는 막대로 나왔다 — 스크롤해도 제자리에 있어야 한다(2026-10-13).
+  // 읽기 화면에서만 뜨므로 그 상태를 잠깐 켜고 잰다.
+  const prevScreen = document.body.dataset.screen;
+  document.body.dataset.screen = 'readScreen';
+  await new Promise((r) => setTimeout(r, 30));
   const mk = document.getElementById('readMakeCard').getBoundingClientRect();
   out.push({ name: '카드 버튼이 계속 눌린다',
-    ok: mk.top >= 0 && mk.bottom <= window.innerHeight && mk.width > 10 });
-  // 캡처는 머리줄에서 빠지고 더보기 메뉴로 들어갔다(2026-10-13) — 기능은 살아 있어야 한다
+    ok: mk.top >= 0 && mk.bottom <= window.innerHeight && mk.width > 10,
+    detail: `top=${Math.round(mk.top)} w=${Math.round(mk.width)}` });
+  out.push({ name: '도구막대가 떠 있다(화면에 고정)',
+    ok: getComputedStyle(document.getElementById('readTools')).position === 'fixed' });
+  out.push({ name: '**읽기 화면에서만 보인다**(다른 화면을 가리지 않게)',
+    ok: (document.body.dataset.screen = 'listScreen',
+      getComputedStyle(document.getElementById('readTools')).display === 'none') });
+  document.body.dataset.screen = prevScreen || '';
+  // 영역 복사는 자주 쓴다 — 메뉴 안이 아니라 밖에 있어야 한다(2026-10-13)
   out.push({ name: '캡처 기능이 남아 있다', ok: !!document.getElementById('readCapture') });
-  out.push({ name: '캡처를 더보기 메뉴에서 쓸 수 있다', ok: !!document.getElementById('mmCapture') });
+  out.push({ name: '**영역 복사가 도구막대 밖에 나와 있다**',
+    ok: !!document.querySelector('#readTools #readShot') });
   out.push({ name: '도구모음이 본문을 가리지 않는다(불투명 배경)',
     ok: getComputedStyle(head).backgroundColor !== 'rgba(0, 0, 0, 0)',
     detail: getComputedStyle(head).backgroundColor });
@@ -3291,6 +3304,17 @@ await run('분할 읽기', async () => {
     out.push({ name: '아이콘 버튼에 눌릴 경계(테두리)가 있다',
       ok: getComputedStyle(document.getElementById('readPen')).borderStyle === 'solid' });
 
+    // ★ 창을 줄여 쓰면 시스템 ●●● 버튼이 왼쪽 위를 덮는다 — 뒤로가기를 아예 못 눌렀다
+    document.body.setAttribute('data-win-controls', '');
+    const backTop = document.getElementById('readBack').getBoundingClientRect().top;
+    out.push({ name: '창 버튼 자리를 비우면 뒤로가기가 내려온다',
+      ok: backTop >= 30, detail: `${Math.round(backTop)}px` });
+    const toolTop = document.getElementById('readTools').getBoundingClientRect().top;
+    out.push({ name: '도구막대도 같이 내려온다', ok: toolTop >= 30, detail: `${Math.round(toolTop)}px` });
+    document.body.removeAttribute('data-win-controls');
+    out.push({ name: '전체 화면이면 다시 올라간다',
+      ok: document.getElementById('readBack').getBoundingClientRect().top < backTop });
+
     // 펜 — 펜 ↔ 지우개 둘만 돈다. "끔"을 뒀더니 두 번 눌러 꺼진 줄 모르고
     // **선택이 안 되는 것처럼** 보였다(2026-10-13).
     const pen = document.getElementById('readPen');
@@ -3818,6 +3842,112 @@ await run('족보 출제 경향', () => {
   out.push({ name: '족보가 아니면 안 보인다', ok: box.classList.contains('hidden') });
   out.push({ name: '접혀 있다가 펼쳐진다', ok: box.tagName === 'DETAILS' && !box.open });
   out.push({ name: '과목 전체 총평으로 가는 길도 있다', ok: !!document.getElementById('jokboOverview') });
+  return out;
+});
+
+// ══════════ 노트 서랍 — 짝 찾기 · 암기법이 바로 나오는가 (2026-10-13) ══════════
+// "노트 누르면 암기법이 바로 안 나오는 문제가 있음" — 암기법·QA는 `응급_중환자 · 암기법`
+// 이라는 **별도 묶음**이라, 과목 이름만 보고 "지금 보는 과목"을 가르면 안 걸렸다.
+await run('노트 서랍', async () => {
+  const out = [];
+  const d = await import('/js/db.js');
+  // 노트를 실제로 열어봐야 짝·순서를 검사할 수 있다 — 받아오는 길을 가짜로 둔다
+  const a = await import('/js/auth.js');
+  await a.setToken('fake'); await a.setRepo('me/v');
+  const realFetch = window.fetch;
+  window.fetch = async (url, init) => {
+    const u = String(url);
+    if (!u.includes('api.github.com')) return realFetch(url, init);
+    const name = decodeURIComponent(u.split('/contents/')[1] || '').split('/').pop().replace('.md', '');
+    return { ok: true, status: 200, json: async () => ({}),
+      text: async () => `# ${name}\n\n## ${name} 1장\n내용 가\n\n## ${name} 2장\n내용 나\n` };
+  };
+  await d.kvSet('note_index_v2', [
+    { root: '02_Wiki', subject: '두경부_피부', notes: [
+      { name: '두경부피부_이과학', path: '02_Wiki/두경부_피부/두경부피부_이과학.md' }] },
+    { root: '02_Wiki', subject: '응급_중환자', notes: [
+      { name: '응급중환자_기본소생술BLS', path: '02_Wiki/응급_중환자/응급중환자_기본소생술BLS.md' },
+      { name: '응급중환자_환경의학', path: '02_Wiki/응급_중환자/응급중환자_환경의학.md' }] },
+    { root: '02_Wiki', subject: '응급_중환자 · 암기법', notes: [
+      { name: '응급중환자_기본소생술BLS_암기법', path: '02_Wiki/응급_중환자/암기법/응급중환자_기본소생술BLS_암기법.md' }] },
+    { root: '02_Wiki', subject: '응급_중환자 · QA', notes: [
+      { name: '응급중환자_기본소생술BLS_QA', path: '02_Wiki/응급_중환자/QA/응급중환자_기본소생술BLS_QA.md' }] },
+    { root: '02_Wiki', subject: '응급_중환자 · 국시종합', notes: [
+      { name: '심폐소생술', path: '02_Wiki/응급_중환자/국시종합/심폐소생술.md' }] },
+    { root: '98_예습노트_보관', subject: '응급_중환자', notes: [
+      { name: '1012_응급중환자_기본소생술BLS', path: '98_예습노트_보관/응급_중환자/1012_응급중환자_기본소생술BLS.md' }] },
+  ]);
+  document.getElementById('docList').__groups = null;    // 새 목록으로 다시 받게
+  document.getElementById('readDocs').click();
+  await new Promise((r) => setTimeout(r, 600));
+  const names = [...document.querySelectorAll('#docList .dd-gname')].map((x) => x.textContent);
+  out.push({ name: '과목 묶음이 나온다', ok: names.length >= 5, detail: `${names.length}개` });
+
+  // 다른 과목은 접혀 있다 — 그게 맞다(2026-10-13). 펴서 들어간다.
+  out.push({ name: '지금 보는 과목만 펴고 나머지는 접는다',
+    ok: [...document.querySelectorAll('#docList .dd-group')].filter((g) => g.classList.contains('open')).length <= 1 });
+  const grp = [...document.querySelectorAll('#docList .dd-group')]
+    .find((g) => g.querySelector('.dd-gname').textContent === '위키 · 응급 중환자');
+  out.push({ name: '과목을 눌러 펼 수 있다', ok: !!grp });
+  if (!grp) return out;
+  grp.click();
+  await new Promise((r) => setTimeout(r, 120));
+
+  // 응급 BLS를 **실제로 열고** 다시 서랍을 연다 — 짝과 순서는 열어둔 노트에 달려 있다
+  const bls = [...document.querySelectorAll('#docList .dd-item .dd-name')]
+    .find((x) => x.textContent === '응급중환자_기본소생술BLS');
+  out.push({ name: '펼치면 노트가 보인다', ok: !!bls });
+  if (!bls) return out;
+  bls.closest('.dd-item').click();
+  await new Promise((r) => setTimeout(r, 900));
+  out.push({ name: '서랍에서 누르면 그 노트가 열린다',
+    ok: /기본소생술BLS/.test(document.getElementById('readTitle').textContent),
+    detail: document.getElementById('readTitle').textContent });
+  document.getElementById('readDocs').click();
+  await new Promise((r) => setTimeout(r, 400));
+
+  const names2 = [...document.querySelectorAll('#docList .dd-gname')].map((x) => x.textContent);
+  const first3 = names2.slice(0, 3).join(' | ');
+  out.push({ name: '**암기법·QA가 맨 위로 올라온다**(별도 묶음이라 안 걸리던 것)',
+    ok: /암기법/.test(names2[0] || '') && /QA/.test(names2[1] || ''), detail: first3 });
+  out.push({ name: '지금 과목 묶음은 이름을 짧게(무엇이 다른지가 보이게)',
+    ok: names2[0] === '암기법' && names2[2] === '지금 보는 과목', detail: names2.slice(0, 4).join(' | ') });
+
+  // 짝 — 같은 강의의 다른 얼굴
+  const pairHead = document.querySelector('#docList .dd-pair-head');
+  const pairs = [...document.querySelectorAll('#docList .dd-item.pair .dd-name')].map((x) => x.textContent);
+  out.push({ name: '"지금 문서의 짝"을 맨 위에 모은다', ok: !!pairHead });
+  if (pairHead) {
+    out.push({ name: '암기법이 짝으로 잡힌다', ok: pairs.some((n) => /_암기법$/.test(n)),
+      detail: pairs.join(' / ') });
+    out.push({ name: 'Q&A도 잡힌다', ok: pairs.some((n) => /_QA$/.test(n)) });
+    out.push({ name: '날짜 머리가 달라도 예습노트를 찾아낸다',
+      ok: pairs.some((n) => /^1012_/.test(n)) });
+    out.push({ name: '남의 강의는 안 끌어온다', ok: !pairs.some((n) => /환경의학|이과학/.test(n)) });
+    const kinds = [...document.querySelectorAll('#docList .dd-item.pair .dd-kind')].map((x) => x.textContent);
+    out.push({ name: '어떤 갈래인지 적어 둔다', ok: kinds.some((k) => k.includes('암기법')),
+      detail: kinds.join(' ') });
+    out.push({ name: '암기법이 짝 중에서도 맨 앞', ok: /_암기법$/.test(pairs[0]), detail: pairs[0] });
+  }
+  // 날짜 — 위키가 많아지면 언제 것인지가 단서가 된다
+  const dates = [...document.querySelectorAll('#docList .dd-date')].map((x) => x.textContent);
+  out.push({ name: '날짜 머리가 있는 노트는 날짜를 보여준다',
+    ok: dates.includes('10/12'), detail: dates.join(',') });
+
+  // 검색은 그대로 돈다
+  const q = document.getElementById('docSearch');
+  q.value = '환경';
+  q.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 250));
+  const found = [...document.querySelectorAll('#docList .dd-item .dd-name')].map((x) => x.textContent);
+  out.push({ name: '검색하면 걸린 것만 남는다', ok: found.length === 1 && /환경의학/.test(found[0]),
+    detail: found.join(' / ') });
+  out.push({ name: '검색 중에는 짝을 안 띄운다(결과만 보이게)',
+    ok: !document.querySelector('#docList .dd-pair-head') });
+  q.value = '';
+  q.dispatchEvent(new Event('input', { bubbles: true }));
+  document.getElementById('docClose').click();
+  window.fetch = realFetch;
   return out;
 });
 await browser.close();
