@@ -4975,47 +4975,6 @@ await run('아이콘 통일', () => {
   return out;
 });
 
-// 가까이 가면 이름이 뜬다 (2026-10-14 요청: "펜이 근처로 가면 무슨 기능인지 띄워주든가")
-await run('도구 이름표', async () => {
-  const out = [];
-  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
-  document.getElementById('quizScreen').classList.remove('hidden');
-  document.body.dataset.screen = 'quizScreen';
-  await new Promise((r) => setTimeout(r, 120));
-  const bar = document.getElementById('quizTools');
-  bar.classList.remove('near');             // 앞 검사가 켜놨을 수 있다
-  await new Promise((r) => setTimeout(r, 180));
-  const names = [...bar.querySelectorAll('.rt-name')].map((x) => x.textContent);
-  out.push({ name: '버튼마다 이름이 달려 있다', ok: names.length >= 10, detail: `${names.length}개` });
-  out.push({ name: '이름이 설명과 어긋나지 않는다(설명 앞머리를 쓴다)',
-    ok: names.includes('영역 복사') && names.includes('모아두기') && names.includes('고르기'),
-    detail: names.slice(0, 6).join(' · ') });
-  out.push({ name: '이름이 짧다(막대 옆에서 읽히게)',
-    ok: names.every((n) => n.length <= 7),
-    detail: names.filter((n) => n.length > 7).join(' / ') || '전부 7자 이하' });
-
-  const tag = bar.querySelector('.rt-name');
-  out.push({ name: '평소엔 안 보인다', ok: Number(getComputedStyle(tag).opacity) === 0 });
-  out.push({ name: '자리를 안 먹는다(막대가 안 커진다)',
-    ok: getComputedStyle(tag).position === 'absolute' });
-
-  // 가까이 가면 뜬다
-  const r = bar.getBoundingClientRect();
-  document.dispatchEvent(new PointerEvent('pointermove',
-    { clientX: r.left + r.width / 2, clientY: r.bottom + 40, bubbles: true }));
-  await new Promise((rs) => requestAnimationFrame(() => requestAnimationFrame(rs)));
-  out.push({ name: '**가까이 가면 이름이 뜬다**', ok: bar.classList.contains('near') });
-  await new Promise((rs) => setTimeout(rs, 180));
-  out.push({ name: '실제로 보인다', ok: Number(getComputedStyle(tag).opacity) > 0.5,
-    detail: getComputedStyle(tag).opacity });
-
-  // 멀어지면 사라진다 — 늘 떠 있으면 글을 가린다
-  document.dispatchEvent(new PointerEvent('pointermove',
-    { clientX: r.left + r.width / 2, clientY: r.bottom + 400, bubbles: true }));
-  await new Promise((rs) => requestAnimationFrame(() => requestAnimationFrame(rs)));
-  out.push({ name: '멀어지면 사라진다', ok: !bar.classList.contains('near') });
-  return out;
-});
 await browser.close();
 
 // ══════════ 결과 ══════════

@@ -2518,19 +2518,3 @@ li.task.done .task-box { color: var(--accent); }
 #selPop .sel-btn.primary { flex-direction: row; gap: 6px; }
 #selPop .sel-btn.primary .sb-t { font-size: 13px; color: inherit; }
 
-/* 도구막대 이름표 — 가까이 가면 뜬다(2026-10-14).
-   아이콘이 열넷이라 "저게 뭐였더라"가 된다. 평소엔 자리를 안 먹고 숨어 있는다. */
-.read-tools button { position: relative; }
-.rt-name {
-  position: absolute; left: 50%; top: calc(100% + 5px); transform: translateX(-50%);
-  padding: 3px 7px; border-radius: 6px; white-space: nowrap;
-  background: var(--text); color: var(--bg); font-size: 10.5px; font-weight: 600;
-  opacity: 0; pointer-events: none; transition: opacity .12s;
-}
-.read-tools.near .rt-name { opacity: .92; }
-/* 아래에 붙어 있으면 이름표는 위로 — 화면 밖으로 나가지 않게 */
-.read-tools[data-dock="bl"] .rt-name,
-.read-tools[data-dock="br"] .rt-name { top: auto; bottom: calc(100% + 5px); }
-/* 세로로 선 막대는 옆으로 */
-.read-tools[data-dock="l"] .rt-name { left: calc(100% + 6px); top: 50%; transform: translateY(-50%); }
-.read-tools[data-dock="r"] .rt-name { left: auto; right: calc(100% + 6px); top: 50%; transform: translateY(-50%); }
