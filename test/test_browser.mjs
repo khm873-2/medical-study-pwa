@@ -3950,6 +3950,100 @@ await run('노트 서랍', async () => {
   window.fetch = realFetch;
   return out;
 });
+
+// ══════════ 캡처·카드도 "어디까지 잡히는지" 보인다 (2026-10-13) ══════════
+// 글 선택만 미리보기가 있고 캡처는 파란 선만 보였다 — 손을 떼야 어디가 복사됐는지 알았다.
+await run('자르는 틀', async () => {
+  const out = [];
+  const { PenLayer } = await import('/js/pen.js');
+  const card = document.getElementById('readCard');
+  document.querySelectorAll('#readCard .penlayer').forEach((c) => c.remove());
+  // 앞 검사가 열어둔 것들이 화면을 덮고 있으면 펜이 UI 조작으로 넘어간다 — 치우고 시작한다
+  document.getElementById('readScreen').classList.add('toc-off');
+  document.querySelectorAll('.sheet, .ask-float, .more-menu, #docDrawer, #docScrim, #selPop')
+    .forEach((x) => x.classList.add('hidden'));
+  const body = document.getElementById('readBody');
+  body.innerHTML = '<p style="height:160px">자를 거리</p>';
+  await new Promise((rs) => setTimeout(rs, 250));
+  const pen = new PenLayer(card, {});
+  const cv = card.querySelector('.penlayer');
+  const draw = (x1, y1, x2, y2, up) => {
+    const ev = (t, x, y) => cv.dispatchEvent(new PointerEvent(t, {
+      pointerType: 'pen', pointerId: 11, isPrimary: true,
+      buttons: t === 'pointerup' ? 0 : 1, pressure: .5,
+      clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    ev('pointerdown', x1, y1);
+    for (let i = 1; i <= 10; i++) ev('pointermove', x1 + (x2 - x1) * i / 10, y1 + (y2 - y1) * i / 10);
+    if (up) ev('pointerup', x2, y2);
+  };
+  const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const r = body.getBoundingClientRect();
+  const X = Math.round(r.left + 10), Y = Math.round(r.top + 10);
+  out.push({ name: '그릴 자리가 비어 있다(목차·버튼이 안 덮는다)',
+    ok: document.elementFromPoint(X, Y) && card.contains(document.elementFromPoint(X, Y)),
+    detail: ((document.elementFromPoint(X, Y) || {}).className || '?') + '' });
+
+  // ── 캡처 ──
+  pen.setCapturing(true);
+  draw(X, Y, X + 220, Y + 110, false);           // 손을 **떼지 않고** 본다
+  await frame();
+  out.push({ name: '**그리는 중에 틀이 보인다**(손 떼기 전에)', ok: !!pen._previewBox });
+  out.push({ name: '글 선택이 아니라 자르는 틀이다', ok: pen._previewKind === 'crop',
+    detail: String(pen._previewKind) });
+  if (!pen._previewBox) { pen.destroy(); return out; }   // 위 검사가 왜인지 말해준다
+  const b1 = pen._previewBox;
+  out.push({ name: '그은 그대로의 네모다(줄 끝까지 늘이지 않는다)',
+    ok: Math.abs((b1.r - b1.l) - 220) < 14 && Math.abs((b1.b - b1.t) - 110) < 14,
+    detail: `${Math.round(b1.r - b1.l)}×${Math.round(b1.b - b1.t)}` });
+  out.push({ name: '줄 하이라이트는 안 쓴다(그림을 뜨는 것이라)', ok: !pen._coveredLines });
+
+  // 되돌리면 틀도 줄어든다 — 글 선택과 같은 손버릇
+  draw(X, Y, X + 60, Y + 30, false);
+  await frame();
+  const b2 = pen._previewBox;
+  out.push({ name: '되돌리면 틀이 줄어든다', ok: (b2.r - b2.l) < (b1.r - b1.l),
+    detail: `${Math.round(b1.r - b1.l)} → ${Math.round(b2.r - b2.l)}px` });
+
+  // 그린 자국은 가리고 틀만 — 궤적이 가로지르면 뭘 자르는지 안 보인다
+  let drewTrail = false;
+  const realStroke = pen._drawStroke.bind(pen);
+  pen._drawStroke = (st) => { if (!pen.strokes.includes(st)) drewTrail = true; realStroke(st); };
+  pen.redraw();
+  out.push({ name: '궤적 대신 틀만 보여준다', ok: !drewTrail });
+  pen._drawStroke = realStroke;
+
+  // ── 카드 ──
+  pen.setCarding(true);
+  draw(X, Y, X + 200, Y + 90, false);
+  await frame();
+  out.push({ name: '카드 만들기도 같은 틀을 쓴다', ok: !!pen._previewBox });
+  out.push({ name: '카드는 색이 달라 캡처와 구별된다', ok: pen._previewKind === 'card',
+    detail: String(pen._previewKind) });
+
+  // ── 지우개는 틀이 없다 ──
+  pen.setErasing(true);
+  pen._previewBox = null;
+  draw(X, Y, X + 150, Y + 60, true);
+  await frame();
+  out.push({ name: '지우개에는 틀이 안 뜬다', ok: !pen._previewBox });
+
+  // ── 확정되면 틀이 사라진다 ──
+  pen.setCapturing(true);
+  let got = null;
+  pen.onCapture = (box) => { got = box; };
+  draw(X, Y, X + 180, Y + 80, true);
+  await new Promise((rs) => setTimeout(rs, 700));
+  out.push({ name: '손을 떼면 그 범위가 넘어간다', ok: !!got,
+    detail: got ? `${Math.round(got.r - got.l)}×${Math.round(got.b - got.t)}` : '안 넘어옴' });
+  out.push({ name: '**보여준 범위와 자르는 범위가 같다**',
+    ok: got && Math.abs((got.r - got.l) - 180) < 14 && Math.abs((got.b - got.t) - 80) < 14,
+    detail: got ? `${Math.round(got.r - got.l)}×${Math.round(got.b - got.t)}` : '' });
+  out.push({ name: '끝나면 틀을 치운다', ok: !pen._previewBox && !pen._previewKind });
+
+  pen.destroy();
+  body.innerHTML = '';
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════

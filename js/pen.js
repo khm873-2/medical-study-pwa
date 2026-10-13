@@ -223,7 +223,7 @@ export class PenLayer {
       // 취소돼도 이미 충분히 그었으면 선택 후보로 넘긴다
       this._pending = this._pending || [];
       this._pending.push(stroke);
-      this._showPendingBox();
+      this._refreshPreview();
       clearTimeout(this._settle);
       this._settle = setTimeout(() => this._commit(), SETTLE_MS);
       return;
@@ -259,8 +259,24 @@ export class PenLayer {
     if (!raw) { this._previewBox = null; this._coveredLines = null; this.redraw(); return; }
     this._textInBox(raw);                       // _coveredBox / _coveredLines 를 갱신한다
     const box = this._coveredBox || raw;
+    this._previewKind = 'text';
     this._previewBox = (box.r - box.l) * (box.b - box.t) > 0 ? box : null;
     this._lastLive = raw;                           // 확정 때 이 범위를 그대로 쓴다
+    this.redraw();
+  }
+
+  /**
+   * 캡처·카드 모드의 미리보기 — 그은 그대로의 네모.
+   *
+   * 글 선택과 달리 줄 끝까지 늘이지 않는다. 가져가는 게 **화면의 그 네모**라서,
+   * 보이는 것과 잘리는 것이 어긋나면 안 된다.
+   */
+  _showCropBox() {
+    const raw = this._liveBounds();
+    this._coveredLines = null;
+    this._previewKind = this.capturing ? 'crop' : 'card';
+    this._previewBox = raw && (raw.r - raw.l) > 0 && (raw.b - raw.t) > 0 ? raw : null;
+    this._lastLive = raw;
     this.redraw();
   }
 
@@ -313,9 +329,17 @@ export class PenLayer {
     this._liveRaf = requestAnimationFrame(() => {
       this._liveRaf = 0;
       if (!this._cur && !this._pending) return;
-      if (this.erasing || this.capturing || this.carding) return;
-      this._showPendingBox();
+      if (this.erasing) return;
+      // 캡처·카드도 **어디까지 잡히는지** 보여야 한다. 다만 가져가는 것이 글이 아니라
+      // 네모난 영역이라, 줄 단위 하이라이트가 아니라 자르는 틀을 그린다(2026-10-13 요청).
+      this._refreshPreview();
     });
+  }
+
+  /** 지금 모드에 맞는 미리보기를 그린다 — 글은 줄 하이라이트, 캡처·카드는 자르는 틀. */
+  _refreshPreview() {
+    if (this.capturing || this.carding) this._showCropBox();
+    else this._showPendingBox();
   }
 
   /** 모아둔 획을 하나의 선택으로 확정한다. */
@@ -328,6 +352,7 @@ export class PenLayer {
     this._retreating = this._lastRetreating || false;
     this._pending = null;
     this._previewBox = null;
+    this._previewKind = null;
     this._coveredLines = null;
     this._tokCache = null;
     this._lastLive = null;
@@ -491,7 +516,11 @@ export class PenLayer {
       for (const s of all) this._drawStroke(s);
     } else {
       for (const s of this.strokes) this._drawStroke(s);     // 이미 남긴 필기는 그대로
-      this._drawBox(this._previewBox);
+      if (this._previewKind === 'crop' || this._previewKind === 'card') {
+        this._drawCrop(this._previewBox, this._previewKind);
+      } else {
+        this._drawBox(this._previewBox);
+      }
     }
   }
 
@@ -516,6 +545,57 @@ export class PenLayer {
     ctx.strokeStyle = '#f59e0b';
     ctx.lineWidth = 1.5;
     ctx.strokeRect(b.l - 5, b.t - 5, b.r - b.l + 10, b.b - b.t + 10);
+    ctx.restore();
+  }
+
+  /**
+   * 자를 범위를 보여준다 — 사진 앱의 자르기 틀처럼.
+   *
+   * 글 선택(형광펜 느낌)과 **달라 보여야** 한다. 같은 펜질인데 결과가 전혀 다르기
+   * 때문이다: 이쪽은 그림으로 뜬다. 그래서 색을 달리하고 모서리 꺾쇠를 둔다.
+   * 크기도 적어준다 — "어느 정도 범위인지"를 손 떼기 전에 알 수 있게(2026-10-13 요청).
+   */
+  _drawCrop(b, kind) {
+    const { ctx } = this;
+    const color = kind === 'card' ? '#8b5cf6' : '#2563eb';
+    const w = b.r - b.l, h = b.b - b.t;
+    const tooSmall = Math.max(w, h) < BOX_MIN;
+    ctx.save();
+    // ① 안쪽을 옅게 — 어디가 잡히는지 면으로 보인다
+    ctx.fillStyle = kind === 'card' ? 'rgba(139,92,246,.12)' : 'rgba(37,99,235,.12)';
+    ctx.fillRect(b.l, b.t, w, h);
+    // ② 테두리 — 너무 작아 아무 일도 안 일어날 때는 점선으로 "아직 아니다"를 말한다
+    ctx.strokeStyle = tooSmall ? 'rgba(120,120,130,.8)' : color;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash(tooSmall ? [4, 4] : []);
+    ctx.strokeRect(b.l, b.t, w, h);
+    // ③ 모서리 꺾쇠 — 자르는 틀이라는 걸 그림만으로 알 수 있게
+    if (!tooSmall) {
+      const c = Math.max(8, Math.min(18, Math.min(w, h) / 3));
+      ctx.setLineDash([]);
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      for (const [x, y, dx, dy] of [
+        [b.l, b.t, 1, 1], [b.r, b.t, -1, 1], [b.l, b.b, 1, -1], [b.r, b.b, -1, -1],
+      ]) {
+        ctx.beginPath();
+        ctx.moveTo(x + dx * c, y);
+        ctx.lineTo(x, y);
+        ctx.lineTo(x, y + dy * c);
+        ctx.stroke();
+      }
+    }
+    // ④ 크기 — 틀 위쪽에 작은 칩으로. 위가 좁으면 안쪽에 넣는다.
+    const label = tooSmall ? '조금 더 크게' : `${Math.round(w)} × ${Math.round(h)}`;
+    ctx.setLineDash([]);
+    ctx.font = '600 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+    const tw = ctx.measureText(label).width;
+    const bx = Math.max(2, b.l), by = b.t > 20 ? b.t - 18 : b.t + 4;
+    ctx.fillStyle = tooSmall ? 'rgba(90,90,100,.9)' : color;
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(bx, by, tw + 12, 16, 8); ctx.fill(); }
+    else ctx.fillRect(bx, by, tw + 12, 16);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, bx + 6, by + 12);
     ctx.restore();
   }
 
