@@ -598,8 +598,37 @@ await run('신규 기능', async () => {
   // 버튼이 있는가
   const cap = document.getElementById('toolCapture');
   const brk = document.getElementById('toolBreak');
-  out.push({ name: '캡처 버튼이 지우개 옆에 있다',
-    ok: !!cap && cap.previousElementSibling && cap.previousElementSibling.id === 'toolErase' });
+  // 도구를 **묶음으로** 나눴다(2026-10-14): 읽기/표시 · 알아보기 · 남기기 · 그 밖.
+  // 어디 있느냐가 아니라 "묶음 안에 제대로 들어 있나"를 본다.
+  const group = (id) => {
+    const btns = [...document.querySelectorAll('#quizTools > *')];
+    let g = 0;
+    for (const el of btns) {
+      if (el.classList.contains('rt-sep')) { g++; continue; }
+      if (el.id === id) return g;
+    }
+    return -1;
+  };
+  out.push({ name: '도구가 묶음으로 나뉘어 있다',
+    ok: document.querySelectorAll('#quizTools .rt-sep').length >= 2,
+    detail: `칸막이 ${document.querySelectorAll('#quizTools .rt-sep').length}개` });
+  out.push({ name: '펜 관련은 한 묶음(고르기·필기·지우개·되돌리기)',
+    ok: group('toolSelect') === 0 && group('toolErase') === 0 && group('toolUndo') === 0 });
+  out.push({ name: '알아보기가 따로 묶인다(노트·AI·뜯어보기·찾기)',
+    ok: group('toolWiki') === group('toolAi') && group('toolAi') === group('toolBreak')
+      && group('toolBreak') === group('toolFind') && group('toolWiki') > 0,
+    detail: `${group('toolWiki')}번 묶음` });
+  out.push({ name: '남기기가 따로 묶인다(영역 복사·모아두기)',
+    ok: group('toolCapture') === group('toolScrap') && group('toolCapture') > group('toolWiki') });
+  // ★ 고르기와 뜯어보기가 같은 그림이면 뭘 누를지 알 수 없다(2026-10-14 지적)
+  out.push({ name: '**고르기와 뜯어보기가 다른 그림이다**',
+    ok: document.getElementById('toolSelect').innerHTML
+      !== document.getElementById('toolBreak').innerHTML });
+  out.push({ name: '도구마다 그림이 전부 다르다',
+    ok: (() => {
+      const h = [...document.querySelectorAll('#quizTools .tool')].map((b) => b.innerHTML);
+      return new Set(h).size === h.length;
+    })() });
   out.push({ name: '뜯어보기 버튼이 있다', ok: !!brk });
   out.push({ name: '두 버튼 모두 탭 가능한 크기',
     ok: cap.getBoundingClientRect().height >= 30 && brk.getBoundingClientRect().height >= 30,
@@ -2297,8 +2326,6 @@ await run('아이콘 구분', () => {
   out.push({ name: '영역 복사는 사진 그림(해+산)', ok: /circle/.test(cap) && /rect/.test(cap) });
   out.push({ name: '카드 만들기는 가려진 말이 있는 카드 그림',
     ok: /fill="currentColor"/.test(card) && !/circle/.test(card), detail: card.slice(0, 80) });
-  out.push({ name: '퀴즈 도구막대의 영역 복사도 같은 그림',
-    ok: document.getElementById('toolCapture').innerHTML === cap });
   return out;
 });
 
@@ -3725,9 +3752,16 @@ await run('선택 팝업', async () => {
 
   // 보조 동작은 아이콘만 — 한 줄에 다 들어간다
   const acts = [...document.querySelectorAll('#selPop .sel-actions .sel-btn')];
-  out.push({ name: '주 동작만 글씨, 나머지는 아이콘',
-    ok: acts[0].textContent.length > 3 && acts.slice(1).every((b) => b.textContent.trim().length <= 2),
-    detail: acts.map((b) => b.textContent.trim()).join(' ') });
+  // 아이콘만 두니 "✎가 메모인지 필기인지" 알 수 없었다 — 전부 이름을 붙인다(2026-10-14)
+  out.push({ name: '**버튼마다 뭘 하는지 글씨가 있다**',
+    ok: acts.every((b) => (b.querySelector('.sb-t') || {}).textContent),
+    detail: acts.map((b) => (b.querySelector('.sb-t') || {}).textContent || '?').join(' / ') });
+  out.push({ name: '주 동작이 맨 앞',
+    ok: acts[0].classList.contains('primary') && /질문/.test(acts[0].textContent) });
+  out.push({ name: '모아두기가 도구막대와 같은 그림',
+    ok: document.querySelector('#selNote .sb-ic svg')
+      && document.querySelector('#selNote .sb-ic svg').innerHTML
+        === document.querySelector('#toolScrap svg').innerHTML });
   out.push({ name: '아이콘에도 뭘 하는지 적혀 있다(길게 누르면 뜬다)',
     ok: acts.slice(1).every((b) => b.title && b.getAttribute('aria-label')) });
   const tops = acts.map((b) => Math.round(b.getBoundingClientRect().top));
@@ -4826,6 +4860,160 @@ await run('창 전환이 흔들리지 않는다', async () => {
   out.push({ name: '여백도 그대로다', ok: padAfter.join('|') === padBefore.join('|'),
     detail: `${padBefore.join(' / ')} → ${padAfter.join(' / ')}` });
   out.push({ name: '활성 표시만 옮겨간다', ok: other.classList.contains('active') });
+  return out;
+});
+
+// ══════════ 창 버튼이 어느 화면에서도 버튼을 안 덮는다 (2026-10-14) ══════════
+// "모의고사나 퀴즈도 뒤로가기 버튼이 그 삼색버튼 아래로 오든가 해서 창 크기 조절해도 누를 수 있어야"
+await run('창 버튼 자리 — 모든 화면', async () => {
+  const out = [];
+  document.body.setAttribute('data-win-controls', '');
+  await new Promise((r) => setTimeout(r, 60));
+  // 시스템 ●●●는 대략 왼쪽 위 0~110 × 0~34 를 차지한다
+  const WIN = { r: 110, b: 34 };
+  const checks = [
+    ['listScreen', 'settingsBtn'],
+    ['quizScreen', 'backToListBtn'],
+    ['readScreen', 'readBack'],
+    ['resultScreen', 'resultBackBtn'],
+    ['cardScreen', 'cardBack'],
+  ];
+  for (const [screen, btn] of checks) {
+    const sec = document.getElementById(screen);
+    const b = document.getElementById(btn);
+    if (!sec || !b) { out.push({ name: `${screen}: 버튼이 있다`, ok: false }); continue; }
+    document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+    sec.classList.remove('hidden');
+    document.body.dataset.screen = screen;
+    await new Promise((r) => setTimeout(r, 40));
+    const r = b.getBoundingClientRect();
+    const hit = r.left < WIN.r && r.top < WIN.b;
+    out.push({ name: `${screen}: 창 버튼에 안 가린다`, ok: !hit,
+      detail: `${btn} top=${Math.round(r.top)} left=${Math.round(r.left)}` });
+  }
+  document.body.removeAttribute('data-win-controls');
+  await new Promise((r) => setTimeout(r, 40));
+  const back = document.getElementById('backToListBtn').getBoundingClientRect();
+  out.push({ name: '전체 화면이면 자리를 안 비운다(공간 낭비 없이)', ok: back.top < 34,
+    detail: `${Math.round(back.top)}px` });
+  return out;
+});
+
+// 번호를 눌러 그 문항으로 (2026-10-14 요청)
+await run('번호로 가기', async () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'quizScreen';
+  document.querySelectorAll('.sheet, .ask-float, #docDrawer, #docScrim').forEach((x) => x.classList.add('hidden'));
+
+  const pos = document.getElementById('posLabel');
+  out.push({ name: '번호 칸이 누를 수 있는 버튼이다', ok: pos.tagName === 'BUTTON' });
+  out.push({ name: '눌러도 된다고 알려준다', ok: /이동/.test(pos.title), detail: pos.title });
+  pos.click();
+  await new Promise((r) => setTimeout(r, 120));
+  const sheet = document.getElementById('jumpSheet');
+  out.push({ name: '누르면 번호 입력창이 뜬다', ok: !sheet.classList.contains('hidden') });
+  if (!sheet.classList.contains('hidden')) {
+    out.push({ name: '몇 번까지 있는지 알려준다',
+      ok: /\d+ ~ \d+/.test(document.getElementById('jumpHint').textContent),
+      detail: document.getElementById('jumpHint').textContent });
+    out.push({ name: '바로 칠 수 있다', ok: document.activeElement.id === 'jumpInput' });
+    out.push({ name: '숫자 자판이 뜨게 해둔다',
+      ok: document.getElementById('jumpInput').inputMode === 'numeric' });
+
+    // 실제로 옮겨간다
+    const was = document.getElementById('posLabel').textContent;
+    const inp = document.getElementById('jumpInput');
+    inp.value = '2';
+    inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 250));
+    out.push({ name: '**Enter로 그 문항에 간다**', ok: /^2\//.test(document.getElementById('posLabel').textContent),
+      detail: `${was} → ${document.getElementById('posLabel').textContent}` });
+    out.push({ name: '가면 창이 닫힌다', ok: sheet.classList.contains('hidden') });
+
+    // 없는 번호는 알려주고 안 움직인다
+    pos.click();
+    await new Promise((r) => setTimeout(r, 120));
+    const now = document.getElementById('posLabel').textContent;
+    document.getElementById('jumpInput').value = '999';
+    document.getElementById('jumpGo').click();
+    await new Promise((r) => setTimeout(r, 150));
+    out.push({ name: '없는 번호면 그대로 둔다',
+      ok: document.getElementById('posLabel').textContent === now });
+    out.push({ name: '그때는 창을 안 닫는다(다시 칠 수 있게)',
+      ok: !sheet.classList.contains('hidden') });
+    document.getElementById('jumpClose').click();
+  }
+  return out;
+});
+
+// ══════════ 같은 일은 같은 그림으로 (2026-10-14 요청) ══════════
+// "노트읽기/문제풀기 등에서 같은 기능을 하는 건 아이콘을 좀 똑같이 만들어야 함. 계속 헷갈림"
+await run('아이콘 통일', () => {
+  const out = [];
+  const g = (id) => { const el = document.getElementById(id); return el ? el.innerHTML.trim() : null; };
+  // 그림만 비교한다(펜 버튼은 지우개 획이 더 붙어 있어 따로 본다)
+  const pairs = [
+    ['고르기', 'readSelect', 'toolSelect'],
+    ['영역 복사', 'readShot', 'toolCapture'],
+    ['모아두기', 'readScrapBtn', 'toolScrap'],
+  ];
+  for (const [name, a, b] of pairs) {
+    out.push({ name: `${name}: 읽기와 퀴즈가 같은 그림`, ok: !!g(a) && g(a) === g(b),
+      detail: g(a) === g(b) ? '' : '다름' });
+  }
+  // 필기 — 읽기 쪽은 지우개로 바뀌므로 획이 더 있다. **펜 모양 자체**는 같아야 한다.
+  const penPath = 'M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z';
+  out.push({ name: '필기: 펜 모양이 양쪽 같다',
+    ok: g('readPen').includes(penPath) && g('toolWrite').includes(penPath) });
+  out.push({ name: '읽기 쪽 필기는 지우개로도 바뀐다(한 버튼이 둘을 겸한다)',
+    ok: /pen-ic/.test(g('readPen')) && /erase-ic/.test(g('readPen')) });
+  // 역으로: 하는 일이 다르면 그림도 달라야 한다
+  out.push({ name: '고르기와 영역 복사는 다른 그림', ok: g('readSelect') !== g('readShot') });
+  out.push({ name: '모아두기와 영역 복사도 다른 그림', ok: g('readScrapBtn') !== g('readShot') });
+  return out;
+});
+
+// 가까이 가면 이름이 뜬다 (2026-10-14 요청: "펜이 근처로 가면 무슨 기능인지 띄워주든가")
+await run('도구 이름표', async () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'quizScreen';
+  await new Promise((r) => setTimeout(r, 120));
+  const bar = document.getElementById('quizTools');
+  bar.classList.remove('near');             // 앞 검사가 켜놨을 수 있다
+  await new Promise((r) => setTimeout(r, 180));
+  const names = [...bar.querySelectorAll('.rt-name')].map((x) => x.textContent);
+  out.push({ name: '버튼마다 이름이 달려 있다', ok: names.length >= 10, detail: `${names.length}개` });
+  out.push({ name: '이름이 설명과 어긋나지 않는다(설명 앞머리를 쓴다)',
+    ok: names.includes('영역 복사') && names.includes('모아두기') && names.includes('고르기'),
+    detail: names.slice(0, 6).join(' · ') });
+  out.push({ name: '이름이 짧다(막대 옆에서 읽히게)',
+    ok: names.every((n) => n.length <= 7),
+    detail: names.filter((n) => n.length > 7).join(' / ') || '전부 7자 이하' });
+
+  const tag = bar.querySelector('.rt-name');
+  out.push({ name: '평소엔 안 보인다', ok: Number(getComputedStyle(tag).opacity) === 0 });
+  out.push({ name: '자리를 안 먹는다(막대가 안 커진다)',
+    ok: getComputedStyle(tag).position === 'absolute' });
+
+  // 가까이 가면 뜬다
+  const r = bar.getBoundingClientRect();
+  document.dispatchEvent(new PointerEvent('pointermove',
+    { clientX: r.left + r.width / 2, clientY: r.bottom + 40, bubbles: true }));
+  await new Promise((rs) => requestAnimationFrame(() => requestAnimationFrame(rs)));
+  out.push({ name: '**가까이 가면 이름이 뜬다**', ok: bar.classList.contains('near') });
+  await new Promise((rs) => setTimeout(rs, 180));
+  out.push({ name: '실제로 보인다', ok: Number(getComputedStyle(tag).opacity) > 0.5,
+    detail: getComputedStyle(tag).opacity });
+
+  // 멀어지면 사라진다 — 늘 떠 있으면 글을 가린다
+  document.dispatchEvent(new PointerEvent('pointermove',
+    { clientX: r.left + r.width / 2, clientY: r.bottom + 400, bubbles: true }));
+  await new Promise((rs) => requestAnimationFrame(() => requestAnimationFrame(rs)));
+  out.push({ name: '멀어지면 사라진다', ok: !bar.classList.contains('near') });
   return out;
 });
 await browser.close();

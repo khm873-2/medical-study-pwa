@@ -1469,16 +1469,16 @@ document.getElementById('selCopy').onclick = async () => {
   try { await navigator.clipboard.writeText(selTerm()); toast('📋 복사했습니다.'); }
   catch { toast('복사에 실패했습니다.'); }
 };
+// 긁은 글을 **모아두기**로 — 어느 화면에서든 같은 곳으로 간다(2026-10-14).
+// 전에는 퀴즈에서만 되는 "메모"였고 아이콘도 필기와 같은 ✎라 뭘 하는 건지 알 수 없었다.
 document.getElementById('selNote').onclick = () => {
+  const t = selTerm();
   hideSelPop();
-  if (!quiz) { toast('메모는 문제 화면에서만 됩니다.'); return; }
-  if (!selTerm()) return;
-  const i = quiz.qIndex;
-  quiz.memos[i] = (quiz.memos[i] ? quiz.memos[i] + '\n' : '') + selTerm();
-  quiz.persist();
-  document.getElementById('memoInput').value = quiz.memos[i];
-  document.getElementById('memoBox').style.display = 'block';
-  toast('메모에 넣었습니다.');
+  if (!t) return;
+  openScrap();
+  const ta = document.getElementById('scText');
+  ta.value = ta.value ? `${ta.value}\n\n${t}` : t;
+  document.getElementById('scStatus').textContent = `${t.length}자를 담았습니다`;
 };
 // 팝업 밖을 건드리면 닫는다
 document.addEventListener('pointerdown', (e) => {
@@ -2065,6 +2065,7 @@ document.getElementById('toolBreak').onclick = runBreakdown;
 // ①만으로도 잡히긴 하지만, 어디를 잡아야 하는지가 안 보이면 **시도 자체를 안 하게 된다**.
 
 const GRIP_NEAR = 44;      // 이 거리 안에 들어오면 깨운다(px)
+const TOOLS_NEAR = 70;     // 도구막대는 조금 더 멀리서부터 — 이름을 읽을 틈을 준다
 
 /** 점과 사각형 사이 거리. 안에 있으면 0. */
 function distToRect(x, y, r) {
@@ -2084,13 +2085,20 @@ function wakeGrips(x, y) {
       if (!r.width && !r.height) { g.classList.remove('near'); continue; }
       g.classList.toggle('near', distToRect(x, y, r) <= GRIP_NEAR);
     }
+    // 도구막대도 같이 — **가까이 가면 이름이 뜬다**(2026-10-14 요청:
+    // "펜이 근처로 가면 무슨 기능인지 띄워주든가"). 아이콘이 열넷이라 외울 수가 없다.
+    for (const bar of document.querySelectorAll('.read-tools')) {
+      const r = bar.getBoundingClientRect();
+      if (!r.width) { bar.classList.remove('near'); continue; }
+      bar.classList.toggle('near', distToRect(x, y, r) <= TOOLS_NEAR);
+    }
   });
 }
 // 펜은 닿기 전(hover)에도 좌표가 온다 — 그래서 "가까이 가면 켜진다"가 성립한다.
 // 손가락은 닿아야 오므로, 넓힌 눌림 범위(①)가 그때를 받쳐준다.
 document.addEventListener('pointermove', (e) => wakeGrips(e.clientX, e.clientY), { passive: true });
 document.addEventListener('pointerleave', () => {
-  document.querySelectorAll('.resize-grip.near').forEach((g) => g.classList.remove('near'));
+  document.querySelectorAll('.near').forEach((g) => g.classList.remove('near'));
 });
 
 /** 끄는 동안 티가 나게 — 어디를 밀고 있는지 보인다. */
@@ -6180,6 +6188,77 @@ function alertBox(text) {
 }
 
 
+// ═══════════ 번호로 가기 ═══════════
+//
+// 40문항짜리 시험에서 12번으로 돌아가려면 화살표를 스물여덟 번 눌러야 했다
+// (2026-10-14 요청). 번호 칸을 눌러 바로 간다. 섹션이 많은 노트에서도 같다.
+
+/** 지금 화면에서 "몇 번째 / 전부 몇 개"와, 그 번호로 가는 법. */
+function jumpTarget() {
+  if (document.body.dataset.screen === 'quizScreen' && quiz) {
+    return {
+      what: '문항',
+      total: quiz.all.length,
+      // 화면에 보이는 건 **문항 번호**(q.num)다 — 섞어 푸는 중이면 순서와 다르다.
+      // 사람이 아는 번호로 찾고, 없으면 순서대로 센다.
+      go: (n) => {
+        let i = quiz.all.findIndex((q) => Number(q.num) === n);
+        if (i < 0 && n >= 1 && n <= quiz.all.length) i = n - 1;
+        if (i < 0) return false;
+        const at = quiz.order.indexOf(i);
+        quiz.cur = at >= 0 ? at : 0;
+        quiz.render();
+        return true;
+      },
+    };
+  }
+  if (document.body.dataset.screen === 'readScreen' && reader) {
+    return {
+      what: '섹션',
+      total: reader.note.sections.length,
+      go: (n) => {
+        if (n < 1 || n > reader.note.sections.length) return false;
+        reader.secIdx = n - 1;
+        renderReader();
+        return true;
+      },
+    };
+  }
+  return null;
+}
+
+function openJump() {
+  const t = jumpTarget();
+  if (!t || !t.total) return;
+  document.getElementById('jumpTitle').textContent = `${t.what}으로 이동`;
+  document.getElementById('jumpHint').textContent = `1 ~ ${t.total} 중에서 — Enter로 바로 이동`;
+  const inp = document.getElementById('jumpInput');
+  inp.value = '';
+  inp.placeholder = `번호 (1~${t.total})`;
+  document.getElementById('jumpSheet').classList.remove('hidden');
+  setTimeout(() => { inp.focus(); inp.select(); }, 50);
+}
+function closeJump() { document.getElementById('jumpSheet').classList.add('hidden'); }
+
+function doJump() {
+  const t = jumpTarget();
+  const n = parseInt(document.getElementById('jumpInput').value, 10);
+  if (!t) return;
+  if (!Number.isFinite(n)) { toast('번호를 넣어주세요.'); return; }
+  if (!t.go(n)) { toast(`${n}번 ${t.what}이 없습니다 (1~${t.total}).`); return; }
+  closeJump();
+}
+
+document.getElementById('posLabel').onclick = openJump;
+document.getElementById('readPos').onclick = openJump;
+document.getElementById('jumpClose').onclick = closeJump;
+document.getElementById('jumpGo').onclick = doJump;
+document.getElementById('jumpSheet').onclick = (e) => { if (e.target.id === 'jumpSheet') closeJump(); };
+document.getElementById('jumpInput').onkeydown = (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); doJump(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeJump(); }
+};
+
 // ═══════════ 타이머 ═══════════
 //
 // "딴짓을 많이해서리" — 점수에 반영하는 물건이 아니다(2026-10-13 요청). 한 세트를
@@ -6380,6 +6459,16 @@ function initReadTools(panelId = 'readTools', gripId = 'rtGrip', key = 'read_too
   const el = document.getElementById(panelId);
   const grip = document.getElementById(gripId);
   if (!el || !grip) return;
+  // 이름표 — title의 앞머리("영역 복사 — 네모를 치면…" → "영역 복사")를 쓴다.
+  // 따로 적어두면 둘이 어긋나고, 결국 설명과 다른 이름이 뜬다.
+  for (const b of el.querySelectorAll('button[title]')) {
+    if (b.querySelector('.rt-name')) continue;
+    const name = b.title.split(/\s*[—(]/)[0].trim();
+    const tag = document.createElement('span');
+    tag.className = 'rt-name';
+    tag.textContent = name;
+    b.appendChild(tag);
+  }
   dockTools(localStorage.getItem(key) || 'tr', el, key);
   // 막대는 그 화면일 때만 보인다 — 숨어 있을 땐 폭이 0이라 지금 재면 소용없다.
   // 보이게 되는 순간 다시 재서 머리줄 자리를 비운다(2026-10-13).
@@ -6441,6 +6530,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     const layers = [
       ['searchSheet', closeSearch],
+      ['jumpSheet', closeJump],
       ['keySheet', () => document.getElementById('keySheet').classList.add('hidden')],
       ['selPop', () => document.getElementById('selCancel').click()],
       ['askFloat', closeAskFloat],

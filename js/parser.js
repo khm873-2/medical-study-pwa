@@ -101,9 +101,41 @@ export function parseExamHtml(html) {
 
 function extractTitle(html) {
   const h1 = html.match(/<h1>([^<]*)<\/h1>/);
-  if (h1) return h1[1].trim();
+  if (h1) return cleanTitle(h1[1]);
   const t = html.match(/<title>([^<]*)<\/title>/);
-  return t ? t[1].trim() : '';
+  return t ? cleanTitle(t[1]) : '';
+}
+
+/**
+ * 제목에서 **문제집 상표**를 걷어낸다 (2026-10-14 요청).
+ *
+ * "중이염 모의고사 (SSD 알렌/QBOOK 기반)" → "중이염 모의고사"
+ *
+ * 출처를 지우는 게 아니다 — 문항마다 붙은 `source`("퍼시픽 내장문제 A1")는 그대로 둔다.
+ * 제목 줄에까지 상표가 붙어 있으면 목록이 전부 같은 꼬리로 끝나 **정작 무슨 강의인지가
+ * 안 보인다**. 어디서 왔는지는 문항을 열면 나온다.
+ */
+const BRANDS = /(SSD\s*알렌|SSD\s*문제은행|SSD|알렌이론|알렌|Q-?BOOK|메디톡|퍼시픽)/gi;
+const MARK = '\u0000';        // 지울 자리 표시 — `·`를 쓰면 "피부구조·기능"이 망가진다
+
+export function cleanTitle(raw) {
+  let t = String(raw || '').trim();
+  // ① 상표 낱말을 표시로 바꾼다
+  t = t.replace(BRANDS, MARK);
+  // ② 표시끼리 이어진 것(`SSD 알렌/QBOOK`)을 하나로 모으고, 딸린 말도 흡수한다
+  t = t.replace(new RegExp(`${MARK}(\\s*[/+,·]?\\s*${MARK})+`, 'g'), MARK);
+  t = t.replace(new RegExp(`${MARK}\\s*(문제은행|내장문제|기반|문제)`, 'g'), MARK);
+  t = t.replace(new RegExp(`(문제은행|기반)\\s*${MARK}`, 'g'), MARK);
+  // ③ 표시만 남은 괄호는 통째로 — "(SSD 알렌/QBOOK 기반)"
+  t = t.replace(/\s*[(（]([^)）]*)[)）]/g, (m, inner) =>
+    (inner.replace(new RegExp(`[${MARK}\\s/+,·—–-]`, 'g'), '') ? m : ''));
+  // ④ 표시 주변 구분자 정리 — "— ␀ 모의고사" → "— 모의고사"
+  t = t.replace(new RegExp(`\\s*${MARK}\\s*`, 'g'), ' ');
+  return t
+    .replace(/\s*([—–])\s*(?=[—–]|$)/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/^[\s/+—–]+|[\s/+—–]+$/g, '')
+    .trim();
 }
 
 /**
