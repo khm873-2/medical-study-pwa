@@ -1104,6 +1104,53 @@ export function dayKey(now = Date.now()) {
  * 왜 물러나나: 강의가 없는 주말에 앱을 열어도 화면이 비면 쓸모가 없다. 직전 수업일을
  * 보여주면 그게 바로 복습 대상이다(2026-10-10).
  */
+/**
+ * 수업이 있는 날짜들 — "오늘" 탭에서 날짜를 넘겨보기 위한 것.
+ *
+ * 왜: 하루치만 보여주면 **어제 배운 걸 다시 꺼내볼 길이 없다**(2026-10-13 지적).
+ * 강의가 매일 2~3개씩 몰아치는 기간엔 어제 것이 오늘 것만큼 급하다.
+ *
+ * @returns {Array<{date, n, dow, isToday}>} 날짜 오름차순
+ */
+export function lectureDays(schedule, now = Date.now()) {
+  const today = dayKey(now);
+  const byDate = new Map();
+  for (const l of schedule || []) {
+    byDate.set(l.date, (byDate.get(l.date) || 0) + 1);
+  }
+  const DOW = ['일', '월', '화', '수', '목', '금', '토'];
+  return [...byDate.entries()]
+    .map(([date, n]) => ({
+      date, n,
+      dow: DOW[new Date(`${date}T09:00:00`).getDay()],
+      isToday: date === today,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * 그 주(월~일)의 수업 날짜만. 이번 주에 수업이 없으면 가장 가까운 주로 옮겨간다 —
+ * 빈 화면을 보여주느니 "볼 게 있는 주"를 보여주는 게 맞다.
+ */
+export function weekOf(days, anchorDate) {
+  if (!days.length) return [];
+  const anchor = anchorDate || (days.find((d) => d.isToday) || days[0]).date;
+  const d = new Date(`${anchor}T09:00:00`);
+  const mon = new Date(d);
+  mon.setDate(d.getDate() - ((d.getDay() + 6) % 7));     // 월요일로
+  const from = dayKey(mon.getTime());
+  const sun = new Date(mon);
+  sun.setDate(mon.getDate() + 6);
+  const to = dayKey(sun.getTime());
+  const inWeek = days.filter((x) => x.date >= from && x.date <= to);
+  if (inWeek.length) return inWeek;
+  // 이 주에 수업이 없다 — 앵커에서 가장 가까운 날이 속한 주로
+  const near = days.reduce((best, x) =>
+    Math.abs(Date.parse(x.date) - Date.parse(anchor)) < Math.abs(Date.parse(best.date) - Date.parse(anchor))
+      ? x : best, days[0]);
+  return near.date === anchor ? [near] : weekOf(days, near.date);
+}
+
 export function lecturesFor(schedule, now = Date.now()) {
   const key = dayKey(now);
   const pick = (list, when) => ({ date: list[0].date, when, lectures: list.filter((l) => l.date === list[0].date) });

@@ -1555,7 +1555,13 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
 .deck-crumb b { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 
 /* ── 고른 상태 ── */
-.deck-card.selectable { cursor: pointer; position: relative; padding-right: 40px; }
+/* 고르기 중에는 **쓸어서** 여러 장을 고른다(2026-10-13) — 손가락이 지나간 카드가
+   그대로 골라진다. touch-action: none이어야 브라우저가 스크롤로 가져가지 않는다.
+   평소(고르기 아님)엔 세로 스크롤이 더 중요하므로 .selectable일 때만 켠다. */
+.deck-card.selectable {
+  cursor: pointer; position: relative; padding-right: 40px;
+  touch-action: none;
+}
 .deck-card.picked { border-color: var(--accent); background: var(--badge-bg); }
 .deck-card.pressing { transform: scale(.985); transition: transform .12s var(--ease); }
 .deck-tick {
@@ -1852,3 +1858,74 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
   border: 1px solid var(--border); background: var(--card); color: var(--wrong);
   font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center;
 }
+
+/* ═══════════ "오늘" 탭 날짜 띠 (2026-10-13) ═══════════
+   하루치만 보여주면 어제 배운 걸 다시 꺼낼 길이 없다 — 그 주의 수업일을 가로로
+   깔고 눌러서 넘긴다. 좁은 화면에서는 가로 스크롤(주 단위라 7칸을 넘지 않는다). */
+.day-strip {
+  display: flex; gap: 6px; align-items: stretch;
+  margin-bottom: 12px; overflow-x: auto; padding-bottom: 2px;
+  scrollbar-width: none;
+}
+.day-strip::-webkit-scrollbar { display: none; }
+.day-nav {
+  flex: 0 0 auto; width: 32px; min-height: 52px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  color: var(--sub); font-size: 16px; font-family: inherit; cursor: pointer;
+}
+.day-nav:disabled { opacity: .3; }
+.day-nav:active:not(:disabled) { background: var(--badge-bg); }
+.day-chip {
+  flex: 1 1 0; min-width: 52px; min-height: 52px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  font-family: inherit; color: var(--text); cursor: pointer; padding: 6px 4px;
+}
+.day-chip:active { background: var(--badge-bg); }
+.dc-d { font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.dc-w { font-size: 10px; color: var(--sub); line-height: 1.1; }
+.dc-n {
+  font-size: 10px; font-weight: 700; color: var(--sub);
+  background: var(--badge-bg); border-radius: 7px; padding: 0 5px; margin-top: 1px;
+}
+/* 오늘은 테두리로, 고른 날은 채워서 — 둘이 겹쳐도 구분된다 */
+.day-chip.today { border-color: var(--accent); }
+.day-chip.today .dc-d { color: var(--accent); }
+.day-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.day-chip.active .dc-d, .day-chip.active .dc-w { color: #fff; }
+.day-chip.active .dc-n { background: rgba(255,255,255,.22); color: #fff; }
+.day-back { margin-bottom: 10px; }
+/* 시험 칩은 노트와 구분되게 — 누르면 바로 푸는 것이라 무게가 다르다 */
+.chip.exam { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+
+/* ═══════════ 노트 읽기 — 이번 주 강의 바로가기 (2026-10-13) ═══════════ */
+.note-week { margin-bottom: 16px; }
+.nw-head {
+  display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px;
+  font-size: 13px; font-weight: 700;
+}
+.nw-head .muted { font-size: 11.5px; font-weight: 600; }
+.nw-list { display: flex; flex-direction: column; gap: 6px; }
+.nw-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 9px 11px; min-height: 44px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+}
+.nw-row.is-today { border-color: var(--accent); }
+.nw-date {
+  flex: 0 0 auto; font-size: 11.5px; font-weight: 800; color: var(--sub);
+  font-variant-numeric: tabular-nums; min-width: 42px;
+}
+.nw-row.is-today .nw-date { color: var(--accent); }
+.nw-name {
+  flex: 1 1 140px; min-width: 0; font-size: 13.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nw-btns { flex: 0 0 auto; display: flex; gap: 6px; }
+.nw-btn {
+  min-height: 32px; padding: 5px 10px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--border);
+  font-family: inherit; font-size: 12px; color: var(--text); cursor: pointer; white-space: nowrap;
+}
+.nw-btn:active { background: var(--badge-bg); }
+.nw-btn.primary { border-color: var(--accent); color: var(--accent); font-weight: 700; }

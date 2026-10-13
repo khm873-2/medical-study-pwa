@@ -2157,6 +2157,69 @@ await run('고르기 모드', async () => {
   return out;
 });
 
+// ── 쓸어서 여러 장 고르기 (2026-10-13) ──
+// 한 장씩 탭하면 20장에 20번을 두드려야 한다. 고르기 중에는 손가락이 지나간 카드가
+// 그대로 골라진다(사진 앱의 다중 선택).
+{
+  // 고르기 모드 + **0장 선택**에서 시작한다 — 시작 상태가 애매하면 결과를 못 읽는다
+  await page.evaluate(async () => {
+    [...document.querySelectorAll('.deck-tab')].find((b) => /전체/.test(b.textContent)).click();
+    await new Promise((r) => setTimeout(r, 200));
+    const cancel = [...document.querySelectorAll('.sel-btn2')].find((b) => b.textContent === '취소');
+    if (cancel) { cancel.click(); await new Promise((r) => setTimeout(r, 150)); }
+    [...document.querySelectorAll('.deck-card .deck-btn')].find((b) => b.textContent === '선택').click();
+    await new Promise((r) => setTimeout(r, 200));
+    // '선택' 버튼은 그 카드를 골라둔 채로 들어간다 — 그 한 장을 떼어 0장으로 맞춘다
+    const n = () => Number((document.querySelector('.sel-n')?.textContent || '0').replace(/\D/g, ''));
+    if (n() > 0) {
+      const all = [...document.querySelectorAll('.sel-btn2')].find((b) => /전체 (선택|해제)/.test(b.textContent));
+      if (/전체 해제/.test(all.textContent)) all.click();
+      else { all.click(); await new Promise((r) => setTimeout(r, 120));
+        [...document.querySelectorAll('.sel-btn2')].find((b) => /전체 해제/.test(b.textContent))?.click(); }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  });
+  const before = await page.evaluate(() => document.querySelector('.sel-n')?.textContent);
+  results.push({ name: '쓸기 전 0장에서 시작한다(시작 상태 확인)', ok: /^0장/.test(before || ''), detail: before });
+
+  // 카드 3장을 가로질러 쓴다
+  const path = await page.evaluate(() => {
+    const cs = [...document.querySelectorAll('.deck-card')].slice(0, 3);
+    return cs.map((c) => {
+      const r = c.getBoundingClientRect();
+      return { x: Math.round(r.left + 30), y: Math.round(r.top + r.height / 2) };
+    });
+  });
+  if (path.length >= 3) {
+    await page.mouse.move(path[0].x, path[0].y);
+    await page.mouse.down();
+    for (const pt of path.slice(1)) await page.mouse.move(pt.x, pt.y, { steps: 5 });
+    await page.mouse.up();
+    await new Promise((r) => setTimeout(r, 250));
+    const after = await page.evaluate(() => document.querySelector('.sel-n')?.textContent);
+    results.push({ name: '쓸면 지나간 카드가 한꺼번에 골라진다',
+      ok: /^3장/.test(after || ''), detail: `${before} → ${after}` });
+    results.push({ name: '쓴 카드에 체크가 보인다',
+      ok: (await page.evaluate(() => document.querySelectorAll('.deck-card.picked').length)) === 3 });
+
+    // 같은 자리를 다시 쓸면 꺼진다 — 방향은 첫 카드가 정한다
+    await page.mouse.move(path[0].x, path[0].y);
+    await page.mouse.down();
+    for (const pt of path.slice(1)) await page.mouse.move(pt.x, pt.y, { steps: 5 });
+    await page.mouse.up();
+    await new Promise((r) => setTimeout(r, 250));
+    results.push({ name: '켜진 카드를 쓸면 꺼진다(방향은 첫 카드가 정한다)',
+      ok: /^0장/.test(await page.evaluate(() => document.querySelector('.sel-n')?.textContent || '')),
+      detail: await page.evaluate(() => document.querySelector('.sel-n')?.textContent) });
+  } else {
+    results.push({ name: '쓸어서 고르기 — 카드가 모자라 건너뜀', ok: true, detail: `${path.length}장` });
+  }
+  await page.evaluate(() => {
+    const c = [...document.querySelectorAll('.sel-btn2')].find((b) => b.textContent === '취소');
+    if (c) c.click();
+  });
+}
+
 await run('일괄 버리기 · 삭제 확인', async () => {
   const out = [];
   // 앞 단계에서 전부 중요 표시가 되어 '오늘 볼 것' 칸이 비었다 — 전체 칸으로 옮긴다

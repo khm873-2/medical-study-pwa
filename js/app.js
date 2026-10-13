@@ -18,10 +18,11 @@ import {
   studyQueue, groupCards, suspendCard, unsuspendCard, buryCard, toggleStar,
   deckTree, cardsInDeck, liveCards, isArchivedCard, deckOf, subKey, noteKey,
   isStarred, isSuspended, isLeech, LEECH_AT, retrievability, parseExamDates, nextExam,
-  parseSchedule, lecturesFor, dayKey, qaCards, dueToday,
+  parseSchedule, lecturesFor, lectureDays, weekOf, dayKey, qaCards, dueToday,
 } from './reader.js';
 import { search, cacheSubject, storageInfo } from './search.js';
 import { JOKBO_ROOT, parseJokbo, chapterTitle } from './jokbo.js';
+import { nameSimilarity } from './wiki.js';
 import {
   kvGet, kvSet, cacheClear, enqueue, listOutbox, dequeue, bumpTries,
   saveCards, allCards, deleteCard,
@@ -619,12 +620,290 @@ function renderList(index, sessions, kind = '모의고사') {
   });
 }
 
+/**
+ * 노트 읽기 탭 맨 위의 "이번 주 강의" — 시간표를 읽어 바로가기를 깐다.
+ *
+ * 왜: 노트 목록이 뿌리 3개 × 과목 28개라, 지금 배우는 강의 하나를 열려고
+ * 폴더를 두세 겹 더듬어야 한다(2026-10-13 지적). 시간표에 "언제 무슨 강의"가
+ * 이미 있으니 그걸로 바로 열어준다.
+ */
+async function renderNoteWeek(body, groups) {
+  let schedule = [];
+  let exams = [];
+  try { ({ schedule, exams } = await todayData(false)); } catch { return; }
+  if (!schedule.length) return;
+
+  // 시험이 임박한 과목을 먼저 — "오늘" 탭과 같은 기준
+  const norm = (x) => String(x || '').replace(/[_\s]/g, '');
+  const next = nextExam(exams);
+  let pool = schedule;
+  if (next) {
+    const hot = schedule.filter((l) => norm(l.src) === norm(next.src));
+    if (hot.length) pool = hot;
+  }
+  const days = lectureDays(pool);
+  if (!days.length) return;
+  const week = weekOf(days, noteWeekPick || undefined);
+  if (!week.length) return;
+
+  const from = week[0].date;
+  const to = week[week.length - 1].date;
+  const subject = pool[0] ? pool[0].src : '';
+
+  const box = document.createElement('div');
+  box.className = 'note-week';
+
+  const head = document.createElement('div');
+  head.className = 'nw-head';
+  const t = document.createElement('span');
+  t.textContent = subject ? `이번 주 — ${subject}` : '이번 주 강의';
+  const range = document.createElement('span');
+  range.className = 'muted';
+  range.textContent = `${from.slice(5).replace('-', '/')} ~ ${to.slice(5).replace('-', '/')}`;
+  head.append(t, range);
+
+  // 주 넘기기
+  const nav = (dir, label) => {
+    const outside = dir < 0
+      ? days.filter((d) => d.date < from).slice(-1)
+      : days.filter((d) => d.date > to).slice(0, 1);
+    const b = document.createElement('button');
+    b.className = 'nw-btn';
+    b.textContent = label;
+    b.disabled = !outside.length;
+    b.onclick = () => { noteWeekPick = outside[0].date; loadNotesTab(false); };
+    return b;
+  };
+  const navWrap = document.createElement('span');
+  navWrap.className = 'nw-btns';
+  navWrap.style.marginLeft = 'auto';
+  navWrap.append(nav(-1, '‹'), nav(1, '›'));
+  head.appendChild(navWrap);
+  box.appendChild(head);
+
+  const list = document.createElement('div');
+  list.className = 'nw-list';
+  const today = dayKey();
+  let shown = 0;
+  for (const d of week) {
+    for (const l of pool.filter((x) => x.date === d.date)) {
+      if (!l.wiki && !l.note) continue;              // 노트가 없는 줄은 띄울 이유가 없다
+      const row = document.createElement('div');
+      row.className = `nw-row${d.date === today ? ' is-today' : ''}`;
+      const dt = document.createElement('span');
+      dt.className = 'nw-date';
+      dt.textContent = `${d.date.slice(5).replace('-', '/')}(${d.dow})`;
+      const nm = document.createElement('span');
+      nm.className = 'nw-name';
+      nm.textContent = l.name;
+      nm.title = l.name;
+      const btns = document.createElement('span');
+      btns.className = 'nw-btns';
+      const mk = (label, name, cls) => {
+        const b = document.createElement('button');
+        b.className = `nw-btn${cls ? ' ' + cls : ''}`;
+        b.textContent = label;
+        b.onclick = () => openNoteByName(name, { groups });
+        btns.appendChild(b);
+      };
+      if (l.wiki) mk('📗 실강', l.wiki, 'primary');
+      if (l.note) mk('📖 예습', l.note);
+      row.append(dt, nm, btns);
+      list.appendChild(row);
+      shown++;
+    }
+  }
+  if (!shown) return;                                 // 이번 주 노트가 하나도 없으면 띄우지 않는다
+  box.appendChild(list);
+
+  if (noteWeekPick) {
+    const back = document.createElement('button');
+    back.className = 'nw-btn';
+    back.style.marginTop = '8px';
+    back.textContent = '↩ 이번 주로';
+    back.onclick = () => { noteWeekPick = null; loadNotesTab(false); };
+    box.appendChild(back);
+  }
+  body.appendChild(box);
+}
+
+let noteWeekPick = null;
+
+// ---------- "오늘" 탭의 수업 구역 (2026-10-13) ----------
+//
+// 전에는 하루치만 띄웠다 — 어제 배운 걸 다시 꺼낼 길이 없었고, 그날의 시험은
+// 강의와 따로 맨 아래 한 뭉치로 나와서 어느 게 어느 강의 것인지 알 수 없었다.
+// ① 그 주의 수업일을 가로로 깔아 넘겨보게 하고
+// ② 시험을 **그 강의 줄에 직접** 붙인다.
+
+let dayPick = null;        // 사용자가 고른 날짜(null이면 오늘/가장 가까운 날)
+
+function renderDaySection(body, pool, index, attempts, noteGroups) {
+  const days = lectureDays(pool);
+  if (!days.length) {
+    const sec = section(body, '수업');
+    sec.appendChild(muted('시간표에서 강의를 찾지 못했습니다.'));
+    return;
+  }
+  // 고른 날이 지금 주에 없으면(주를 옮겼다) 그 주의 첫날로 맞춘다
+  const base = dayPick || (lecturesFor(pool).date);
+  const week = weekOf(days, base);
+  const cur = week.some((d) => d.date === base) ? base : week[0].date;
+
+  const title = cur === dayKey() ? '오늘 수업'
+    : cur < dayKey() ? '지난 수업' : '다음 수업';
+  const sec = section(body, `${title} · ${cur.slice(5).replace('-', '/')}`);
+
+  // ── 날짜 띠 ──
+  const strip = document.createElement('div');
+  strip.className = 'day-strip';
+  const weekNav = (dir) => {
+    // 이 주 밖에서 가장 가까운 수업일로 — 주 단위로 건너뛴다
+    const outside = dir < 0
+      ? days.filter((d) => d.date < week[0].date).slice(-1)
+      : days.filter((d) => d.date > week[week.length - 1].date).slice(0, 1);
+    if (!outside.length) return null;
+    return outside[0].date;
+  };
+  const arrow = (dir, label) => {
+    const b = document.createElement('button');
+    b.className = 'day-nav';
+    b.textContent = label;
+    const to = weekNav(dir);
+    b.disabled = !to;
+    b.title = dir < 0 ? '지난 주' : '다음 주';
+    b.onclick = () => { dayPick = to; loadTodayTab(false); };
+    return b;
+  };
+  strip.appendChild(arrow(-1, '‹'));
+  week.forEach((d) => {
+    const b = document.createElement('button');
+    b.className = `day-chip${d.date === cur ? ' active' : ''}${d.isToday ? ' today' : ''}`;
+    b.innerHTML = `<span class="dc-d">${d.date.slice(8)}</span>`
+      + `<span class="dc-w">${d.dow}</span>`
+      + `<span class="dc-n">${d.n}</span>`;
+    b.title = `${d.date} (강의 ${d.n}개)`;
+    b.onclick = () => { dayPick = d.date; loadTodayTab(false); };
+    strip.appendChild(b);
+  });
+  strip.appendChild(arrow(1, '›'));
+  sec.appendChild(strip);
+
+  // 오늘이 아닌 날을 보고 있으면 돌아올 길을 준다
+  if (cur !== dayKey() && days.some((d) => d.isToday)) {
+    const back = document.createElement('button');
+    back.className = 'chip day-back';
+    back.textContent = '↩ 오늘로';
+    back.onclick = () => { dayPick = null; loadTodayTab(false); };
+    sec.appendChild(back);
+  }
+
+  // ── 그 날의 강의 ──
+  const lectures = pool.filter((l) => l.date === cur);
+  const want = `26${cur.slice(5, 7)}${cur.slice(8, 10)}`;      // YYMMDD
+  const usedExams = new Set();
+
+  lectures.forEach((l) => {
+    const row = document.createElement('div');
+    row.className = 'today-lec';
+    const head = document.createElement('div');
+    head.className = 'today-lec-head';
+    head.innerHTML = `<span class="today-period">${escapeHtml(l.period || '')}</span>`
+      + `<b>${escapeHtml(l.name)}</b>`
+      + (l.teacher ? `<span class="muted"> ${escapeHtml(l.teacher)}</span>` : '');
+    row.appendChild(head);
+
+    const chips = document.createElement('div');
+    chips.className = 'today-chips';
+    const chip = (label, fn, cls = '') => {
+      const b = document.createElement('button');
+      b.className = `chip${cls ? ' ' + cls : ''}`;
+      b.textContent = label;
+      b.onclick = fn;
+      chips.appendChild(b);
+    };
+
+    // 노트 — 실강(수업 후 정리)이 먼저, 그 다음 예습
+    if (l.wiki) chip('📗 실강노트', () => openNoteByName(l.wiki, { groups: noteGroups }));
+    if (l.note) chip('📖 예습노트', () => openNoteByName(l.note, { groups: noteGroups }));
+
+    // 이 강의의 모의고사·퀴즈 — 전에는 맨 아래 한 뭉치라 어느 강의 것인지 몰랐다
+    for (const { g, ex } of examsForLecture(index, l, want)) {
+      usedExams.add(ex.path);
+      const p = examProgress(attempts, ex.path);
+      chip(`${g.kind === '퀴즈' ? '📝' : '🧪'} ${g.kind}`
+        + (p.seen ? ` ${p.solid}/${p.seen}${p.weak ? ` · 약함 ${p.weak}` : ''}` : ''),
+      () => openExam(g.subject, ex), 'exam');
+    }
+
+    if (l.jokbo) {
+      const subject = subjectOfLecture(index, l) || '';
+      const hit = findJokboChapter(index, subject, l.jokbo);
+      if (hit) chip('📜 족보', () => openExam(hit.g.subject, hit.ex));
+    }
+    if (chips.children.length) row.appendChild(chips);
+    else row.appendChild(muted('아직 만들어진 자료가 없습니다.'));
+    sec.appendChild(row);
+  });
+
+  // 강의에 못 붙은 그날 시험(이름이 안 맞거나 강의가 시간표에 없는 경우)은 따로 모은다
+  const leftover = [];
+  for (const g of index) {
+    if (g.kind === '족보') continue;
+    for (const ex of g.exams) {
+      if (examSortKey(ex.file) === want && !usedExams.has(ex.path)) leftover.push({ g, ex });
+    }
+  }
+  if (leftover.length) {
+    const wrap = document.createElement('div');
+    wrap.className = 'today-chips';
+    const lab = document.createElement('span');
+    lab.className = 'muted';
+    lab.style.cssText = 'font-size:12px;align-self:center;margin-right:4px';
+    lab.textContent = '이 날짜의 다른 자료';
+    wrap.appendChild(lab);
+    leftover.forEach(({ g, ex }) => {
+      const b = document.createElement('button');
+      b.className = 'chip';
+      const p = examProgress(attempts, ex.path);
+      b.textContent = `${g.kind === '퀴즈' ? '📝' : '🧪'} ${prettyExamName(ex.file)}`
+        + (p.seen ? ` (${p.solid}/${p.seen})` : '');
+      b.onclick = () => openExam(g.subject, ex);
+      wrap.appendChild(b);
+    });
+    sec.appendChild(wrap);
+  }
+}
+
 /** 이 강의가 어느 과목 폴더에 속하나 — 시간표의 과목명(응급중환자)과 폴더명(응급_중환자)이 다르다. */
 function subjectOfLecture(index, lecture) {
   const norm = (x) => String(x || '').replace(/[_\s]/g, '');
   const want = norm(lecture.src);
   const g = index.find((x) => norm(x.subject) === want);
   return g ? g.subject : '';
+}
+
+/**
+ * 이 강의의 모의고사·퀴즈를 찾는다.
+ *
+ * 전에는 **그날의 시험 전부를 맨 아래 한 뭉치로** 보여줬다 — 강의가 하루 3개면
+ * 어느 게 어느 강의 것인지 알 수가 없어서 사실상 바로가기가 아니었다(2026-10-13 지적).
+ * 강의명과 시험 주제를 견줘 **그 강의 줄에 직접** 붙인다.
+ *
+ *   "기본소생술(BLS)"        ↔ 1012_기본소생술BLS_모의고사.html
+ *   "응급의료체계 및 재난의학"  ↔ 261012_김종선_응급의료체계및재난의학_퀴즈.html
+ */
+function examsForLecture(index, lecture, dayKeyYYMMDD) {
+  const out = [];
+  for (const g of index) {
+    if (g.kind === '족보') continue;                  // 족보는 날짜가 아니라 챕터로 붙는다
+    for (const ex of g.exams) {
+      if (examSortKey(ex.file) !== dayKeyYYMMDD) continue;
+      const sim = nameSimilarity(lecture.name, prettyExamName(ex.file));
+      if (sim >= 0.5) out.push({ g, ex, sim });
+    }
+  }
+  return out.sort((a, b) => b.sim - a.sim);
 }
 
 /** 시간표의 `가공족보` 칸(파일명)으로 족보 챕터를 찾는다. */
@@ -1861,77 +2140,15 @@ async function loadTodayTab(force) {
       });
     }
 
-    // ── 오늘(또는 직전·다음) 수업 ──
-    // 시험이 다가온 과목의 시간표를 먼저 본다. 10/10처럼 강의 시작 전이라도
-    // 두경부 지난 수업이 아니라 응급중환자 다음 수업이 뜨는 게 맞다.
+    // ── 수업 (날짜를 넘겨볼 수 있다) ──
+    // 하루치만 보여주면 **어제 배운 걸 다시 꺼낼 길이 없다**(2026-10-13 지적).
+    // 그 주의 수업일을 가로로 깔고, 누르면 그 날짜로 간다.
     let pool = schedule;
     if (hotSubject) {
       const hot = schedule.filter((l) => norm(l.src) === hotSubject);
       if (hot.length) pool = hot;
     }
-    const day = lecturesFor(pool);
-    const WHEN = { today: '오늘 수업', past: '직전 수업', future: '다음 수업', none: '수업' };
-    const sec = section(body, `${WHEN[day.when]} · ${day.date.slice(5).replace('-', '/')}`);
-    if (!day.lectures.length) {
-      sec.appendChild(muted('시간표에서 강의를 찾지 못했습니다.'));
-    } else {
-      const want = `26${day.date.slice(5, 7)}${day.date.slice(8, 10)}`;   // YYMMDD
-      const sameDay = [];
-      for (const g of index) {
-        for (const ex of g.exams) {
-          if (examSortKey(ex.file) === want) sameDay.push({ g, ex });
-        }
-      }
-      day.lectures.forEach((l) => {
-        const row = document.createElement('div');
-        row.className = 'today-lec';
-        const head = document.createElement('div');
-        head.className = 'today-lec-head';
-        head.innerHTML = `<span class="today-period">${escapeHtml(l.period || '')}</span>`
-          + `<b>${escapeHtml(l.name)}</b>`
-          + (l.teacher ? `<span class="muted"> ${escapeHtml(l.teacher)}</span>` : '');
-        row.appendChild(head);
-
-        // 한 강의에 붙는 자료가 셋이다 — 예습노트(수업 전) · 실강노트(수업 후 정리) · 족보.
-        // 전에는 예습노트만 걸어둬서 **수업을 듣고 위키를 만들어도 계속 예습본만 떴다**
-        // (2026-10-12 지적). 시간표의 `실강(02_Wiki)`·`가공족보` 칸을 같이 읽는다.
-        const chips = document.createElement('div');
-        chips.className = 'today-chips';
-        const chip = (label, fn) => {
-          const b = document.createElement('button');
-          b.className = 'chip';
-          b.textContent = label;
-          b.onclick = fn;
-          chips.appendChild(b);
-        };
-        if (l.wiki) chip('📗 실강노트', () => openNoteByName(l.wiki, { groups: noteGroups }));
-        if (l.note) chip('📖 예습노트', () => openNoteByName(l.note, { groups: noteGroups }));
-        if (l.jokbo) {
-          const subject = subjectOfLecture(index, l) || '응급_중환자';
-          const hit = findJokboChapter(index, subject, l.jokbo);
-          if (hit) chip('📜 족보', () => openExam(hit.g.subject, hit.ex));
-        }
-        if (chips.children.length) row.appendChild(chips);
-        sec.appendChild(row);
-      });
-      // 같은 날짜의 모의고사·퀴즈 — 파일명 앞 MMDD가 강의일과 같은 것들
-      if (sameDay.length) {
-        const wrap = document.createElement('div');
-        wrap.className = 'today-chips';
-        sameDay.forEach(({ g, ex }) => {
-          const b = document.createElement('button');
-          b.className = 'chip';
-          const p = examProgress(attempts, ex.path);
-          b.textContent = `${g.kind === '퀴즈' ? '📝' : '🧪'} ${prettyExamName(ex.file)}`
-            + (p.seen ? ` (${p.solid}/${p.seen}${p.weak ? ` · 약함 ${p.weak}` : ''})` : '');
-          b.onclick = () => openExam(g.subject, ex);
-          wrap.appendChild(b);
-        });
-        sec.appendChild(wrap);
-      } else {
-        sec.appendChild(muted('이 날짜의 모의고사·퀴즈는 아직 없습니다. 올라오면 새로고침(↻)을 눌러주세요.'));
-      }
-    }
+    renderDaySection(body, pool, index, attempts, noteGroups);
 
     // ── 카드 ──
     // 보관한 과목(= 시험이 끝난 과목)은 빼고 센다 — 안 그러면 "오늘 4,716장"이 뜬다.
@@ -2073,6 +2290,10 @@ async function loadNotesTab(force) {
     const groups = await noteList(force);
     body.innerHTML = '';
     if (!groups.length) { body.innerHTML = '<p class="muted">노트를 찾지 못했습니다.</p>'; return; }
+
+    // 이번 주 강의를 맨 위에 — 폴더를 더듬어 들어가지 않고 바로 열게(2026-10-13 요청).
+    // 노트 목록은 뿌리 3개 × 과목 28개라 "지금 배우는 것"을 찾는 데 손이 많이 간다.
+    await renderNoteWeek(body, groups);
 
     // 뿌리(예습노트/Wiki/임종평)로 한 겹 묶는다. 임종평만 20개 과목이라
     // 그냥 늘어놓으면 28개 그룹이 깔려서 내 과목을 못 찾는다(2026-10-09).
@@ -3396,6 +3617,7 @@ function renderDeckMain() {
   const grid = document.createElement('div');
   grid.className = 'deck-grid';
   list.slice(0, 120).forEach((c, i) => grid.appendChild(deckCard(c, srs, i)));
+  bindSweep(grid);                       // 고르기 중에는 쓸어서 여러 장
   body.appendChild(grid);
   if (list.length > 120) {
     const more = document.createElement('p');
@@ -3456,10 +3678,13 @@ function selectRange(idx) {
 }
 
 /** 길게 누르면 선택 모드. 손가락이 움직이면(스크롤) 취소한다. */
+let _lpCancel = null;                  // 지금 돌고 있는 길게누르기 타이머를 끊는 함수
+function cancelLongPress() { if (_lpCancel) _lpCancel(); }
+
 function bindLongPress(el, onLong) {
   let timer = null;
   let sx = 0, sy = 0;
-  const cancel = () => { clearTimeout(timer); timer = null; };
+  const cancel = () => { clearTimeout(timer); timer = null; if (_lpCancel === stop) _lpCancel = null; };
   el.addEventListener('pointerdown', (e) => {
     if (e.button != null && e.button !== 0) return;
     sx = e.clientX; sy = e.clientY;
@@ -3471,14 +3696,90 @@ function bindLongPress(el, onLong) {
       onLong();
     }, LONG_PRESS_MS);
     el.classList.add('pressing');
+    _lpCancel = stop;
   });
-  const stop = () => { cancel(); el.classList.remove('pressing'); };
+  function stop() { cancel(); el.classList.remove('pressing'); }
   el.addEventListener('pointerup', stop);
   el.addEventListener('pointercancel', stop);
   el.addEventListener('pointerleave', stop);
   el.addEventListener('pointermove', (e) => {
     if (timer && (Math.abs(e.clientX - sx) > 10 || Math.abs(e.clientY - sy) > 10)) stop();
   });
+}
+
+// ── 쓸어서 여러 장 고르기 (2026-10-13) ──
+//
+// 고르기 모드에서는 **손가락이 지나간 카드가 그대로 골라진다**. 한 장씩 탭하면
+// 20장에 20번을 두드려야 한다 — 쓸면 한 번이다(사진 앱의 다중 선택과 같은 동작).
+//
+// 첫 카드에서 정해진 방향(켠다/끈다)을 끝까지 유지한다. 이게 없으면 손가락이
+// 떨려 같은 카드를 두 번 지날 때 켰다 껐다 해서 결과를 예측할 수 없다.
+let sweep = null;      // {mode:'on'|'off', seen:Set}
+
+function sweepAt(x, y) {
+  if (!sweep) return;
+  const el = document.elementFromPoint(x, y);
+  const card = el && el.closest && el.closest('.deck-card');
+  if (!card || !card.dataset.i) return;
+  const id = (deckView.list || [])[Number(card.dataset.i)]?.id;
+  if (!id || sweep.seen.has(id)) return;
+  sweep.seen.add(id);
+  if (sweep.mode === 'on') deckView.sel.add(id); else deckView.sel.delete(id);
+  card.classList.toggle('picked', deckView.sel.has(id));
+  const tick = card.querySelector('.deck-tick');
+  if (tick) tick.textContent = deckView.sel.has(id) ? '✓' : '';
+  document.querySelector('#deckSelBar .sel-n')
+    && (document.querySelector('#deckSelBar .sel-n').textContent = `${deckView.sel.size}장 선택`);
+}
+
+/**
+ * 고르기 모드일 때만 — 카드 격자 위를 쓸면 지나간 카드가 골라진다.
+ *
+ * ⚠️ **움직이기 전에는 아무것도 하지 않는다.** 누르자마자 고르면 기존 동작 둘을
+ * 망가뜨린다: ① 탭 한 번으로 켜고 끄기 ② 길게 눌러 범위 선택. 손가락이 실제로
+ * 10px 넘게 움직인 순간에야 쓸기로 넘어간다(2026-10-13에 이 충돌을 그대로 겪음).
+ */
+function bindSweep(grid) {
+  let armed = null;        // {x, y, id} — 누르긴 했는데 아직 안 움직였다
+  let active = false;
+
+  grid.addEventListener('pointerdown', (e) => {
+    if (!selOn() || (e.button != null && e.button !== 0)) return;
+    const card = e.target.closest && e.target.closest('.deck-card');
+    if (!card || !card.dataset.i) return;
+    const id = (deckView.list || [])[Number(card.dataset.i)]?.id;
+    if (!id) return;
+    armed = { x: e.clientX, y: e.clientY, id, pointerId: e.pointerId };
+  });
+
+  grid.addEventListener('pointermove', (e) => {
+    if (!armed && !active) return;
+    if (!active) {
+      if (Math.abs(e.clientX - armed.x) < 10 && Math.abs(e.clientY - armed.y) < 10) return;
+      // 이제야 쓸기다 — 길게 누르기 타이머를 끊고 시작한다
+      cancelLongPress();
+      // 첫 카드의 현재 상태가 방향을 정한다(켜는 쓸기 / 끄는 쓸기).
+      // 이게 없으면 손이 떨려 같은 카드를 두 번 지날 때 켰다 껐다 한다.
+      sweep = { mode: deckView.sel.has(armed.id) ? 'off' : 'on', seen: new Set() };
+      active = true;
+      try { grid.setPointerCapture(armed.pointerId); } catch {}
+      sweepAt(armed.x, armed.y);
+    }
+    e.preventDefault();                 // 세로 스크롤에 뺏기지 않게
+    sweepAt(e.clientX, e.clientY);
+  });
+
+  const end = () => {
+    armed = null;
+    if (!active) return;                // 안 움직였으면 탭·길게누르기에 맡긴다
+    active = false;
+    swallowTap();                       // 손을 뗄 때 따라오는 click을 먹는다
+    sweep = null;
+    deckView.confirmDel = false;
+    renderDeck();
+  };
+  grid.addEventListener('pointerup', end);
+  grid.addEventListener('pointercancel', end);
 }
 
 function renderSelBar() {
@@ -3552,6 +3853,7 @@ function deckCard(c, srs, idx = 0) {
   const card = document.createElement('div');
   const picked = selOn() && deckView.sel.has(c.id);
   card.className = `deck-card${selOn() ? ' selectable' : ''}${picked ? ' picked' : ''}`;
+  card.dataset.i = String(idx);          // 쓸어서 고르기가 이걸로 카드를 찾는다
 
   const topic = document.createElement('div');
   topic.className = 'deck-topic';
