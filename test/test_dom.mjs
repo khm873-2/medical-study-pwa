@@ -195,6 +195,19 @@ ok('.penlayer 규칙이 하나뿐', penLayerRules === 1, `${penLayerRules}개`);
   ok('홈화면 표시 이름이 달모', t && t[1] === '달모', t ? t[1] : 'null');
 }
 
+// ── 같은 이름을 두 번 선언하지 않았는가 (2026-10-13) ──
+// 블록을 통째로 복제하는 편집 실수가 실제로 났다. `let x`가 두 번이면 모듈 전체가
+// SyntaxError로 죽어서 **앱이 아무것도 안 뜬다** — 화면 테스트는 그때 전부 타임아웃만
+// 내고 원인을 안 알려준다. 여기서 먼저 잡는다.
+{
+  for (const f of ['app.js', 'reader.js', 'quiz.js', 'wiki.js', 'gemini.js', 'markdown.js']) {
+    const src = readFileSync(`${PWA}/js/${f}`, 'utf8');
+    const names = [...src.matchAll(/^(?:let|const|function)\s+([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]);
+    const dup = [...new Set(names.filter((n, i) => names.indexOf(n) !== i))];
+    ok(`${f}: 최상위 이름이 중복되지 않는다`, dup.length === 0, dup.join(', '));
+  }
+}
+
 console.log(`\n통과 ${pass}건`);
 if (fail.length) {
   console.log(`실패 ${fail.length}건:`);

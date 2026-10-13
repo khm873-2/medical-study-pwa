@@ -2053,3 +2053,60 @@ body.dragging-doc .doc-drawer { opacity: .55; }
 #readPen.erasing .erase-ic { display: inline; }
 /* 펜을 끄면 캔버스가 손가락·펜을 통과시킨다 — 글을 긁어 복사할 때 거슬리지 않게 */
 .penlayer.pen-off { visibility: hidden; }
+
+/* ── 카드 창: 후보 / 이 노트의 카드 (2026-10-13) ──
+   긁자마자 저장하지 않고 후보로 띄운다. 같은 창에서 지우기까지 된다. */
+.cf-tabs {
+  flex: 0 0 auto; display: flex; gap: 6px; padding: 8px 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.cf-tab {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 11px; min-height: 34px;
+  background: none; border: 1px solid transparent; border-bottom: none;
+  border-radius: 9px 9px 0 0;
+  font-family: inherit; font-size: 12.5px; color: var(--sub); cursor: pointer;
+}
+.cf-tab.active {
+  background: var(--card); border-color: var(--border); color: var(--text); font-weight: 700;
+  margin-bottom: -1px;
+}
+.cf-n {
+  font-size: 10.5px; font-weight: 800; background: var(--badge-bg);
+  border-radius: 7px; padding: 1px 6px; min-width: 18px; text-align: center;
+}
+.cf-tab.active .cf-n { background: var(--accent); color: #fff; }
+
+.cf-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
+.cf-row {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 9px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+}
+.cf-row-main { flex: 1 1 auto; min-width: 0; cursor: pointer; }
+.cf-row-topic { font-size: 10.5px; font-weight: 700; color: var(--accent); margin-bottom: 3px; line-height: 1.4; }
+.cf-row-q { font-size: 13px; line-height: 1.55; word-break: keep-all; }
+.cf-row-q .cloze {
+  display: inline-block; min-width: 42px; border-bottom: 2px solid var(--accent); color: transparent;
+}
+.cf-row-q .cloze.filled {
+  background: color-mix(in srgb, var(--correct) 16%, transparent);
+  border-bottom-color: var(--correct); color: var(--text); font-weight: 700;
+}
+.cf-row-q table { border-collapse: collapse; font-size: 11.5px; }
+.cf-row-q th, .cf-row-q td { border: 1px solid var(--border); padding: 3px 5px; }
+.cf-del {
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px;
+  background: none; border: 1px solid var(--border); color: var(--wrong);
+  font-size: 12px; cursor: pointer;
+}
+.cf-del:active { background: var(--badge-bg); }
+
+/* 관련 노트 링크 — 누르면 열리고, 끌면 화면이 갈라진다(2026-10-13).
+   전에는 파랗기만 하고 아무 일도 안 했다. */
+.read-body .wikilink { cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.read-body .wikilink:active { background: var(--badge-bg); border-radius: 4px; }
+
+/* 답변 중 일부만 긁어서 저장할 때 — 버튼이 바뀐 걸 알아보게(2026-10-13) */
+#afSave.partial { background: var(--correct); border-color: var(--correct); }
+/* 답변은 긁을 수 있어야 한다 — 펜 레이어가 위에 있어도 */
+.af-body, .af-body * { -webkit-user-select: text; user-select: text; }

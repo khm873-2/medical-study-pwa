@@ -536,12 +536,21 @@
     <span class="af-status" id="cfStatus"></span>
     <button class="icon-btn" id="cfClose" title="닫기">✕</button>
   </div>
+  <div class="cf-tabs">
+    <button class="cf-tab active" id="cfTabNew">새 카드 <span class="cf-n" id="cfNewN">0</span></button>
+    <button class="cf-tab" id="cfTabAll">이 노트의 카드 <span class="cf-n" id="cfAllN">0</span></button>
+  </div>
   <div class="af-body cf-body" id="cfBody"></div>
-  <div class="af-foot">
-    <button class="btn" id="cfPrev">‹ 이전</button>
+  <div class="af-body cf-list hidden" id="cfList"></div>
+  <div class="af-foot" id="cfFootNew">
+    <button class="btn" id="cfPrev">‹</button>
     <button class="btn" id="cfReveal">답 보기</button>
-    <button class="btn" id="cfNext">다음 ›</button>
-    <button class="btn primary" id="cfStudy">바로 외우기</button>
+    <button class="btn" id="cfNext">›</button>
+    <button class="btn" id="cfDrop">버리기</button>
+    <button class="btn primary" id="cfAdd">＋ 추가</button>
+  </div>
+  <div class="af-foot hidden" id="cfFootAll">
+    <button class="btn" id="cfStudy">▶ 이 노트 카드 외우기</button>
   </div>
   <div class="af-resize" id="cfResize" title="끌어서 크기 조절"></div>
 </div>

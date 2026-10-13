@@ -3299,6 +3299,113 @@ await run('분할 읽기', async () => {
     await a.clearToken();                  // 뒤 테스트에 영향 주지 않게 되돌린다
   });
 }
+
+// ══════════ 카드 창 — 후보 확인 후 추가, 같은 창에서 삭제 (2026-10-13) ══════════
+// 전에는 네모를 치는 족족 저장돼서 쓸 만한 것만 고를 길이 없었고, 지우려면 카드 관리
+// 화면까지 나가야 했다. 그리고 "답 보기"가 **초록 칸만 칠하고 글자를 안 넣었다** —
+// 답은 빈칸 요소가 아니라 `data-answer`에 들어 있다.
+await page.setViewport({ width: 1366, height: 1024 });
+await run('카드 창', async () => {
+  const out = [];
+  const { saveCards, allCards, deleteCard } = await import('/js/db.js');
+  for (const c of await allCards()) await deleteCard(c.id);
+
+  const f = document.getElementById('cardFloat');
+  out.push({ name: '후보/저장된 카드 탭이 있다',
+    ok: !!document.getElementById('cfTabNew') && !!document.getElementById('cfTabAll') });
+  out.push({ name: '＋추가·버리기 버튼이 있다',
+    ok: !!document.getElementById('cfAdd') && !!document.getElementById('cfDrop') });
+
+  // 후보 한 장을 띄운다(실제 cloze 구조 그대로)
+  f.classList.remove('hidden');
+  document.getElementById('cfBody').innerHTML =
+    '<div class="cf-q">깊이는 <span class="cloze" data-answer="5~6cm">      </span>다.</div>';
+  const cz = document.querySelector('#cfBody .cloze');
+  out.push({ name: '가려진 상태에서는 답이 안 보인다',
+    ok: getComputedStyle(cz).color === 'rgba(0, 0, 0, 0)' });
+
+  // ★ 버그: 색만 칠하고 글자를 안 넣으면 초록 칸만 뜬다
+  cz.classList.add('filled');
+  cz.textContent = cz.dataset.answer;
+  out.push({ name: '답을 열면 글자가 실제로 들어간다', ok: cz.textContent === '5~6cm', detail: cz.textContent });
+  out.push({ name: '열린 답은 읽히는 색이다',
+    ok: getComputedStyle(cz).color !== 'rgba(0, 0, 0, 0)', detail: getComputedStyle(cz).color });
+  f.classList.add('hidden');
+
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '빈칸을 칠할 때 data-answer를 넣는다(한 곳에서만 처리)',
+    ok: /function paintCloze\(root, shown\)/.test(app) && /el\.textContent = ans;/.test(app) });
+  out.push({ name: '네모를 쳐도 바로 저장하지 않는다',
+    ok: !/readerCardMode\(false\);\s*\n\s*saveCards\(cards\)/.test(app) });
+  out.push({ name: '＋추가를 눌러야 저장된다', ok: /await saveCards\(\[c\]\)/.test(app) });
+  out.push({ name: '같은 창에서 지울 수 있다', ok: /await deleteCard\(c\.id\);[\s\S]{0,120}refreshCardFloat/.test(app) });
+  out.push({ name: '카드 버튼이 관리 창도 같이 연다', ok: /if \(on\) openCardManager\(\)/.test(app) });
+  return out;
+});
+
+// ══════════ 읽던 자리 기억 · 관련 노트 링크 (2026-10-13) ══════════
+await run('읽던 자리 · 링크', async () => {
+  const out = [];
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '섹션을 넘길 때마다 자리를 기억한다', ok: /rememberReadPos\(\);/.test(app) });
+  out.push({ name: '다시 열면 그 자리에서 이어 본다',
+    ok: /const back = Number\(readPos\[note\.path\] \|\| 0\)/.test(app) });
+  out.push({ name: '분할로 연 쪽은 기억하지 않는다(비교하려 띄운 자리가 덮어쓰면 안 된다)',
+    ok: /if \(panes\.length !== 1 \|\| !reader\) return;/.test(app) });
+  out.push({ name: '기기 간 백업에도 들어간다',
+    ok: /'read_pos'/.test(await fetch('/js/backup.js').then((r) => r.text())) });
+
+  // 관련 노트 링크 — 전에는 파랗기만 하고 아무 일도 안 했다
+  const { renderMarkdown } = await import('/js/markdown.js');
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  const body = document.getElementById('readBody');
+  body.innerHTML = renderMarkdown('관련 노트: [[심폐소생술]] · [[응급중환자_BLS_QA]]');
+  out.push({ name: '위키링크가 본문에 그려진다', ok: document.querySelectorAll('#readBody .wikilink').length === 2 });
+  out.push({ name: '끌 수 있게 만드는 코드가 있다', ok: /function makeWikiLinksDraggable/.test(app) });
+  out.push({ name: '본문을 그릴 때마다 걸어준다', ok: /makeWikiLinksDraggable\(body\)/.test(app) });
+  out.push({ name: '눌러서 여는 길도 생겼다', ok: /el\.addEventListener\('click', async \(\)/.test(app) });
+  out.push({ name: '링크가 눌러볼 만하게 보인다',
+    ok: getComputedStyle(document.querySelector('#readBody .wikilink')).cursor === 'pointer' });
+  return out;
+});
+
+// ══════════ AI 답변 일부만 저장 (2026-10-13) ══════════
+await run('답변 일부 저장', async () => {
+  const out = [];
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  const f = document.getElementById('askFloat');
+  f.classList.remove('hidden');
+  document.getElementById('afBody').innerHTML =
+    '<p id="p1">첫 문단은 쓸모없다.</p><p id="p2">이 문단만 저장하고 싶다.</p>';
+  await new Promise((r) => setTimeout(r, 50));
+  out.push({ name: '처음엔 "답변 저장"', ok: document.getElementById('afSave').textContent === '답변 저장',
+    detail: document.getElementById('afSave').textContent });
+
+  // 둘째 문단만 긁는다
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(document.getElementById('p2'));
+  sel.removeAllRanges(); sel.addRange(range);
+  document.dispatchEvent(new Event('selectionchange'));
+  await new Promise((r) => setTimeout(r, 80));
+  const btn = document.getElementById('afSave');
+  out.push({ name: '긁으면 버튼이 "고른 부분 저장"으로 바뀐다', ok: /고른 부분 저장/.test(btn.textContent),
+    detail: btn.textContent });
+  out.push({ name: '몇 글자인지 알려준다', ok: /\(\d+자\)/.test(btn.textContent) });
+  out.push({ name: '버튼 색으로도 구분된다', ok: btn.classList.contains('partial') });
+
+  sel.removeAllRanges();
+  document.dispatchEvent(new Event('selectionchange'));
+  await new Promise((r) => setTimeout(r, 80));
+  out.push({ name: '선택을 풀면 다시 전체 저장', ok: btn.textContent === '답변 저장' });
+  out.push({ name: '고른 부분만 저장하는 코드가 있다',
+    ok: /const picked = selectedInside\(afEl\('afBody'\)\)/.test(app)
+      && /answer: picked \|\| askCtx\.answer/.test(app) });
+  f.classList.add('hidden');
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════

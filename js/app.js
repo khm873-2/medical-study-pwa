@@ -2411,7 +2411,11 @@ async function openNote(path) {
     try { setSlideDoc(findMnDoc(await marginNoteDocs(), note.pdf)); } catch { setSlideDoc(null); }
     // 읽기 화면이 아직 안 열렸으면 창 하나로 시작한다
     if (!panes.length) panes = [{ tabs: [], active: 0 }];
-    openInPane(note, { pane: activePane });
+    // 전에 읽던 자리가 있으면 거기서 이어 읽는다 — 매번 1장부터 보지 않게
+    const back = Number(readPos[note.path] || 0);
+    const at = back > 0 && back < note.sections.length ? back : 0;
+    openInPane(note, { pane: activePane, secIdx: at });
+    if (at) toast(`읽던 자리(${at + 1}/${note.sections.length})에서 이어 봅니다`);
     show('readScreen');
     // 넓은 화면은 목차를 펴놓고, 좁은 화면은 본문을 가리지 않게 접어둔다(기억값 우선)
     const saved = localStorage.getItem('toc_open');
@@ -2642,7 +2646,14 @@ function initDocDrop() {
     clearDropHint();
     closeDocDrawer();
     try {
-      const note = await loadNote(n.path);
+      // 위키링크에서 끌었으면 이름만 있다 — 그때 경로를 찾는다
+      let path = n.path;
+      if (!path) {
+        const hit = findNoteInGroups(await noteList(false), n.name);
+        if (!hit) { toast(`노트를 찾지 못했습니다: ${n.name}`); return; }
+        path = hit.path;
+      }
+      const note = await loadNote(path);
       if (plan.split && panes.length < 2) splitPane(note);
       else { openInPane(note, { pane: Math.min(plan.pane, panes.length - 1) }); renderPanes(); }
     } catch (err) { toast(`노트를 열지 못했습니다: ${err.message}`); }
@@ -2664,6 +2675,20 @@ document.getElementById('readSplitBtn').onclick = () => {
 // ───────────── 창 그리기 · 탭 · 나누기 (2026-10-13) ─────────────
 
 /** 이 창에 노트를 연다. 이미 열려 있으면 그 탭으로 간다(같은 문서를 두 번 안 띄운다). */
+// 노트별 "마지막으로 보던 섹션". 같은 문서를 다시 열면 거기서 이어 읽는다(2026-10-13).
+// ⚠️ **분할로 연 쪽은 기억하지 않는다** — 비교하려고 잠깐 띄운 자리가 "읽던 자리"로
+//    덮어써지면, 다음에 그 노트를 열었을 때 엉뚱한 데서 시작한다.
+const READ_POS_KEY = 'read_pos';
+let readPos = {};
+
+async function loadReadPos() { readPos = (await kvGet(READ_POS_KEY)) || {}; }
+function rememberReadPos() {
+  // 창이 하나일 때만 기억한다(분할 중에는 어느 쪽이 "읽던 자리"인지 정할 수 없다)
+  if (panes.length !== 1 || !reader) return;
+  readPos[reader.note.path] = reader.secIdx;
+  kvSet(READ_POS_KEY, readPos).catch(() => {});
+}
+
 function openInPane(note, { pane = activePane, secIdx = 0, force = false } = {}) {
   while (panes.length <= pane) panes.push({ tabs: [], active: 0 });
   const p = panes[pane];
@@ -2857,6 +2882,45 @@ function renderPaneTabs() {
   });
 }
 
+/**
+ * 본문의 위키링크를 **끌 수 있게** 만든다 (2026-10-13).
+ *
+ * "관련 노트: [[심폐소생술]] · [[…_QA]]" 같은 줄이 노트마다 있다. 누르면 그 자리에서
+ * 열리고, **끌어다 오른쪽에 놓으면 화면이 갈라진다** — 서랍에서 끄는 것과 같은 길을 탄다.
+ * (Obsidian auto-split이 하는 일과 같은 발상이다.)
+ */
+function makeWikiLinksDraggable(root) {
+  root.querySelectorAll('.wikilink').forEach((el) => {
+    if (el.__dragBound) return;
+    el.__dragBound = true;
+    el.draggable = true;
+    el.addEventListener('dragstart', (e) => {
+      const name = el.dataset.note;
+      docDragNote = { name, path: null };            // 경로는 떨굴 때 찾는다
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData('text/plain', name);
+      document.getElementById('readPanes').classList.add('drop-ready');
+      document.body.classList.add('dragging-doc');
+    });
+    el.addEventListener('dragend', () => {
+      docDragNote = null;
+      document.body.classList.remove('dragging-doc');
+      clearDropHint();
+    });
+    // 누르면 그 자리에서 연다 — 전에는 링크처럼 보이기만 하고 아무 일도 안 했다
+    el.addEventListener('click', async () => {
+      const name = el.dataset.note;
+      try {
+        const hit = findNoteInGroups(await noteList(false), name);
+        if (!hit) { toast(`노트를 찾지 못했습니다: ${name}`); return; }
+        const note = await loadNote(hit.path);
+        openInPane(note, { pane: activePane });
+        renderPanes();
+      } catch (e) { toast(`노트를 열지 못했습니다: ${e.message}`); }
+    });
+  });
+}
+
 /** 한 창의 본문을 그린다. 활성 창이 아니어도 내용은 보여야 한다. */
 function renderPaneBody(pi) {
   const p = panes[pi];
@@ -2870,6 +2934,7 @@ function renderPaneBody(pi) {
   head.textContent = sec ? sec.heading : '';
   renderSection(body, sec || { text: '' });
   tokenizeTree(body);
+  makeWikiLinksDraggable(body);        // 관련 노트 링크를 끌어 나눌 수 있게
 }
 
 /** 하단 네비(이전/다음/위치)를 활성 창 기준으로 맞춘다. */
@@ -2886,6 +2951,7 @@ function updateNavForPane() {
 /** 활성 창의 본문만 다시 그린다(섹션을 넘겼을 때). 창 구조는 renderPanes가 만든다. */
 function renderReader() {
   if (!reader) return;
+  rememberReadPos();
   renderToc();
   renderPaneBody(activePane);
   updateNavForPane();
@@ -2915,9 +2981,14 @@ function readerCardMode(on) {
   capToast(on ? '펜으로 네모를 치면 그 범위로 카드를 만듭니다' : '카드 만들기 끔');
 }
 
+// 카드 버튼 — 네모 치기 모드를 켜면서 **카드 관리 창도 같이 연다**(2026-10-13 요청).
+// 카드를 만들 수만 있고 지울 수는 없으면 쌓이기만 한다.
 document.getElementById('readMakeCard').onclick = () => {
   if (!readerPen) return;
-  readerCardMode(!readerPen.carding);
+  const on = !readerPen.carding;
+  readerCardMode(on);
+  if (on) openCardManager();
+  else closeCardFloat();
 };
 
 document.getElementById('readCapture').onclick = () => {
@@ -2945,10 +3016,8 @@ function makeCardsFromBox(box) {
     return;
   }
   readerCardMode(false);
-  saveCards(cards).catch(() => {});      // 나중에 관리 화면에서 다시 볼 수 있게
-  backup.scheduleBackup();
-  // 화면을 통째로 바꾸면 읽던 자리를 잃는다 — 만든 카드를 그 자리에서 확인하고
-  // "바로 외우기"를 고를 때만 카드 화면으로 간다(2026-10-12 요청).
+  // ⚠️ 여기서 저장하지 않는다 — 네모를 치는 족족 카드가 쌓이면 쓸 만한 것만 고를
+  //    길이 없다(2026-10-13 요청). 창에 **후보**로 띄우고 "＋ 추가"를 눌러야 들어간다.
   openCardFloat(cards);
 }
 
@@ -3149,28 +3218,69 @@ document.getElementById('toolScrap').onclick = openScrap;
 // 네모 한 번에 보통 1~4장이 나온다. 뭐가 만들어졌는지 눈으로 보고 넘어가야
 // "이게 외울 만한 카드인가"를 바로 판단할 수 있다.
 let cardFloat = null;
-let cfDeck = null;          // {cards, idx, shown}
+let cfDeck = null;          // {cards, idx, shown} — 아직 저장 안 된 후보
+let cfTab = 'new';          // 'new' | 'all'
+let cfSaved = [];           // 이 노트에 이미 저장된 카드
 
 function openCardFloat(cards) {
-  cfDeck = { cards, idx: 0, shown: false };
+  cfDeck = { cards: cards || [], idx: 0, shown: false };
+  cfTab = cfDeck.cards.length ? 'new' : 'all';
   document.getElementById('cardFloat').classList.remove('hidden');
   if (cardFloat) cardFloat.place();
-  renderCardFloat();
+  refreshCardFloat();
 }
 function closeCardFloat() {
   document.getElementById('cardFloat').classList.add('hidden');
   cfDeck = null;
 }
 
-function renderCardFloat() {
-  if (!cfDeck) return;
-  const { cards, idx, shown } = cfDeck;
-  const c = cards[idx];
-  document.getElementById('cfStatus').textContent =
-    `${idx + 1}/${cards.length} · 카드 관리에 저장됐습니다`;
+/** 이 노트에 저장된 카드를 다시 읽고 전체를 그린다. */
+async function refreshCardFloat() {
+  try {
+    const all = await allCards();
+    const path = reader && reader.note ? reader.note.path : '';
+    cfSaved = all.filter((c) => c.notePath === path);
+  } catch { cfSaved = []; }
+  renderCardFloat();
+}
 
+function renderCardFloat() {
+  const nNew = cfDeck ? cfDeck.cards.length : 0;
+  document.getElementById('cfNewN').textContent = String(nNew);
+  document.getElementById('cfAllN').textContent = String(cfSaved.length);
+  document.getElementById('cfTabNew').classList.toggle('active', cfTab === 'new');
+  document.getElementById('cfTabAll').classList.toggle('active', cfTab === 'all');
+  document.getElementById('cfBody').classList.toggle('hidden', cfTab !== 'new');
+  document.getElementById('cfList').classList.toggle('hidden', cfTab !== 'all');
+  document.getElementById('cfFootNew').classList.toggle('hidden', cfTab !== 'new');
+  document.getElementById('cfFootAll').classList.toggle('hidden', cfTab !== 'all');
+  if (cfTab === 'new') renderCfNew(); else renderCfList();
+}
+
+/** 빈칸을 가리거나 드러낸다. 답은 `data-answer`에 있다(reader.js blankNode). */
+function paintCloze(root, shown) {
+  root.querySelectorAll('.cloze').forEach((el) => {
+    const ans = el.dataset.answer || '';
+    if (shown) { el.classList.add('filled'); el.textContent = ans; }
+    else { el.classList.remove('filled'); el.textContent = ' '.repeat(Math.min(14, Math.max(4, ans.length))); }
+  });
+}
+
+function renderCfNew() {
   const body = document.getElementById('cfBody');
   body.innerHTML = '';
+  if (!cfDeck || !cfDeck.cards.length) {
+    document.getElementById('cfStatus').textContent = '';
+    body.appendChild(muted('펜으로 네모를 치면 그 범위로 카드 후보가 만들어집니다.'));
+    ['cfPrev', 'cfNext', 'cfReveal', 'cfAdd', 'cfDrop'].forEach((id) => {
+      document.getElementById(id).disabled = true;
+    });
+    return;
+  }
+  const { cards, idx, shown } = cfDeck;
+  const c = cards[idx];
+  document.getElementById('cfStatus').textContent = `${idx + 1}/${cards.length} · 아직 저장 안 됨`;
+
   if (c.topic) {
     const t = document.createElement('div');
     t.className = 'cf-topic';
@@ -3180,47 +3290,127 @@ function renderCardFloat() {
   const q = document.createElement('div');
   q.className = 'cf-q';
   q.innerHTML = c.contextHtml || '';
-  // 답 자리는 가려두고, "답 보기"를 눌러야 드러난다
-  q.querySelectorAll('.cloze').forEach((el) => {
-    if (shown) el.classList.add('filled');
-    else el.textContent = '____';
-  });
+  paintCloze(q, shown);
   body.appendChild(q);
-
   if (shown && (c.answers || []).length) {
     const a = document.createElement('div');
     a.className = 'cf-a';
     a.textContent = (c.answers || []).join('  /  ');
     body.appendChild(a);
   }
-
   const one = cards.length <= 1;
   document.getElementById('cfPrev').disabled = one || idx === 0;
   document.getElementById('cfNext').disabled = one || idx === cards.length - 1;
+  ['cfReveal', 'cfAdd', 'cfDrop'].forEach((id) => { document.getElementById(id).disabled = false; });
   document.getElementById('cfReveal').textContent = shown ? '답 가리기' : '답 보기';
+}
+
+/** 이 노트에 저장된 카드 — 여기서 지운다. 카드 관리 화면까지 안 가도 되게(2026-10-13). */
+function renderCfList() {
+  const list = document.getElementById('cfList');
+  list.innerHTML = '';
+  document.getElementById('cfStatus').textContent =
+    reader && reader.note ? reader.note.title : '';
+  if (!cfSaved.length) {
+    list.appendChild(muted('이 노트에서 만든 카드가 아직 없습니다.'));
+    document.getElementById('cfStudy').disabled = true;
+    return;
+  }
+  document.getElementById('cfStudy').disabled = false;
+  cfSaved.forEach((c) => {
+    const row = document.createElement('div');
+    row.className = 'cf-row';
+    const main = document.createElement('div');
+    main.className = 'cf-row-main';
+    const top = document.createElement('div');
+    top.className = 'cf-row-topic';
+    top.textContent = c.topic || c.heading || '';
+    const q = document.createElement('div');
+    q.className = 'cf-row-q';
+    q.innerHTML = c.contextHtml || '';
+    paintCloze(q, false);
+    main.append(top, q);
+    // 눌러서 답을 들춰본다 — 지우기 전에 뭔지 확인해야 한다
+    main.onclick = () => {
+      const on = q.classList.toggle('shown');
+      paintCloze(q, on);
+    };
+    const del = document.createElement('button');
+    del.className = 'cf-del';
+    del.textContent = '✕';
+    del.title = '이 카드 지우기';
+    del.onclick = async (e) => {
+      e.stopPropagation();
+      await deleteCard(c.id);
+      backup.scheduleBackup();
+      toast('카드를 지웠습니다.');
+      refreshCardFloat();
+    };
+    row.append(main, del);
+    list.appendChild(row);
+  });
 }
 
 function initCardFloat() {
   cardFloat = makeFloat({
     panel: 'cardFloat', head: 'cfHead', grip: 'cfResize', key: 'card_float_box',
-    def: { w: Math.min(520, innerWidth * 0.92), h: Math.min(420, innerHeight * 0.55) },
+    def: { w: Math.min(560, innerWidth * 0.92), h: Math.min(470, innerHeight * 0.6) },
   });
   document.getElementById('cfClose').onclick = closeCardFloat;
+  document.getElementById('cfTabNew').onclick = () => { cfTab = 'new'; renderCardFloat(); };
+  document.getElementById('cfTabAll').onclick = () => { cfTab = 'all'; refreshCardFloat(); };
+
   document.getElementById('cfPrev').onclick = () => {
-    if (cfDeck && cfDeck.idx > 0) { cfDeck.idx--; cfDeck.shown = false; renderCardFloat(); }
+    if (cfDeck && cfDeck.idx > 0) { cfDeck.idx--; cfDeck.shown = false; renderCfNew(); }
   };
   document.getElementById('cfNext').onclick = () => {
-    if (cfDeck && cfDeck.idx < cfDeck.cards.length - 1) { cfDeck.idx++; cfDeck.shown = false; renderCardFloat(); }
+    if (cfDeck && cfDeck.idx < cfDeck.cards.length - 1) { cfDeck.idx++; cfDeck.shown = false; renderCfNew(); }
   };
   document.getElementById('cfReveal').onclick = () => {
-    if (cfDeck) { cfDeck.shown = !cfDeck.shown; renderCardFloat(); }
+    if (cfDeck) { cfDeck.shown = !cfDeck.shown; renderCfNew(); }
   };
+
+  // 후보 중 지금 것만 버린다 — 네모 한 번에 여러 장이 나오는데 쓸 만한 건 보통 한둘이다
+  document.getElementById('cfDrop').onclick = () => {
+    if (!cfDeck || !cfDeck.cards.length) return;
+    cfDeck.cards.splice(cfDeck.idx, 1);
+    cfDeck.idx = Math.min(cfDeck.idx, Math.max(0, cfDeck.cards.length - 1));
+    cfDeck.shown = false;
+    if (!cfDeck.cards.length) { cfTab = 'all'; refreshCardFloat(); return; }
+    renderCardFloat();
+  };
+
+  // ＋ 추가 — 여기서 비로소 저장된다
+  document.getElementById('cfAdd').onclick = async () => {
+    if (!cfDeck || !cfDeck.cards.length) return;
+    const c = cfDeck.cards[cfDeck.idx];
+    try {
+      await saveCards([c]);
+      backup.scheduleBackup();
+      toast('카드를 추가했습니다.');
+    } catch (e) { toast(`저장하지 못했습니다: ${e.message}`); return; }
+    cfDeck.cards.splice(cfDeck.idx, 1);
+    cfDeck.idx = Math.min(cfDeck.idx, Math.max(0, cfDeck.cards.length - 1));
+    cfDeck.shown = false;
+    if (!cfDeck.cards.length) cfTab = 'all';
+    refreshCardFloat();
+  };
+
   document.getElementById('cfStudy').onclick = () => {
-    if (!cfDeck) return;
-    const cards = cfDeck.cards;
+    if (!cfSaved.length) return;
+    const cards = cfSaved.slice();
     closeCardFloat();
-    startDeck(cards, reader ? reader.note.title : '새 카드', { backTo: 'reader' });
+    startDeck(cards, reader ? reader.note.title : '카드', { backTo: 'reader' });
   };
+}
+
+/** 도구막대의 카드 버튼 — 네모 치기 모드를 켜는 동시에 카드 관리 창을 연다. */
+function openCardManager() {
+  if (!cfDeck) cfDeck = { cards: [], idx: 0, shown: false };
+  cfTab = cfDeck.cards.length ? 'new' : 'all';
+  document.getElementById('cardFloat').classList.remove('hidden');
+  if (cardFloat) cardFloat.place();
+  refreshCardFloat();
 }
 
 /** 카드 묶음을 띄운다. 돌아갈 곳을 기억해 읽던 자리로 복귀한다. */
@@ -3392,6 +3582,24 @@ function openAskFloat(term) {
 }
 function closeAskFloat() { afEl('askFloat').classList.add('hidden'); }
 
+/** 이 요소 안에서 긁어둔 글. 없으면 빈 문자열. */
+function selectedInside(root) {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return '';
+  const r = sel.getRangeAt(0);
+  if (!root.contains(r.commonAncestorContainer)) return '';
+  return String(sel).trim();
+}
+
+/** "답변 저장" 버튼이 지금 뭘 저장할지 보여준다. */
+function updateAfSaveLabel() {
+  const btn = afEl('afSave');
+  if (!btn) return;
+  const n = selectedInside(afEl('afBody')).length;
+  btn.textContent = n ? `고른 부분 저장 (${n}자)` : '답변 저장';
+  btn.classList.toggle('partial', !!n);
+}
+
 let askFloat = null;
 function restoreFloatBox() { if (askFloat) askFloat.place(); }
 
@@ -3401,12 +3609,24 @@ function initAskFloat() {
   });
 
   afEl('afClose').onclick = closeAskFloat;
+
+  // 긁는 동안 버튼 글씨를 바꿔 "지금 누르면 뭐가 저장되는지" 알려준다
+  document.addEventListener('selectionchange', () => {
+    if (!afEl('askFloat').classList.contains('hidden')) updateAfSaveLabel();
+  });
   afEl('afRetry').onclick = () => { if (askCtx && askCtx.term) askInReader(askCtx.term); };
   afEl('afApp').onclick = () => { if (askCtx && askCtx.term) fillAskSheet(askCtx.term); };
+  // 답변 저장 — **긁어둔 부분이 있으면 그것만** 저장한다(2026-10-13 요청).
+  // 설명이 길면 쓸모 있는 건 보통 한두 문단이다. 통째로 넣으면 vault가 지저분해진다.
   afEl('afSave').onclick = () => {
     if (!askCtx || !askCtx.answer) { toast('저장할 답변이 없습니다.'); return; }
-    askItems.push({ ...askCtx });
-    toast(`기록했습니다 (${askItems.length}건) — 결과 화면에서 vault에 저장됩니다.`);
+    const picked = selectedInside(afEl('afBody'));
+    askItems.push({ ...askCtx, answer: picked || askCtx.answer, partial: !!picked });
+    toast(picked
+      ? `고른 부분만 기록했습니다 (${askItems.length}건)`
+      : `전체를 기록했습니다 (${askItems.length}건) — 일부만 저장하려면 긁은 뒤 누르세요.`);
+    window.getSelection().removeAllRanges();
+    updateAfSaveLabel();
   };
 }
 
@@ -3429,7 +3649,8 @@ async function askInReader(term) {
     askCtx.answer = answer;
     body.innerHTML = renderMarkdown(answer);
     tokenizeTree(body);                 // 답변에서도 긁어서 다시 물을 수 있게
-    status.textContent = '저장하지 않으면 사라집니다';
+    status.textContent = '쓸 만한 부분만 긁어서 저장할 수 있습니다';
+    updateAfSaveLabel();
   } catch (e) {
     const w = /^RATE_WAIT:(\d+)$/.exec(e.message);
     body.innerHTML = `<div class="warn-box">${escapeText(
@@ -4805,6 +5026,7 @@ function hideSplash() {
   window.__t0 = Date.now();
   await applyTheme();
   await loadDisplay();
+  await loadReadPos();
   initServiceWorker();
   gem.loadDeadModels().catch(() => {});
   gem.loadBodyTiers().catch(() => {});   // 어떤 모델에 어떤 본문이 통했는지 기억해둔 것
