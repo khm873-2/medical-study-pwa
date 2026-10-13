@@ -3004,6 +3004,208 @@ await run('슬라이드 표기', async () => {
   setSlideDoc(null);
   return out;
 });
+
+// ══════════ 노트 분할 읽기 (2026-10-13) ══════════
+// 같은 문서의 다른 대목을 견주거나, 다른 문서를 나란히. 창마다 탭이 있고 비율을 바꾼다.
+// ★ 가장 중요한 불변식: **활성 창의 요소가 #readCard/#readHeading/#readBody id를
+//   가져간다.** 펜·카드 만들기·질문 등 25곳이 그 id로 "지금 보는 창"을 찾는다.
+await page.setViewport({ width: 1366, height: 1024 });
+await run('분할 읽기', async () => {
+  const out = [];
+  const A = await import('/js/app.js').catch(() => null);   // 모듈은 비공개 — DOM으로 확인한다
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  const rs = document.getElementById('readScreen');
+  rs.classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+
+  out.push({ name: '도구막대에 나누기·문서목록 버튼이 있다',
+    ok: !!document.getElementById('readSplitBtn') && !!document.getElementById('readDocs') });
+  out.push({ name: '처음엔 창이 하나다',
+    ok: document.querySelectorAll('#readPanes .read-pane').length === 1 });
+  out.push({ name: '그 창이 #readBody를 갖고 있다',
+    ok: !!document.querySelector('#readPanes .read-pane #readBody') });
+  return out;
+});
+
+// 실제 노트를 두 개 열어 분할까지 — 진짜 vault 파일로
+{
+  const ready = await page.evaluate(async () => {
+    const R = await import('/js/reader.js');
+    // 가짜 노트 두 개로 창 동작만 본다(네트워크 없이)
+    const mk = (title, n) => ({
+      path: `02_Wiki/t/${title}.md`, title,
+      sections: Array.from({ length: n }, (_, i) => ({ heading: `${title} ${i + 1}장`, text: `${title} 본문 ${i + 1}` })),
+    });
+    window.__mk = mk;
+    return typeof R.loadNote === 'function';
+  });
+  results.push({ name: '읽기 모듈이 살아 있다', ok: ready });
+
+  // app.js의 모듈 비공개 함수는 밖에서 못 부른다 — 버튼을 눌러 같은 경로를 탄다.
+  // 먼저 노트 하나를 "열린 상태"로 만들어야 하므로, 노트 읽기 탭에서 실제로 연다.
+  const opened = await page.evaluate(async () => {
+    const d = await import('/js/db.js');
+    await d.kvSet('note_index_v2', [{
+      root: '02_Wiki', subject: '테스트',
+      notes: [{ name: '가노트', path: '02_Wiki/테스트/가노트.md' },
+              { name: '나노트', path: '02_Wiki/테스트/나노트.md' }],
+    }]);
+    return true;
+  });
+  results.push({ name: '노트 목록을 준비했다', ok: opened });
+}
+
+// github 호출을 가짜로 두고 실제 흐름(목록 → 열기 → 나누기)을 탄다
+{
+  await page.evaluate(async () => {
+    // 토큰이 없으면 노트를 열 때 설정 화면으로 튕긴다 — 가짜 토큰을 넣고 간다
+    const a = await import('/js/auth.js');
+    await a.setToken('fake'); await a.setRepo('me/v');
+    const real = window.fetch;
+    window.__realFetch = real;
+    window.fetch = async (url, init) => {
+      const u = String(url);
+      if (u.includes('api.github.com')) {
+        const name = decodeURIComponent(u.split('/contents/')[1] || '').split('/').pop().replace('.md', '');
+        const body = `---\ntags: [t]\n---\n\n# ${name}\n\n## ${name} 1장\n내용 가\n\n## ${name} 2장\n내용 나\n\n## ${name} 3장\n내용 다\n`;
+        return { ok: true, status: 200, text: async () => body, json: async () => ({}) };
+      }
+      return real(url, init);
+    };
+  });
+
+  // 노트 읽기 탭에서 한 개 연다
+  await page.evaluate(() => {
+    document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+    document.getElementById('listScreen').classList.remove('hidden');
+    document.querySelector('.tabs [data-tab="notes"]').click();
+  });
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('#notesBody button')].some((x) => /가노트/.test(x.textContent)),
+    { timeout: 15000 }).catch(() => {});
+  const openedOne = await page.evaluate(async () => {
+    const b = [...document.querySelectorAll('#notesBody button')].find((x) => /가노트/.test(x.textContent));
+    if (!b) return false;
+    b.click();
+    await new Promise((r) => setTimeout(r, 900));
+    return document.body.dataset.screen === 'readScreen';
+  });
+  results.push({ name: '노트를 열면 읽기 화면으로 간다', ok: openedOne });
+
+  if (openedOne) {
+    await run('화면 나누기', async () => {
+      const out = [];
+      document.getElementById('readSplitBtn').click();
+      await new Promise((r) => setTimeout(r, 450));
+      const ps = document.querySelectorAll('#readPanes .read-pane');
+      out.push({ name: '누르면 창이 둘로 갈라진다', ok: ps.length === 2, detail: String(ps.length) });
+      out.push({ name: '같은 문서가 양쪽에 뜬다(비교용)',
+        ok: [...document.querySelectorAll('#readPanes .read-body')].every((b) => b.textContent.trim().length > 0) });
+      out.push({ name: '가운데에 비율 손잡이가 생긴다', ok: !!document.querySelector('.pane-split-resizer') });
+      out.push({ name: '창마다 탭 줄이 생긴다',
+        ok: document.querySelectorAll('#readPanes .pane-tabs').length === 2 });
+
+      // ★ 불변식: 활성 창만 #readBody를 갖는다
+      const bodies = document.querySelectorAll('#readPanes .read-body');
+      const withId = [...bodies].filter((b) => b.id === 'readBody');
+      out.push({ name: '#readBody는 활성 창에 하나뿐이다(펜·질문이 그 창을 향한다)',
+        ok: withId.length === 1, detail: `${withId.length}개` });
+      const activePane = document.querySelector('#readPanes .read-pane.active');
+      out.push({ name: '그 하나가 활성 창 안에 있다', ok: !!activePane && activePane.contains(withId[0]) });
+
+      // 다른 창을 누르면 활성이 옮겨간다
+      const other = [...document.querySelectorAll('#readPanes .read-pane')].find((x) => !x.classList.contains('active'));
+      other.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 150));
+      out.push({ name: '다른 창을 누르면 활성이 옮겨간다', ok: other.classList.contains('active') });
+      out.push({ name: '#readBody도 같이 따라간다', ok: !!other.querySelector('#readBody') });
+      out.push({ name: '비활성 창은 id를 내놓는다',
+        ok: document.querySelectorAll('#readPanes #readBody').length === 1 });
+      return out;
+    });
+
+    // 비율 조정 — 진짜 드래그 (분할이 됐을 때만)
+    if (await page.evaluate(() => !!document.querySelector('.pane-split-resizer'))) {
+      const before = await page.evaluate(() =>
+        Math.round(document.querySelector('#readPanes .read-pane').getBoundingClientRect().width));
+      const grip = await page.evaluate(() => {
+        const r = document.querySelector('.pane-split-resizer').getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+      });
+      await page.mouse.move(grip.x, grip.y);
+      await page.mouse.down();
+      await page.mouse.move(grip.x - 180, grip.y, { steps: 8 });
+      await page.mouse.up();
+      await new Promise((r) => setTimeout(r, 200));
+      const after = await page.evaluate(() =>
+        Math.round(document.querySelector('#readPanes .read-pane').getBoundingClientRect().width));
+      results.push({ name: '손잡이를 끌면 비율이 바뀐다', ok: Math.abs(after - (before - 180)) <= 12,
+        detail: `${before} → ${after}px` });
+      results.push({ name: '맞춰둔 비율을 기억한다',
+        ok: !!(await page.evaluate(() => localStorage.getItem('pane_split'))) });
+      // 두 번 누르면 반반
+      await page.evaluate(() => document.querySelector('.pane-split-resizer')
+        .dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+      await new Promise((r) => setTimeout(r, 200));
+      results.push({ name: '두 번 누르면 반반으로 돌아온다',
+        ok: !(await page.evaluate(() => localStorage.getItem('pane_split'))) });
+    } else {
+      results.push({ name: '비율 손잡이가 있어야 한다', ok: false, detail: '분할이 안 됐다' });
+    }
+
+    await run('합치기 · 탭', async () => {
+      const out = [];
+      // 탭 닫기 — 창의 마지막 탭이면 그 창이 닫힌다
+      const closeBtn = document.querySelector('#readPanes .read-pane:last-child .pane-close');
+      out.push({ name: '창마다 닫기 버튼이 있다', ok: !!closeBtn });
+      closeBtn.click();
+      await new Promise((r) => setTimeout(r, 250));
+      out.push({ name: '닫으면 창이 하나로 합쳐진다',
+        ok: document.querySelectorAll('#readPanes .read-pane').length === 1 });
+      out.push({ name: '합친 뒤에도 #readBody가 살아 있다', ok: !!document.getElementById('readBody') });
+      out.push({ name: '합치면 탭 줄이 사라진다(창이 하나면 보여줄 이유가 없다)',
+        ok: document.querySelectorAll('#readPanes .pane-tabs').length === 0 });
+      out.push({ name: '본문이 비지 않는다',
+        ok: document.getElementById('readBody').textContent.trim().length > 0 });
+      return out;
+    });
+
+    await run('문서 목록 서랍', async () => {
+      const out = [];
+      document.getElementById('readDocs').click();
+      await new Promise((r) => setTimeout(r, 400));
+      const dd = document.getElementById('docDrawer');
+      out.push({ name: '서랍이 열린다', ok: !dd.classList.contains('hidden') });
+      out.push({ name: '노트가 나열된다', ok: document.querySelectorAll('.dd-item').length >= 2,
+        detail: String(document.querySelectorAll('.dd-item').length) });
+      out.push({ name: '끌 수 있게 돼 있다',
+        ok: [...document.querySelectorAll('.dd-item')].every((x) => x.draggable) });
+      out.push({ name: '검색으로 좁힐 수 있다', ok: !!document.getElementById('docSearch') });
+      const search = document.getElementById('docSearch');
+      search.value = '나노트';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 150));
+      out.push({ name: '검색하면 걸러진다',
+        ok: document.querySelectorAll('.dd-item').length === 1,
+        detail: String(document.querySelectorAll('.dd-item').length) });
+
+      // 눌러서 열면 지금 창의 새 탭이 된다
+      document.querySelector('.dd-item').click();
+      await new Promise((r) => setTimeout(r, 600));
+      out.push({ name: '누르면 서랍이 닫힌다', ok: dd.classList.contains('hidden') });
+      out.push({ name: '제목이 그 노트로 바뀐다',
+        ok: /나노트/.test(document.getElementById('readTitle').textContent),
+        detail: document.getElementById('readTitle').textContent });
+      return out;
+    });
+  }
+
+  await page.evaluate(async () => {
+    if (window.__realFetch) window.fetch = window.__realFetch;
+    const a = await import('/js/auth.js');
+    await a.clearToken();                  // 뒤 테스트에 영향 주지 않게 되돌린다
+  });
+}
 await browser.close();
 
 // ══════════ 결과 ══════════

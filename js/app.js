@@ -2011,9 +2011,50 @@ document.getElementById('askSaveLater').onclick = () => {
 
 // ═══════════ Phase 4 — 읽기 모드 · 플래시카드 ═══════════
 
-let reader = null;      // {note, secIdx}
+// ───────────── 읽기 창(pane) 모델 (2026-10-13) ─────────────
+//
+// 노트를 **둘로 갈라서** 본다 — 같은 문서의 다른 대목을 견주거나, 다른 문서를 나란히.
+// 창마다 탭이 여럿이고, 가운데를 끌어 비율을 바꾼다.
+//
+// ★ 호환성이 이 설계의 핵심이다. 펜·카드 만들기·질문·모아두기 등 25곳이 이미
+//   `reader.note` / `reader.secIdx`를 읽고 쓴다. 그래서 `reader`를 없애지 않고
+//   **활성 탭 객체 자체를 가리키게** 둔다 — 탭이 `{note, secIdx}`이므로 기존 코드가
+//   `reader.secIdx = 3`을 해도 그 탭이 그대로 바뀐다. 한 줄도 안 고쳐도 된다.
+//
+// ★ 같은 이유로 DOM도 **활성 창의 요소가 `#readCard`/`#readHeading`/`#readBody`
+//   id를 가져간다**. 그 id를 찾는 기존 코드가 늘 "지금 보고 있는 창"을 가리키게 된다.
+//   창을 바꿀 때 id를 옮긴다(moveReaderIds).
+
+let panes = [];         // [{tabs:[{note,secIdx}], active:0}] — 1개 또는 2개
+let activePane = 0;
+let paneSeq = 0;        // 창 DOM을 구분하는 번호
+let reader = null;      // = panes[activePane].tabs[active] — 기존 코드가 쓰는 그 객체
 let readerPen = null;
 let cardDeck = null;    // {cards, idx, srs, title}
+
+/** 활성 창·탭이 바뀌었을 때 `reader`와 DOM id를 거기에 맞춘다. */
+function syncReader() {
+  const p = panes[activePane];
+  reader = (p && p.tabs[p.active]) || null;
+  moveReaderIds();
+}
+
+/** `#readCard`·`#readHeading`·`#readBody`를 활성 창의 요소로 옮긴다. */
+function moveReaderIds() {
+  document.querySelectorAll('#readPanes .read-pane').forEach((el, i) => {
+    const on = i === activePane;
+    el.classList.toggle('active', on);
+    const card = el.querySelector('.read-card');
+    const head = el.querySelector('.read-heading');
+    const body = el.querySelector('.read-body');
+    if (!card) return;
+    if (on) { card.id = 'readCard'; head.id = 'readHeading'; body.id = 'readBody'; }
+    else { card.removeAttribute('id'); head.removeAttribute('id'); body.removeAttribute('id'); }
+  });
+}
+
+const paneCount = () => panes.length;
+function curPane() { return panes[activePane] || null; }
 
 // ---- 탭 ----
 const TAB_BODY = {
@@ -2368,12 +2409,14 @@ async function openNote(path) {
     // 이 노트의 슬라이드 PDF가 MarginNote에 있으면 `[슬라이드 p.N]`이 그 문서로 바로 간다.
     // 못 찾으면 "현재 열린 문서"로 떨어진다 — 어느 쪽이든 안 깨진다(2026-10-12).
     try { setSlideDoc(findMnDoc(await marginNoteDocs(), note.pdf)); } catch { setSlideDoc(null); }
-    reader = { note, secIdx: 0 };
+    // 읽기 화면이 아직 안 열렸으면 창 하나로 시작한다
+    if (!panes.length) panes = [{ tabs: [], active: 0 }];
+    openInPane(note, { pane: activePane });
     show('readScreen');
     // 넓은 화면은 목차를 펴놓고, 좁은 화면은 본문을 가리지 않게 접어둔다(기억값 우선)
     const saved = localStorage.getItem('toc_open');
     tocOpen(saved === null ? window.innerWidth >= 900 : saved === '1');
-    renderReader();
+    renderPanes();
     ensureReaderPen();
   } catch (e) {
     body.innerHTML = prev;
@@ -2447,19 +2490,347 @@ document.getElementById('readTocBtn').onclick = () => tocOpen(!tocIsOpen());
 document.getElementById('readTocHide').onclick = () => tocOpen(false);
 document.getElementById('readTocScrim').onclick = () => tocOpen(false);
 
-function renderReader() {
+// ───────────── 문서 목록 서랍 (2026-10-13) ─────────────
+//
+// 읽는 중에 다른 노트로 건너뛰려면 목록 화면까지 나갔다 와야 했다.
+// 서랍에서 바로 열고, **끌어서 오른쪽에 놓으면 화면이 갈라진다.**
+
+let docDragNote = null;      // 지금 끌고 있는 노트
+
+async function openDocDrawer() {
+  const dd = document.getElementById('docDrawer');
+  dd.classList.remove('hidden');
+  document.getElementById('docScrim').classList.remove('hidden');
+  const list = document.getElementById('docList');
+  if (list.dataset.filled !== '1') {
+    list.innerHTML = '<p class="muted" style="padding:12px">불러오는 중…</p>';
+    try {
+      const groups = await noteList(false);
+      list.dataset.filled = '1';
+      renderDocList(groups, '');
+      list.__groups = groups;
+    } catch (e) {
+      list.innerHTML = `<p class="muted" style="padding:12px">${escapeText(e.message)}</p>`;
+    }
+  }
+  setTimeout(() => document.getElementById('docSearch').focus(), 80);
+}
+function closeDocDrawer() {
+  document.getElementById('docDrawer').classList.add('hidden');
+  document.getElementById('docScrim').classList.add('hidden');
+}
+
+function renderDocList(groups, q) {
+  const list = document.getElementById('docList');
+  const needle = String(q || '').trim().toLowerCase();
+  list.innerHTML = '';
+  let shown = 0;
+  for (const g of groups) {
+    const hits = g.notes.filter((n) => !needle || n.name.toLowerCase().includes(needle));
+    if (!hits.length) continue;
+    const h = document.createElement('div');
+    h.className = 'dd-group';
+    h.textContent = `${ROOT_LABEL[g.root] || g.root} · ${g.subject.replace(/_/g, ' ')}`;
+    list.appendChild(h);
+    hits.slice(0, needle ? 40 : 200).forEach((n) => {
+      const b = document.createElement('button');
+      b.className = 'dd-item';
+      b.textContent = n.name;
+      b.title = n.name;
+      b.draggable = true;
+      b.onclick = async () => {
+        closeDocDrawer();
+        const note = await loadNote(n.path);
+        openInPane(note, { pane: activePane });
+        renderPanes();
+      };
+      // 끌어다 놓기 — 오른쪽에 놓으면 갈라진다
+      b.addEventListener('dragstart', (e) => {
+        docDragNote = n;
+        e.dataTransfer.effectAllowed = 'copy';
+        e.dataTransfer.setData('text/plain', n.path);
+        document.getElementById('readPanes').classList.add('drop-ready');
+      });
+      b.addEventListener('dragend', () => {
+        docDragNote = null;
+        document.getElementById('readPanes').classList.remove('drop-ready', 'drop-left', 'drop-right');
+      });
+      list.appendChild(b);
+      shown++;
+    });
+  }
+  if (!shown) list.innerHTML = '<p class="muted" style="padding:12px">찾는 노트가 없습니다.</p>';
+}
+
+/** 창 영역에 떨구면 — 왼쪽 절반이면 왼쪽 창, 오른쪽 절반이면 갈라서 오른쪽 창. */
+function initDocDrop() {
+  const host = document.getElementById('readPanes');
+  const side = (e) => (e.clientX - host.getBoundingClientRect().left) / host.getBoundingClientRect().width;
+  host.addEventListener('dragover', (e) => {
+    if (!docDragNote) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    const right = side(e) > 0.5;
+    host.classList.toggle('drop-right', right);
+    host.classList.toggle('drop-left', !right);
+  });
+  host.addEventListener('dragleave', (e) => {
+    if (e.target === host) host.classList.remove('drop-left', 'drop-right');
+  });
+  host.addEventListener('drop', async (e) => {
+    if (!docDragNote) return;
+    e.preventDefault();
+    const n = docDragNote;
+    const right = side(e) > 0.5;
+    docDragNote = null;
+    host.classList.remove('drop-ready', 'drop-left', 'drop-right');
+    closeDocDrawer();
+    const note = await loadNote(n.path);
+    if (right && panes.length < 2) splitPane(note);          // 갈라진다
+    else { openInPane(note, { pane: right ? Math.min(1, panes.length - 1) : 0 }); renderPanes(); }
+  });
+}
+
+document.getElementById('readDocs').onclick = openDocDrawer;
+document.getElementById('docClose').onclick = closeDocDrawer;
+document.getElementById('docScrim').onclick = closeDocDrawer;
+document.getElementById('docSearch').oninput = (e) => {
+  const list = document.getElementById('docList');
+  if (list.__groups) renderDocList(list.__groups, e.target.value);
+};
+document.getElementById('readSplitBtn').onclick = () => {
+  if (panes.length > 1) closePane(1);
+  else splitPane(null);                                       // 같은 문서를 복제해 비교
+};
+
+// ───────────── 창 그리기 · 탭 · 나누기 (2026-10-13) ─────────────
+
+/** 이 창에 노트를 연다. 이미 열려 있으면 그 탭으로 간다(같은 문서를 두 번 안 띄운다). */
+function openInPane(note, { pane = activePane, secIdx = 0, force = false } = {}) {
+  while (panes.length <= pane) panes.push({ tabs: [], active: 0 });
+  const p = panes[pane];
+  const i = force ? -1 : p.tabs.findIndex((t) => t.note.path === note.path);
+  if (i >= 0) { p.active = i; if (secIdx) p.tabs[i].secIdx = secIdx; }
+  else { p.tabs.push({ note, secIdx }); p.active = p.tabs.length - 1; }
+  activePane = pane;
+  syncReader();
+}
+
+/** 창을 둘로 가른다. 넘긴 노트가 없으면 지금 보던 것을 복제한다(같은 문서 비교). */
+function splitPane(note) {
+  if (panes.length >= 2) return;
+  const cur = reader;
+  if (!cur && !note) return;
+  const n = note || cur.note;
+  panes.push({ tabs: [{ note: n, secIdx: note ? 0 : cur.secIdx }], active: 0 });
+  activePane = 1;
+  syncReader();
+  renderPanes({ animate: true });
+}
+
+/** 창 하나를 닫는다(합치기). */
+function closePane(idx) {
+  if (panes.length < 2) return;
+  panes.splice(idx, 1);
+  activePane = 0;
+  document.documentElement.style.removeProperty('--pane-split');
+  syncReader();
+  renderPanes();
+}
+
+/** 탭 하나를 닫는다. 창의 마지막 탭이면 창을 닫거나(둘일 때) 목록으로 나간다. */
+function closeTab(paneIdx, tabIdx) {
+  const p = panes[paneIdx];
+  if (!p) return;
+  p.tabs.splice(tabIdx, 1);
+  if (!p.tabs.length) {
+    if (panes.length > 1) { closePane(paneIdx); return; }
+    document.getElementById('readBack').onclick();
+    return;
+  }
+  p.active = Math.min(p.active, p.tabs.length - 1);
+  if (paneIdx === activePane) syncReader();
+  renderPanes();
+}
+
+/** 창 DOM을 만든다. 내용은 renderPaneBody가 채운다. */
+/** 창을 누르면 그 창이 활성이 된다 — 펜·질문이 그 창을 향하게. 요소당 한 번만 붙인다. */
+function bindPaneFocus(pane) {
+  if (pane.__focusBound) return;
+  pane.__focusBound = true;
+  pane.addEventListener('pointerdown', () => {
+    const pi = Number(pane.dataset.pane);
+    if (activePane === pi || !panes[pi]) return;
+    activePane = pi;
+    syncReader();
+    renderToc();
+    renderPaneTabs();
+    updateNavForPane();
+    // 펜은 활성 창의 카드에 붙어야 한다
+    if (readerPen) { readerPen.destroy(); readerPen = null; }
+    ensureReaderPen();
+  }, true);
+}
+
+function renderPanes({ animate = false } = {}) {
+  const host = document.getElementById('readPanes');
+  host.classList.toggle('two', panes.length === 2);
+
+  // 첫 창은 HTML에 있는 것을 **재사용**한다 — 지웠다 만들면 #readBody 같은 id가
+  // 잠깐 사라져서, 그걸 찾는 코드(펜·카드·질문 25곳)가 그 틈에 터진다.
+  const keep = host.querySelector('.read-pane[data-pane="0"]');
+  [...host.children].forEach((el) => { if (el !== keep) el.remove(); });
+
+  panes.forEach((p, pi) => {
+    const reuse = pi === 0 ? keep : null;
+    const pane = reuse || document.createElement('div');
+    pane.className = `read-pane${pi === activePane ? ' active' : ''}`;
+    pane.dataset.pane = String(pi);
+    bindPaneFocus(pane);                   // 한 번만 붙는다(재사용 창 포함)
+
+    // 탭 줄은 창이 둘일 때만 — 하나뿐이면 보여줄 이유가 없다
+    const oldTabs = pane.querySelector('.pane-tabs');
+    if (oldTabs) oldTabs.remove();
+    if (panes.length > 1) pane.insertBefore(buildPaneTabs(pi, p), pane.firstChild);
+
+    if (reuse) return;                     // 본문 요소는 그대로 둔다
+
+    const main = document.createElement('div');
+    main.className = 'read-main';
+    const card = document.createElement('div');
+    card.className = 'card read-card';
+    const head = document.createElement('div');
+    head.className = 'read-heading';
+    const body = document.createElement('div');
+    body.className = 'wiki-body read-body';
+    card.append(head, body);
+    main.appendChild(card);
+    pane.appendChild(main);
+    // 탭 줄은 위에서 이미 넣었다 — 여기서 또 넣으면 두 줄이 된다
+    // 손잡이는 두 창 **사이**에 넣는다. CSS order로 옮기면 `:last-child` 같은
+    // 선택자가 손잡이를 가리키게 돼서 창 폭 규칙이 빗나간다(2026-10-13에 겪음 —
+    // 손잡이가 맨 오른쪽에 붙어 끌 때 비율이 반대로 움직였다).
+    if (pi === 1) host.appendChild(buildPaneResizer());
+    host.appendChild(pane);
+  });
+
+  moveReaderIds();
+  panes.forEach((_, pi) => renderPaneBody(pi));
+  renderToc();
+  updateNavForPane();
+  if (animate) {
+    host.classList.add('splitting');
+    setTimeout(() => host.classList.remove('splitting'), 320);
+  }
+  // 펜은 활성 창에 다시 붙인다(카드 요소가 새로 만들어졌다)
+  if (readerPen) { readerPen.destroy(); readerPen = null; }
+  ensureReaderPen();
+}
+
+function buildPaneTabs(pi, p) {
+  const bar = document.createElement('div');
+  bar.className = 'pane-tabs pen-passthrough';
+  p.tabs.forEach((t, ti) => {
+    const b = document.createElement('button');
+    b.className = `pane-tab${ti === p.active ? ' active' : ''}`;
+    const label = document.createElement('span');
+    label.className = 'pt-name';
+    label.textContent = t.note.title;
+    label.title = t.note.title;
+    b.appendChild(label);
+    const x = document.createElement('span');
+    x.className = 'pt-x';
+    x.textContent = '✕';
+    x.title = '탭 닫기';
+    x.onclick = (e) => { e.stopPropagation(); closeTab(pi, ti); };
+    b.appendChild(x);
+    b.onclick = () => {
+      activePane = pi; p.active = ti;
+      syncReader(); renderPanes();
+    };
+    bar.appendChild(b);
+  });
+  const close = document.createElement('button');
+  close.className = 'pane-close';
+  close.textContent = '⟷';
+  close.title = '이 창 닫기(합치기)';
+  close.onclick = () => closePane(pi);
+  bar.appendChild(close);
+  return bar;
+}
+
+/** 가운데 손잡이 — 끌어서 비율을 바꾼다. 더블탭하면 50:50. */
+function buildPaneResizer() {
+  const r = document.createElement('div');
+  r.className = 'pane-split-resizer';
+  r.title = '끌어서 비율 조절 · 두 번 눌러 반반';
+  const host = document.getElementById('readPanes');
+  r.addEventListener('pointerdown', (e) => {
+    const box = host.getBoundingClientRect();
+    r.setPointerCapture(e.pointerId);
+    const move = (ev) => {
+      const ratio = Math.max(0.2, Math.min(0.8, (ev.clientX - box.left) / box.width));
+      document.documentElement.style.setProperty('--pane-split', `${(ratio * 100).toFixed(1)}%`);
+    };
+    const up = () => {
+      r.removeEventListener('pointermove', move);
+      r.removeEventListener('pointerup', up);
+      localStorage.setItem('pane_split',
+        getComputedStyle(document.documentElement).getPropertyValue('--pane-split').trim());
+      if (readerPen) readerPen.resize();
+    };
+    r.addEventListener('pointermove', move);
+    r.addEventListener('pointerup', up);
+    e.preventDefault();
+  });
+  r.ondblclick = () => {
+    document.documentElement.style.removeProperty('--pane-split');
+    localStorage.removeItem('pane_split');
+    if (readerPen) readerPen.resize();
+  };
+  return r;
+}
+
+function renderPaneTabs() {
+  if (panes.length < 2) return;
+  document.querySelectorAll('#readPanes .read-pane').forEach((el, pi) => {
+    const old = el.querySelector('.pane-tabs');
+    if (old) el.replaceChild(buildPaneTabs(pi, panes[pi]), old);
+  });
+}
+
+/** 한 창의 본문을 그린다. 활성 창이 아니어도 내용은 보여야 한다. */
+function renderPaneBody(pi) {
+  const p = panes[pi];
+  const el = document.querySelector(`#readPanes .read-pane[data-pane="${pi}"]`);
+  if (!p || !el) return;
+  const t = p.tabs[p.active];
+  const head = el.querySelector('.read-heading');
+  const body = el.querySelector('.read-body');
+  if (!t) { head.textContent = ''; body.innerHTML = ''; return; }
+  const sec = t.note.sections[t.secIdx];
+  head.textContent = sec ? sec.heading : '';
+  renderSection(body, sec || { text: '' });
+  tokenizeTree(body);
+}
+
+/** 하단 네비(이전/다음/위치)를 활성 창 기준으로 맞춘다. */
+function updateNavForPane() {
   if (!reader) return;
   const { note, secIdx } = reader;
-  const sec = note.sections[secIdx];
-  renderToc();
-  document.getElementById('readTitle').textContent = note.title;
-  document.getElementById('readHeading').textContent = sec.heading;
+  document.getElementById('readTitle').textContent =
+    panes.length > 1 ? `${note.title}  ·  ${activePane === 0 ? '왼쪽' : '오른쪽'}` : note.title;
   document.getElementById('readPos').textContent = `${secIdx + 1}/${note.sections.length}`;
-  const rb = document.getElementById('readBody');
-  renderSection(rb, sec);
-  tokenizeTree(rb);   // 노트 본문도 밑줄로 긁을 수 있게
   document.getElementById('readPrev').disabled = secIdx === 0;
   document.getElementById('readNext').disabled = secIdx === note.sections.length - 1;
+}
+
+/** 활성 창의 본문만 다시 그린다(섹션을 넘겼을 때). 창 구조는 renderPanes가 만든다. */
+function renderReader() {
+  if (!reader) return;
+  renderToc();
+  renderPaneBody(activePane);
+  updateNavForPane();
   scrollReadTop();
   if (readerPen) requestAnimationFrame(() => readerPen.resize());
 }
@@ -2813,6 +3184,8 @@ document.getElementById('readBack').onclick = () => {
   if (readerPen) { readerPen.destroy(); readerPen = null; }
   keepAwake(false);
   stopTts();
+  panes = [];
+  activePane = 0;
   reader = null;
   show('listScreen');
 };
@@ -4386,6 +4759,9 @@ function hideSplash() {
   initCardFloat();
   initScrap();
   initDisplayUI();
+  initDocDrop();
+  // 지난번에 맞춰둔 창 비율을 되살린다
+  { const v = localStorage.getItem('pane_split'); if (v) document.documentElement.style.setProperty('--pane-split', v); }
   refreshSyncBar();
   flushOutbox();
   try {

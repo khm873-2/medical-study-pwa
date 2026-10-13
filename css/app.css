@@ -1929,3 +1929,99 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
 }
 .nw-btn:active { background: var(--badge-bg); }
 .nw-btn.primary { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+
+/* ═══════════ 읽기 분할 — 창(pane)·탭·비율 (2026-10-13) ═══════════
+   같은 문서의 다른 대목을 견주거나, 다른 문서를 나란히 본다.
+   창은 1개 또는 2개. 가운데 손잡이를 끌어 비율을 바꾸고, 두 번 누르면 반반. */
+
+.read-panes { flex: 1 1 auto; min-width: 0; display: flex; gap: 0; }
+.read-panes.two { --split: var(--pane-split, 50%); }
+.read-pane { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.read-panes.two > .read-pane:first-child { flex: 0 0 calc(var(--split) - 5px); }
+/* 손잡이는 DOM에서 이미 두 창 사이에 있다 — order로 옮기지 않는다(그러면
+   `:last-child`가 손잡이를 가리켜 폭 규칙이 빗나간다, 2026-10-13). */
+.read-panes.two > .read-pane:last-child { flex: 1 1 auto; }
+
+/* 갈라질 때 스르르 — 폭이 바뀌는 게 눈에 보여야 "나뉘었다"가 전달된다 */
+.read-panes.splitting > .read-pane { transition: flex-basis .28s var(--ease); }
+
+/* 어느 창에 쓰고 있는지 — 활성 창만 테두리로 표시(둘 다 밝으면 구분이 안 된다) */
+.read-panes.two > .read-pane.active .read-card { border-color: var(--accent); }
+
+/* ── 창 안의 탭 ── */
+.pane-tabs {
+  flex: 0 0 auto; display: flex; gap: 4px; align-items: center;
+  padding: 0 2px 6px; overflow-x: auto; scrollbar-width: none;
+}
+.pane-tabs::-webkit-scrollbar { display: none; }
+.pane-tab {
+  display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0;
+  max-width: 190px; min-height: 34px; padding: 5px 8px 5px 11px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+  font-family: inherit; font-size: 12px; color: var(--sub); cursor: pointer;
+}
+.pane-tab.active { background: var(--card); border-color: var(--accent); color: var(--text); font-weight: 700; }
+.pt-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pt-x { flex: 0 0 auto; opacity: .5; font-size: 10px; padding: 2px 3px; border-radius: 4px; }
+.pt-x:active { background: var(--badge-bg); opacity: 1; }
+.pane-close {
+  flex: 0 0 auto; min-width: 32px; min-height: 32px; margin-left: auto;
+  background: none; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--sub); font-size: 13px; cursor: pointer;
+}
+.pane-close:active { background: var(--badge-bg); }
+
+/* ── 가운데 손잡이 ── */
+.pane-split-resizer {
+  flex: 0 0 10px; align-self: stretch; cursor: col-resize; touch-action: none;
+  position: relative;
+}
+.pane-split-resizer::before {
+  content: ''; position: absolute; inset: 20% 4px;
+  background: var(--border); border-radius: 2px;
+}
+.pane-split-resizer:active::before { background: var(--accent); }
+
+/* ── 끌어다 놓기 미리보기 ── */
+.read-panes.drop-ready { outline: 2px dashed var(--border); outline-offset: -4px; border-radius: var(--r-3); }
+.read-panes.drop-left { outline-color: var(--accent); box-shadow: inset 50% 0 0 -2px color-mix(in srgb, var(--accent) 12%, transparent); }
+.read-panes.drop-right { outline-color: var(--accent); box-shadow: inset -50% 0 0 -2px color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* ── 문서 목록 서랍 ── */
+.doc-drawer {
+  position: fixed; z-index: 110; right: 0; top: 0; bottom: 0;
+  width: min(360px, 86vw);
+  display: flex; flex-direction: column;
+  background: var(--card); border-left: 1px solid var(--border);
+  box-shadow: var(--sh-3);
+  padding-top: env(safe-area-inset-top);
+}
+.dd-scrim { position: fixed; inset: 0; z-index: 105; background: rgba(0,0,0,.35); }
+.dd-head { display: flex; gap: 8px; align-items: center; padding: 12px 10px 8px 14px; }
+#docSearch {
+  flex: 1 1 auto; min-width: 0; min-height: 38px;
+  border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px;
+  font-family: inherit; font-size: 14px; background: var(--bg); color: var(--text);
+}
+.dd-hint { font-size: 11.5px; padding: 0 14px 8px; }
+.dd-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px calc(env(safe-area-inset-bottom) + 12px); }
+.dd-group {
+  font-size: 10.5px; font-weight: 800; color: var(--sub); text-transform: uppercase;
+  letter-spacing: .04em; padding: 12px 6px 5px;
+}
+.dd-item {
+  display: block; width: 100%; text-align: left;
+  min-height: 40px; padding: 9px 10px; margin-bottom: 2px;
+  background: none; border: 1px solid transparent; border-radius: 9px;
+  font-family: inherit; font-size: 13px; color: var(--text); cursor: grab;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dd-item:active { background: var(--badge-bg); cursor: grabbing; }
+
+/* 좁은 화면에서는 가로로 나누면 양쪽 다 못 읽는다 — 위아래로 나눈다 */
+@media (max-width: 760px) {
+  .read-panes.two { flex-direction: column; }
+  .read-panes.two > .read-pane:first-child { flex: 0 0 calc(var(--split) - 5px); }
+  .pane-split-resizer { flex-basis: 12px; cursor: row-resize; }
+  .pane-split-resizer::before { inset: 4px 20%; }
+}
