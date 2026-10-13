@@ -2987,6 +2987,7 @@ function ensureReaderPen() {
     onCard: (box) => makeCardsFromBox(box),
     onCapture: (box) => captureFromPen(readerPen, box),
   });
+  window.__penForTest = readerPen;     // 미리보기 동작을 테스트가 들여다본다
   setPenMode(penMode);        // 창을 바꿔 펜을 새로 만들어도 모드는 유지된다
 }
 

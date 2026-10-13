@@ -175,6 +175,9 @@ export class PenLayer {
     const pt = this._pos(e);
     this._start = { x: e.clientX, y: e.clientY };
     if (this.erasing) { this._eraseAt(pt); this._isErasing = true; return; }
+    // 글자 위치는 획 하나 동안만 캐시한다 — 스크롤하거나 창을 바꾸면 달라지므로
+    // 획을 시작할 때마다 버린다(2026-10-13).
+    this._tokCache = null;
     this._cur = { color: this.color, width: this.width, pts: [pt], t0: Date.now() };
   }
 
@@ -192,6 +195,7 @@ export class PenLayer {
     }
     for (const ev of evs) this._cur.pts.push(this._pos(ev));
     this.redraw();
+    this._livePreview();          // 긋는 동안 잡히는 줄을 밝혀준다
 
     // 안전장치: pointerup이 영영 안 오는 경우가 있다(펜을 화면 밖으로 빼거나 OS가 삼킴).
     // 그러면 _cur가 남아 파란 선이 지워지지 않는다 — 2026-10-09 실제 버그.
@@ -247,12 +251,31 @@ export class PenLayer {
    * 궤적만 보여주면 "어디까지 복사되는지" 알 수 없다.
    */
   _showPendingBox() {
-    const raw = boundsOf(this._pending);
-    if (!raw) { this._previewBox = null; this.redraw(); return; }
-    this._textInBox(raw);                       // _coveredBox 를 갱신한다
+    const raw = boundsOf([...(this._pending || []), ...(this._cur ? [this._cur] : [])]);
+    if (!raw) { this._previewBox = null; this._coveredLines = null; this.redraw(); return; }
+    this._textInBox(raw);                       // _coveredBox / _coveredLines 를 갱신한다
     const box = this._coveredBox || raw;
     this._previewBox = (box.r - box.l) * (box.b - box.t) > 0 ? box : null;
     this.redraw();
+  }
+
+  /**
+   * 그으는 **동안** 미리보기를 갱신한다 (2026-10-13 요청).
+   *
+   * 전에는 손을 떼야 네모가 떴다 — 그으면서는 파란 선만 보여서 "허공에 긁는" 느낌이고,
+   * 어디까지 잡히는지 알 수 없었다. 이제 잡히는 줄이 그때그때 밝아진다.
+   * 한 프레임에 한 번만 다시 그린다(포인터는 그보다 훨씬 자주 온다).
+   */
+  _livePreview() {
+    if (this._liveRaf) return;
+    // rAF가 없는 환경(노드 테스트 하네스)에서는 그릴 화면도 없으므로 건너뛴다
+    if (typeof requestAnimationFrame !== 'function') return;
+    this._liveRaf = requestAnimationFrame(() => {
+      this._liveRaf = 0;
+      if (!this._cur && !this._pending) return;
+      if (this.erasing || this.capturing || this.carding) return;
+      this._showPendingBox();
+    });
   }
 
   /** 모아둔 획을 하나의 선택으로 확정한다. */
@@ -260,6 +283,10 @@ export class PenLayer {
     const pend = this._pending || [];
     this._pending = null;
     this._previewBox = null;
+    this._coveredLines = null;
+    this._tokCache = null;
+    if (this._liveRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this._liveRaf);
+    this._liveRaf = 0;
     if (!pend.length) return;
 
     const box = boundsOf(pend);
@@ -312,7 +339,13 @@ export class PenLayer {
    * 줄을 중간까지만 긋는 일은 실제로 거의 없고, 가로 범위까지 따지면 문장이 잘려서
    * 오히려 다시 긋게 된다. 세로로 어느 줄에 걸쳤는지만 보고 그 줄 전체를 준다.
    */
-  _textInBox(box) {
+  /**
+   * 글자 위치를 재둔다. 그으는 **동안 매번** 미리보기를 갱신하는데(2026-10-13),
+   * 섹션 하나에 토큰이 수백 개라 매 move마다 재면 손이 밀린다. 획 하나가 끝날
+   * 때까지 캐시한다 — 그동안 글은 움직이지 않는다.
+   */
+  _tokens() {
+    if (this._tokCache) return this._tokCache;
     const r = this.canvas.getBoundingClientRect();
     const toks = [];
     this.host.querySelectorAll('.tok').forEach((el) => {
@@ -325,7 +358,13 @@ export class PenLayer {
         cy: b.top + b.height / 2 - r.top,
       });
     });
-    if (!toks.length) return '';
+    this._tokCache = toks;
+    return toks;
+  }
+
+  _textInBox(box) {
+    const toks = this._tokens();
+    if (!toks.length) { this._coveredLines = null; return ''; }
 
     // 아래로 밑줄 긋듯 그은 경우도 잡히도록 위쪽으로 한 줄 높이만큼 더 본다
     const yTop = box.t - 24;
@@ -338,7 +377,7 @@ export class PenLayer {
     const inPane = pane
       ? toks.filter((t) => t.l >= pane.l - 2 && t.r <= pane.r + 2)
       : toks;
-    if (!inPane.length) { this._coveredBox = null; return ''; }
+    if (!inPane.length) { this._coveredBox = null; this._coveredLines = null; return ''; }
 
     const picked = [];
     const covered = [];                 // 실제로 잡힌 줄의 화면 범위(미리보기용)
@@ -355,6 +394,7 @@ export class PenLayer {
         b: Math.max(...line.toks.map((t) => t.b)),
       });
     }
+    this._coveredLines = covered.length ? covered : null;
     this._coveredBox = covered.length
       ? {
           l: Math.min(...covered.map((c) => c.l)),
@@ -381,22 +421,41 @@ export class PenLayer {
   redraw() {
     const { ctx, canvas } = this;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const all = [...this.strokes, ...(this._pending || [])];
-    if (this._cur) all.push(this._cur);
-    for (const s of all) this._drawStroke(s);
-    if (this._previewBox) this._drawBox(this._previewBox);
+    // 고를 범위가 잡혔으면 **궤적 대신 하이라이트만** 보여준다(2026-10-13).
+    // 둘을 겹쳐 그리면 밑줄이 하이라이트를 가로질러 지저분하다 — 어차피 확정되면
+    // 궤적은 지워지므로, 잡힌 순간부터는 "무엇이 잡혔나"만 보이는 게 맞다.
+    const picking = !!this._previewBox;
+    if (!picking) {
+      const all = [...this.strokes, ...(this._pending || [])];
+      if (this._cur) all.push(this._cur);
+      for (const s of all) this._drawStroke(s);
+    } else {
+      for (const s of this.strokes) this._drawStroke(s);     // 이미 남긴 필기는 그대로
+      this._drawBox(this._previewBox);
+    }
   }
 
-  /** 지금 잡히는 범위를 네모로 미리 보여준다. */
+  /**
+   * 지금 잡히는 범위를 보여준다.
+   * **줄마다** 옅게 칠하고(어느 글자까지 가는지 바로 보인다), 전체를 점선으로 묶는다.
+   * 네모 하나로만 칠하면 줄 사이 여백까지 덮여서 "이만큼 다 잡히나?" 싶어진다.
+   */
   _drawBox(b) {
     const { ctx } = this;
+    const lines = this._coveredLines;
     ctx.save();
+    // ① 잡히는 줄 — 형광펜처럼
+    ctx.fillStyle = 'rgba(245,158,11,.22)';
+    for (const c of (lines && lines.length ? lines : [b])) {
+      const x = c.l - 2, y = c.t - 1, w = c.r - c.l + 4, h = c.b - c.t + 2;
+      if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, h, 3); ctx.fill(); }
+      else ctx.fillRect(x, y, w, h);
+    }
+    // ② 전체 범위 — 어디서 어디까지인지 한눈에
     ctx.setLineDash([6, 4]);
     ctx.strokeStyle = '#f59e0b';
     ctx.lineWidth = 1.5;
-    ctx.strokeRect(b.l - 4, b.t - 4, b.r - b.l + 8, b.b - b.t + 8);
-    ctx.fillStyle = 'rgba(245,158,11,.10)';
-    ctx.fillRect(b.l - 4, b.t - 4, b.r - b.l + 8, b.b - b.t + 8);
+    ctx.strokeRect(b.l - 5, b.t - 5, b.r - b.l + 10, b.b - b.t + 10);
     ctx.restore();
   }
 

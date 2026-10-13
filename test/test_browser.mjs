@@ -3452,6 +3452,47 @@ await run('답변 일부 저장', async () => {
       for (let i = 1; i <= 10; i++) ev('pointermove', Math.round(x1 + (x2 - x1) * i / 10), y1);
       ev('pointerup', x2, y2);
     }, span);
+    // ★ 그으는 **동안** 어디까지 잡히는지 보여야 한다(2026-10-13 요청).
+    //   전에는 손을 떼야 네모가 떠서 "허공에 긁는" 느낌이었다.
+    const live = await page.evaluate(async ({ x1, y1, x2 }) => {
+      const cv = document.querySelector('#readCard .penlayer');
+      const pen = window.__penForTest;
+      const ev = (type, x, y) => cv.dispatchEvent(new PointerEvent(type, {
+        pointerType: 'pen', pointerId: 7, isPrimary: true,
+        buttons: type === 'pointerup' ? 0 : 1, pressure: .5,
+        clientX: x, clientY: y, bubbles: true, cancelable: true }));
+      ev('pointerdown', x1, y1);
+      for (let i = 1; i <= 6; i++) ev('pointermove', Math.round(x1 + (x2 - x1) * i / 6), y1);
+      // 한 프레임 기다린다 — 미리보기는 rAF로 묶여 있다
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const mid = pen ? { box: !!pen._previewBox, lines: (pen._coveredLines || []).length } : null;
+      ev('pointerup', x2, y1);
+      return mid;
+    }, span);
+    if (live) {
+      results.push({ name: '긋는 동안 잡히는 범위가 보인다(손 떼기 전에)', ok: !!live.box });
+      results.push({ name: '줄마다 하이라이트한다', ok: live.lines >= 1, detail: `${live.lines}줄` });
+    }
+    // 위 획도 확정되면서 팝업을 띄운다 — 다음 검사가 깨끗한 상태에서 시작하게 치운다
+    await new Promise((r) => setTimeout(r, 700));
+    await page.evaluate(() => {
+      document.getElementById('selPop').classList.add('hidden');
+      const t = document.getElementById('selPopText');
+      if (t) t.textContent = '';
+    });
+
+    // 이제 다시 그어서 **확정까지** 본다
+    await page.evaluate(({ x1, y1, x2, y2 }) => {
+      const cv = document.querySelector('#readCard .penlayer');
+      const ev = (type, x, y) => cv.dispatchEvent(new PointerEvent(type, {
+        pointerType: 'pen', pointerId: 1, isPrimary: true,
+        buttons: type === 'pointerup' ? 0 : 1, pressure: 0.5,
+        clientX: x, clientY: y, bubbles: true, cancelable: true }));
+      ev('pointerdown', x1, y1);
+      for (let i = 1; i <= 10; i++) ev('pointermove', Math.round(x1 + (x2 - x1) * i / 10), y1);
+      ev('pointerup', x2, y2);
+    }, span);
+
     // 획을 모아 확정하기까지 기다린다(pen.js SETTLE_MS=420) — 짧게 보면 "안 된다"로 오해한다
     await page.waitForFunction(
       () => !document.getElementById('selPop').classList.contains('hidden'), { timeout: 3000 })
