@@ -3592,6 +3592,69 @@ await run('펜 되돌리기 · 더보기', async () => {
       ok: r.text.length > 0 && !/자|차|카|타/.test(r.text), detail: r.text.slice(0, 24) });
   }
 }
+
+// ══════════ 선택 팝업 — 끝이 보이고, 취소가 쉬워야 한다 (2026-10-13) ══════════
+// 앞 두 줄만 자르고 끝이라 "어디까지 골랐나"를 알 수 없었고, ✕가 버튼 줄 끝에 작게
+// 있어서 **취소가 제일 어려웠다**(실수로 그었을 때 가장 자주 누르는 것인데).
+await run('선택 팝업', async () => {
+  const out = [];
+  const pop = document.getElementById('selPop');
+
+  // 긴 글을 넣어본다 — 실제 노트 한 문단 길이
+  const LONG = '성인 가슴압박 표준수치는 속도 100~120회/분, 깊이 5cm 이상 6cm 이하, '
+    + '위치는 흉골 하부 1/2이며, 압박:환기 비율은 1인·2인 구조자 모두 30:2(전문기도 삽관 전)다. '
+    + '전문기도 삽입 후에는 압박을 끊지 않고 환기만 6초마다 1회로 독립적으로 시행한다.';
+  {
+    // app.js의 selPreview와 같은 규칙으로 넣는다(모듈이 비공개라 같은 식을 쓴다)
+    const el = document.getElementById('selPopText');
+    const t = LONG.replace(/\s+/g, ' ').trim();
+    el.textContent = t.length <= 125 ? t : `${t.slice(0, 70)} … ${t.slice(-45)}`;
+    el.title = t;
+    document.getElementById('selPopCount').textContent = `${t.length}자`;
+    pop.classList.remove('hidden');
+    pop.style.cssText = 'left:40px;top:60px;visibility:visible';
+  }
+  await new Promise((r) => setTimeout(r, 80));
+
+  const shown = document.getElementById('selPopText').textContent;
+  out.push({ name: '앞부분이 보인다', ok: shown.startsWith('성인 가슴압박'), detail: shown.slice(0, 20) });
+  out.push({ name: '**끝부분도 보인다**(어디까지 골랐는지 확인된다)',
+    ok: /독립적으로 시행한다\.$/.test(shown), detail: shown.slice(-22) });
+  out.push({ name: '가운데는 접는다(팝업이 화면을 덮지 않게)', ok: shown.includes('…') });
+  out.push({ name: '몇 글자인지 알려준다',
+    ok: /\d+자/.test(document.getElementById('selPopCount').textContent),
+    detail: document.getElementById('selPopCount').textContent });
+  out.push({ name: '전문은 길게 눌러 볼 수 있다',
+    ok: document.getElementById('selPopText').title.length > shown.length });
+
+  // 닫기 — 맨 위 오른쪽, 누를 만한 크기
+  const x = document.getElementById('selCancel');
+  const xr = x.getBoundingClientRect();
+  const tr = document.getElementById('selPopText').getBoundingClientRect();
+  out.push({ name: '닫기가 글 위쪽에 있다(줄 끝이 아니라)', ok: xr.top < tr.top,
+    detail: `✕ ${Math.round(xr.top)} / 글 ${Math.round(tr.top)}` });
+  out.push({ name: '닫기가 오른쪽 끝에 있다',
+    ok: xr.right >= pop.getBoundingClientRect().right - 16 });
+  out.push({ name: '닫기가 누를 만한 크기다', ok: xr.width >= 28 && xr.height >= 28,
+    detail: `${Math.round(xr.width)}×${Math.round(xr.height)}` });
+
+  // 보조 동작은 아이콘만 — 한 줄에 다 들어간다
+  const acts = [...document.querySelectorAll('#selPop .sel-actions .sel-btn')];
+  out.push({ name: '주 동작만 글씨, 나머지는 아이콘',
+    ok: acts[0].textContent.length > 3 && acts.slice(1).every((b) => b.textContent.trim().length <= 2),
+    detail: acts.map((b) => b.textContent.trim()).join(' ') });
+  out.push({ name: '아이콘에도 뭘 하는지 적혀 있다(길게 누르면 뜬다)',
+    ok: acts.slice(1).every((b) => b.title && b.getAttribute('aria-label')) });
+  const tops = acts.map((b) => Math.round(b.getBoundingClientRect().top));
+  out.push({ name: '버튼이 한 줄에 들어간다(줄바꿈 없음)',
+    ok: new Set(tops).size === 1, detail: tops.join(',') });
+  out.push({ name: '아이콘 버튼도 누를 만하다',
+    ok: acts.slice(1).every((b) => b.getBoundingClientRect().width >= 36) });
+
+  pop.classList.add('hidden');
+  pop.style.cssText = '';
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════

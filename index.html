@@ -476,13 +476,20 @@
 <!-- 선택 직후 뜨는 작은 팝업 — 바로 질문하지 않고 무엇을 할지 고르게 한다.
      (실수로 그었을 때 호출이 낭비되지 않고, 복사만 하고 싶을 때도 길이 열린다) -->
 <div id="selPop" class="hidden pen-passthrough">
+  <!-- 닫기는 **맨 위 오른쪽**에. 전에는 버튼 줄 끝에 작게 있어서 취소가 제일 어려웠다
+       (2026-10-13 지적) — 실수로 그었을 때 가장 자주 누르는 게 이것이다. -->
+  <div class="sel-head">
+    <span class="sel-n" id="selPopCount"></span>
+    <button class="sel-x" id="selCancel" title="취소" aria-label="취소">✕</button>
+  </div>
+  <!-- 앞뒤를 모두 보여준다 — 가운데를 접더라도 **어디서 끝나는지**는 보여야
+       내가 고른 범위가 맞는지 안다. -->
   <div class="sel-text" id="selPopText"></div>
   <div class="sel-actions">
     <button class="sel-btn primary" id="selAsk">🤖 여기서 질문</button>
-    <button class="sel-btn" id="selSend">↗ 다른 앱으로</button>
-    <button class="sel-btn" id="selCopy">📋 복사</button>
-    <button class="sel-btn" id="selNote">✎ 메모에 추가</button>
-    <button class="sel-btn ghost" id="selCancel">✕</button>
+    <button class="sel-btn icon" id="selSend" title="다른 앱으로" aria-label="다른 앱으로">↗</button>
+    <button class="sel-btn icon" id="selCopy" title="복사" aria-label="복사">📋</button>
+    <button class="sel-btn icon" id="selNote" title="메모에 추가" aria-label="메모에 추가">✎</button>
   </div>
 </div>
 
