@@ -3266,30 +3266,31 @@ await run('분할 읽기', async () => {
     const out = [];
     const ids = [...document.querySelectorAll('#readScreen > header button')].map((b) => b.id);
     out.push({ name: '스피커(읽어주기) 버튼을 뺐다', ok: !ids.includes('readTts'), detail: ids.join(',') });
-    out.push({ name: '나누기·문서는 왼쪽(제목 앞)에 모았다',
-      ok: ids.indexOf('readSplitBtn') < ids.indexOf('readAwake')
-        && ids.indexOf('readDocs') < ids.indexOf('readAwake'), detail: ids.join(',') });
-    const h1 = document.getElementById('readTitle');
-    const splitBtn = document.getElementById('readSplitBtn');
-    out.push({ name: '나누기 버튼이 제목보다 앞에 있다',
-      ok: splitBtn.compareDocumentPosition(h1) & Node.DOCUMENT_POSITION_FOLLOWING });
 
-    // 펜 — 누를 때마다 펜 → 지우개 → 끔
+    // 탐색은 글씨 버튼으로 — 아이콘만 두니 목차·노트·카드가 서로 구분이 안 됐다
+    const txt = [...document.querySelectorAll('#readScreen > header .txt-btn')].map((b) => b.textContent);
+    out.push({ name: '목차·노트·카드가 글씨 버튼이다',
+      ok: txt.join(',') === '목차,노트,카드', detail: txt.join(',') });
+    const h1 = document.getElementById('readTitle');
+    out.push({ name: '글씨 버튼이 제목보다 앞에 있다',
+      ok: document.getElementById('readTocBtn').compareDocumentPosition(h1) & Node.DOCUMENT_POSITION_FOLLOWING });
+    out.push({ name: '아이콘 버튼에 눌릴 경계(테두리)가 있다',
+      ok: getComputedStyle(document.getElementById('readPen')).borderStyle === 'solid' });
+
+    // 펜 — 펜 ↔ 지우개 둘만 돈다. "끔"을 뒀더니 두 번 눌러 꺼진 줄 모르고
+    // **선택이 안 되는 것처럼** 보였다(2026-10-13).
     const pen = document.getElementById('readPen');
     out.push({ name: '처음엔 펜(아이콘이 펜)', ok: !pen.classList.contains('erasing') });
-    out.push({ name: '펜이 켜져 있다고 보인다', ok: pen.classList.contains('active') });
     pen.click();
     out.push({ name: '누르면 지우개로 — 아이콘이 지우개로 바뀐다', ok: pen.classList.contains('erasing') });
     out.push({ name: '지우개 아이콘이 실제로 보인다',
       ok: getComputedStyle(pen.querySelector('.erase-ic')).display !== 'none'
         && getComputedStyle(pen.querySelector('.pen-ic')).display === 'none' });
     pen.click();
-    out.push({ name: '한 번 더 누르면 꺼진다', ok: !pen.classList.contains('active') });
-    out.push({ name: '꺼지면 캔버스가 비켜준다(글을 긁을 수 있게)',
-      ok: !!document.querySelector('.penlayer.pen-off') });
-    pen.click();
-    out.push({ name: '또 누르면 펜으로 돌아온다',
-      ok: pen.classList.contains('active') && !pen.classList.contains('erasing') });
+    out.push({ name: '한 번 더 누르면 펜으로 돌아온다(끄는 상태는 없다)',
+      ok: !pen.classList.contains('erasing') });
+    out.push({ name: '펜을 숨기는 상태가 아예 없다(선택이 죽지 않게)',
+      ok: !document.querySelector('.penlayer.pen-off') });
     return out;
   });
 
@@ -3339,7 +3340,10 @@ await run('카드 창', async () => {
     ok: !/readerCardMode\(false\);\s*\n\s*saveCards\(cards\)/.test(app) });
   out.push({ name: '＋추가를 눌러야 저장된다', ok: /await saveCards\(\[c\]\)/.test(app) });
   out.push({ name: '같은 창에서 지울 수 있다', ok: /await deleteCard\(c\.id\);[\s\S]{0,120}refreshCardFloat/.test(app) });
-  out.push({ name: '카드 버튼이 관리 창도 같이 연다', ok: /if \(on\) openCardManager\(\)/.test(app) });
+  out.push({ name: '카드 버튼은 네모 모드만 켠다(누르자마자 창이 뜨면 화면만 가린다)',
+    ok: !/if \(on\) openCardManager\(\)/.test(app) });
+  out.push({ name: '카드 보기·지우기는 "카드" 메뉴가 따로 맡는다',
+    ok: /getElementById\('readCards'\)\.onclick = openCardManager/.test(app) });
   return out;
 });
 
@@ -3406,6 +3410,64 @@ await run('답변 일부 저장', async () => {
   f.classList.add('hidden');
   return out;
 });
+
+// ══════════ 펜으로 긁어 고르기 — 읽기 화면에서 끝까지 (2026-10-13) ══════════
+// "갑자기 안 된다"는 신고가 있었다. 알고 보니 펜을 두 번 눌러 꺼둔 상태였고,
+// 꺼지면 캔버스가 숨어 아무 반응이 없었다("끔" 상태를 없앴다).
+// 읽기 화면에서 실제 펜 이벤트로 긁어 팝업이 뜰 때까지를 통째로 묶어둔다 —
+// 이 길이 막히면 노트에서 질문도 카드도 못 만든다.
+{
+  const ok1 = await page.evaluate(async () => {
+    document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+    document.getElementById('readScreen').classList.remove('hidden');
+    document.body.dataset.screen = 'readScreen';
+    const { tokenize } = await import('/js/pen.js');
+    const body = document.getElementById('readBody');
+    body.innerHTML = '<p id="pp"></p>';
+    tokenize(document.getElementById('pp'),
+      '성인 가슴압박 표준수치는 속도 100~120회분 깊이 5cm 이상 6cm 이하 위치는 흉골 하부 절반이다');
+    return document.querySelectorAll('#readBody .tok').length > 5;
+  });
+  results.push({ name: '본문이 단어 단위로 깔린다(긁기 대상)', ok: ok1 });
+
+  const has = await page.evaluate(() => !!document.querySelector('#readCard .penlayer'));
+  if (!has) {
+    results.push({ name: '읽기 화면에 펜 레이어가 있다', ok: false, detail: '없음' });
+  } else {
+    results.push({ name: '읽기 화면에 펜 레이어가 있다', ok: true });
+    const span = await page.evaluate(() => {
+      const t = [...document.querySelectorAll('#readBody .tok')];
+      const a = t[0].getBoundingClientRect();
+      const z = t[Math.min(7, t.length - 1)].getBoundingClientRect();
+      return { x1: Math.round(a.left + 2), y1: Math.round(a.top + a.height / 2),
+               x2: Math.round(z.right - 2), y2: Math.round(z.top + z.height / 2) };
+    });
+    await page.evaluate(({ x1, y1, x2, y2 }) => {
+      const cv = document.querySelector('#readCard .penlayer');
+      const ev = (type, x, y) => cv.dispatchEvent(new PointerEvent(type, {
+        pointerType: 'pen', pointerId: 1, isPrimary: true,
+        buttons: type === 'pointerup' ? 0 : 1, pressure: 0.5,
+        clientX: x, clientY: y, bubbles: true, cancelable: true }));
+      ev('pointerdown', x1, y1);
+      for (let i = 1; i <= 10; i++) ev('pointermove', Math.round(x1 + (x2 - x1) * i / 10), y1);
+      ev('pointerup', x2, y2);
+    }, span);
+    // 획을 모아 확정하기까지 기다린다(pen.js SETTLE_MS=420) — 짧게 보면 "안 된다"로 오해한다
+    await page.waitForFunction(
+      () => !document.getElementById('selPop').classList.contains('hidden'), { timeout: 3000 })
+      .catch(() => {});
+    const popped = await page.evaluate(() => ({
+      open: !document.getElementById('selPop').classList.contains('hidden'),
+      text: (document.getElementById('selPopText') || {}).textContent || '',
+    }));
+    results.push({ name: '펜으로 긁으면 선택 팝업이 뜬다', ok: popped.open, detail: popped.text.slice(0, 30) });
+    results.push({ name: '긁은 글이 실제로 잡힌다', ok: /가슴압박|성인/.test(popped.text), detail: popped.text.slice(0, 30) });
+    const btns = await page.evaluate(() =>
+      [...document.querySelectorAll('#selPop button')].map((b) => b.textContent.trim()));
+    results.push({ name: '팝업에서 다음 할 일을 고를 수 있다', ok: btns.length >= 2, detail: btns.join(' / ') });
+    await page.evaluate(() => document.getElementById('selPop').classList.add('hidden'));
+  }
+}
 await browser.close();
 
 // ══════════ 결과 ══════════

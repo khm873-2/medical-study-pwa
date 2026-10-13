@@ -2524,33 +2524,51 @@ function closeDocDrawer() {
   document.getElementById('docScrim').classList.add('hidden');
 }
 
+let docOpenGroups = null;      // 펼쳐둔 과목(없으면 지금 보는 과목만)
+
 function renderDocList(groups, q) {
   const list = document.getElementById('docList');
   const needle = String(q || '').trim().toLowerCase();
   list.innerHTML = '';
-  let shown = 0;
 
   // 지금 보고 있는 노트와 **같은 과목**을 맨 위로 — 응급을 보는 중이면 응급이 먼저다.
-  // 서랍에 28개 과목이 깔리면 매번 스크롤해 내려가야 한다(2026-10-13 요청).
   const here = reader && reader.note ? reader.note.path.split('/') : [];
   const hereSubject = here[1] || '';
   const hereRoot = here[0] || '';
   const sorted = [...groups].sort((a, b) => {
     const sa = a.subject === hereSubject, sb = b.subject === hereSubject;
-    if (sa !== sb) return sa ? -1 : 1;                 // 같은 과목이 먼저
+    if (sa !== sb) return sa ? -1 : 1;
     const ra = a.root === hereRoot, rb = b.root === hereRoot;
-    if (ra !== rb) return ra ? -1 : 1;                 // 그 다음 같은 뿌리(위키/예습)
-    return 0;                                          // 나머지는 원래 순서
+    if (ra !== rb) return ra ? -1 : 1;
+    return 0;
   });
 
+  if (docOpenGroups === null) docOpenGroups = new Set();
+
+  let shown = 0;
   for (const g of sorted) {
     const hits = g.notes.filter((n) => !needle || n.name.toLowerCase().includes(needle));
     if (!hits.length) continue;
-    const h = document.createElement('div');
-    h.className = `dd-group${g.subject === hereSubject ? ' here' : ''}`;
-    h.textContent = `${ROOT_LABEL[g.root] || g.root} · ${g.subject.replace(/_/g, ' ')}`
-      + (g.subject === hereSubject ? '  — 지금 보는 과목' : '');
-    list.appendChild(h);
+    const key = `${g.root}|${g.subject}`;
+    const isHere = g.subject === hereSubject && g.root === hereRoot;
+    // 지금 보는 과목만 펼쳐둔다. 검색 중에는 걸린 것을 다 펼친다 — 접힌 채로는
+    // 찾았는지 알 수가 없다(2026-10-13 요청).
+    const open = !!needle || isHere || docOpenGroups.has(key);
+
+    const head = document.createElement('button');
+    head.className = `dd-group${isHere ? ' here' : ''}${open ? ' open' : ''}`;
+    head.innerHTML = `<span class="dd-caret">${open ? '▾' : '▸'}</span>`
+      + `<span class="dd-gname"></span><span class="dd-gn">${hits.length}</span>`;
+    head.querySelector('.dd-gname').textContent =
+      `${ROOT_LABEL[g.root] || g.root} · ${g.subject.replace(/_/g, ' ')}`
+      + (isHere ? '  — 지금 보는 과목' : '');
+    head.onclick = () => {
+      if (docOpenGroups.has(key)) docOpenGroups.delete(key); else docOpenGroups.add(key);
+      renderDocList(groups, document.getElementById('docSearch').value);
+    };
+    list.appendChild(head);
+    if (!open) continue;
+
     hits.slice(0, needle ? 40 : 200).forEach((n) => {
       const b = document.createElement('button');
       b.className = 'dd-item';
@@ -2559,17 +2577,17 @@ function renderDocList(groups, q) {
       b.draggable = true;
       b.onclick = async () => {
         closeDocDrawer();
-        const note = await loadNote(n.path);
-        openInPane(note, { pane: activePane });
-        renderPanes();
+        try {
+          const note = await loadNote(n.path);
+          openInPane(note, { pane: activePane });
+          renderPanes();
+        } catch (e) { toast(`노트를 열지 못했습니다: ${e.message}`); }
       };
-      // 끌어다 놓기 — 오른쪽에 놓으면 갈라진다
       b.addEventListener('dragstart', (e) => {
         docDragNote = n;
         e.dataTransfer.effectAllowed = 'copy';
         e.dataTransfer.setData('text/plain', n.path);
         document.getElementById('readPanes').classList.add('drop-ready');
-        // 가림막이 화면을 덮고 있으면 창이 dragover를 못 받는다 — 끄는 동안 비켜준다
         document.body.classList.add('dragging-doc');
       });
       b.addEventListener('dragend', () => {
@@ -2581,7 +2599,9 @@ function renderDocList(groups, q) {
       shown++;
     });
   }
-  if (!shown) list.innerHTML = '<p class="muted" style="padding:12px">찾는 노트가 없습니다.</p>';
+  if (!shown && !list.children.length) {
+    list.innerHTML = '<p class="muted" style="padding:12px">찾는 노트가 없습니다.</p>';
+  }
 }
 
 /**
@@ -2661,6 +2681,7 @@ function initDocDrop() {
 }
 
 document.getElementById('readDocs').onclick = openDocDrawer;
+document.getElementById('readCards').onclick = openCardManager;
 document.getElementById('docClose').onclick = closeDocDrawer;
 document.getElementById('docScrim').onclick = closeDocDrawer;
 document.getElementById('docSearch').oninput = (e) => {
@@ -2981,14 +3002,12 @@ function readerCardMode(on) {
   capToast(on ? '펜으로 네모를 치면 그 범위로 카드를 만듭니다' : '카드 만들기 끔');
 }
 
-// 카드 버튼 — 네모 치기 모드를 켜면서 **카드 관리 창도 같이 연다**(2026-10-13 요청).
-// 카드를 만들 수만 있고 지울 수는 없으면 쌓이기만 한다.
+// 카드 버튼 = **네모 치기 모드만** 켠다(2026-10-13). 팝업은 네모를 쳐서 후보가
+// 생겼을 때만 뜬다 — 누르자마자 창이 뜨면 화면만 가린다.
+// 카드를 보고 지우는 건 "카드" 메뉴(readCards)가 따로 맡는다.
 document.getElementById('readMakeCard').onclick = () => {
   if (!readerPen) return;
-  const on = !readerPen.carding;
-  readerCardMode(on);
-  if (on) openCardManager();
-  else closeCardFloat();
+  readerCardMode(!readerPen.carding);
 };
 
 document.getElementById('readCapture').onclick = () => {
@@ -3404,7 +3423,7 @@ function initCardFloat() {
   };
 }
 
-/** 도구막대의 카드 버튼 — 네모 치기 모드를 켜는 동시에 카드 관리 창을 연다. */
+/** "카드" 메뉴 — 이 노트의 카드를 보고 지운다(만들기는 연필 네모 버튼이 따로 맡는다). */
 function openCardManager() {
   if (!cfDeck) cfDeck = { cards: [], idx: 0, shown: false };
   cfTab = cfDeck.cards.length ? 'new' : 'all';
@@ -3448,25 +3467,23 @@ document.getElementById('readNext').onclick = () => {
 // 전에는 "펜은 항상 켜져 있고 이 버튼은 지우개 토글"이었다. 버튼 모양이 늘 펜이라
 // 지금 뭐가 켜져 있는지 알 수 없었고, 펜을 아예 끄는 길도 없었다.
 // 이제 **아이콘이 지금 모드를 보여준다** — 지우개면 지우개 모양으로 바뀐다.
-let penMode = 'pen';          // 'pen' | 'erase' | 'off'
+// ⚠️ "끔" 상태를 뒀더니 두 번 눌러 꺼진 줄 모르고 **선택이 안 되는 것처럼** 보였다
+//    (2026-10-13 — "펜으로 범위 지정이 갑자기 안 된다"). 읽기 모드에서 펜의 주 기능은
+//    긁어서 고르는 것이라, 끄면 화면이 죽은 것처럼 느껴진다. 펜 ↔ 지우개 둘만 돈다.
+let penMode = 'pen';          // 'pen' | 'erase'
 
 function setPenMode(m) {
-  penMode = m;
+  penMode = m === 'erase' ? 'erase' : 'pen';
   const btn = document.getElementById('readPen');
-  btn.classList.toggle('erasing', m === 'erase');     // 아이콘이 지우개로 바뀐다
-  btn.classList.toggle('active', m !== 'off');
-  btn.title = m === 'pen' ? '펜 (눌러서 지우개)'
-    : m === 'erase' ? '지우개 (눌러서 끔)' : '펜 꺼짐 (눌러서 펜)';
-  if (readerPen) {
-    readerPen.setErasing(m === 'erase');
-    readerPen.canvas.classList.toggle('pen-off', m === 'off');
-  }
+  btn.classList.toggle('erasing', penMode === 'erase');   // 아이콘이 지우개로 바뀐다
+  btn.classList.toggle('active', penMode === 'erase');    // 지우개일 때만 켠 표시
+  btn.title = penMode === 'pen' ? '펜 — 누르면 지우개' : '지우개 — 누르면 펜';
+  if (readerPen) readerPen.setErasing(penMode === 'erase');
 }
 
 document.getElementById('readPen').onclick = () => {
-  const next = penMode === 'pen' ? 'erase' : penMode === 'erase' ? 'off' : 'pen';
-  setPenMode(next);
-  toast(next === 'pen' ? '펜' : next === 'erase' ? '지우개' : '펜 끔');
+  setPenMode(penMode === 'pen' ? 'erase' : 'pen');
+  toast(penMode === 'erase' ? '지우개' : '펜');
 };
 document.getElementById('readAwake').onclick = async () => {
   const btn = document.getElementById('readAwake');
