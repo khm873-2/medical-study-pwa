@@ -3569,7 +3569,14 @@ await run('펜 되돌리기 · 더보기', async () => {
   await new Promise((r) => setTimeout(r, 80));
   out.push({ name: '⋯ 를 누르면 펼쳐진다', ok: !menu.classList.contains('hidden') });
   const items = [...menu.querySelectorAll('.mm-item .mm-t')].map((x) => x.textContent);
-  out.push({ name: '가끔 쓰는 것들이 들어 있다', ok: items.length >= 6, detail: items.join(' / ') });
+  out.push({ name: '가끔 쓰는 것들이 들어 있다', ok: items.length >= 4, detail: items.join(' / ') });
+  // 모아두기는 **밖에** 있어야 한다 — 어느 화면에서든 핵심이다(2026-10-14 요청)
+  out.push({ name: '모아두기는 메뉴 안에 없다', ok: !items.some((t) => /모아두기/.test(t)) });
+  out.push({ name: '모아두기가 도구막대에 나와 있다',
+    ok: !!document.querySelector('#readTools #readScrapBtn') });
+  out.push({ name: '영역 복사와 다른 그림이다(둘 다 자주 쓴다)',
+    ok: document.getElementById('readScrapBtn').innerHTML
+      !== document.getElementById('readShot').innerHTML });
   out.push({ name: '항목마다 뭘 하는지 글로 적혀 있다',
     ok: [...menu.querySelectorAll('.mm-item')].every((x) => (x.querySelector('.mm-d') || {}).textContent) });
   out.push({ name: '화면 안에 들어온다',
@@ -4179,14 +4186,19 @@ await run('뜯어보기 그만두기', async () => {
   // 느린 응답을 흉내 — 영영 안 끝나는 스트림
   const realFetch = window.fetch;
   let aborted = false;
+  let hitNetwork = false;
   window.fetch = (url, init) => {
     if (!String(url).includes('generativelanguage')) return realFetch(url, init);
+    hitNetwork = true;
     return new Promise((_, reject) => {
       const sig = init && init.signal;
-      if (sig) sig.addEventListener('abort', () => {
+      const bail = () => {
         aborted = true;
         const e = new Error('aborted'); e.name = 'AbortError'; reject(e);
-      });
+      };
+      // 이미 끊긴 뒤에 불릴 수도 있다(요청을 보내기 전에 그만둔 경우)
+      if (sig && sig.aborted) return bail();
+      if (sig) sig.addEventListener('abort', bail);
     });
   };
   const g = await import('/js/gemini.js');
@@ -4211,7 +4223,9 @@ await run('뜯어보기 그만두기', async () => {
   out.push({ name: '**다시 누르면 바로 닫힌다**(다 뜰 때까지 안 기다려도 된다)',
     ok: el.classList.contains('hidden') });
   out.push({ name: '버튼의 켜진 표시도 꺼진다', ok: !btn.classList.contains('active') });
-  out.push({ name: '요청도 실제로 끊는다(할당량을 아낀다)', ok: aborted });
+  // 끊었거나, 아직 보내기 전이었거나 — 둘 다 "할당량을 안 먹었다"는 뜻이다
+  out.push({ name: '요청도 실제로 끊는다(할당량을 아낀다)', ok: aborted || !hitNetwork,
+    detail: aborted ? '끊음' : '보내기 전이었음' });
 
   // 그만둔 뒤 다시 눌러도 멀쩡하다 — busy가 남으면 영영 안 열린다
   btn.click();
@@ -4468,11 +4482,188 @@ await run('vault가 집어갈 표시', async () => {
     subject: '응급_중환자', lecture: 'BLS', examPath: '06_모의고사/x.html',
     items: [{ term: '가슴압박', qnum: 3, qtext: '깊이', answer: '5~6cm' }],
   });
-  out.push({ name: '질문기록에 "아직 안 봤다" 표시가 붙는다', ok: /^처리: 대기$/m.test(md.content) });
+  out.push({ name: '질문기록에 "아직 안 봤다" 표시가 붙는다', ok: /^처리:$/m.test(md.content) });
+  out.push({ name: '**갈 곳마다 따로 적는다**(한 파일이 두 군데로 갈 수 있다)',
+    ok: /^ {2}위키: 대기/m.test(md.content),
+    detail: (md.content.match(/^ {2}\S+: 대기.*/m) || [''])[0] });
   out.push({ name: '갈래를 태그로 적어둔다(어느 명령이 가져갈지)',
     ok: /달모\/질문기록/.test(md.content) });
   out.push({ name: '앞머리 안에 들어간다(본문이 아니라)',
-    ok: md.content.indexOf('처리: 대기') < md.content.indexOf('\n---\n\n') });
+    ok: md.content.indexOf('처리:') < md.content.indexOf('\n---\n\n') });
+  out.push({ name: '몇 건인지도 적는다(열어보기 전에 가늠되게)',
+    ok: /# 풀다가 물어본 것 1건/.test(md.content) });
+  return out;
+});
+
+// ══════════ 풀면서 다른 노트 보기 · 막대가 패널을 안 덮는다 (2026-10-14) ══════════
+await run('풀면서 다른 노트', async () => {
+  const out = [];
+  await new Promise((r) => setTimeout(r, 1600));   // 앞 검사의 "설정 열기" 예약이 지나가길
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'quizScreen';
+  document.getElementById('quizScreen').classList.add('with-side');
+  document.getElementById('wikiPanel').classList.remove('hidden');
+  await new Promise((r) => setTimeout(r, 200));
+
+  // ★ 막대가 관련 노트 제목을 덮고 있었다
+  const bar = document.getElementById('quizTools');
+  const header = document.querySelector('#quizScreen > header');
+  await new Promise((r) => setTimeout(r, 120));      // 자리 잡는 두 프레임을 기다린다
+  const br = bar.getBoundingClientRect(), hdr = header.getBoundingClientRect();
+  // 머리줄 아래로 **한 픽셀도 안 내려간다** — 내려가는 만큼 그 아래 내용(관련 노트
+  // 제목 등)을 덮는다. 이게 지켜지면 아래 어떤 것도 가려질 수 없다.
+  out.push({ name: '**막대가 머리줄 아래로 안 내려온다**(아래 내용을 안 덮는다)',
+    ok: br.bottom <= hdr.bottom + 2,
+    detail: `막대 바닥 ${Math.round(br.bottom)} / 머리줄 바닥 ${Math.round(hdr.bottom)}` });
+  out.push({ name: '머리줄 줄에 맞춰 앉는다', ok: br.top >= hdr.top - 30,
+    detail: `막대 ${Math.round(br.top)} / 머리줄 ${Math.round(hdr.top)}` });
+
+  // 다른 노트 열기
+  out.push({ name: '관련 노트 칸에 "다른 노트" 버튼이 있다', ok: !!document.getElementById('wikiDocs') });
+  const d = await import('/js/db.js');
+  const a = await import('/js/auth.js');
+  await a.setToken('fake'); await a.setRepo('me/v');
+  const realFetch = window.fetch;
+  window.fetch = async (u, i) => {
+    if (!String(u).includes('api.github.com')) return realFetch(u, i);
+    const n = decodeURIComponent(String(u).split('/contents/')[1] || '').split('/').pop().replace('.md', '');
+    return { ok: true, status: 200, json: async () => ({}),
+      text: async () => `# ${n}\n\n## ${n} 1장\n외울 것 가\n\n## ${n} 2장\n외울 것 나\n` };
+  };
+  await d.kvSet('note_index_v2', [
+    { root: '02_Wiki', subject: '응급_중환자 · 암기법', notes: [
+      { name: '응급중환자_기본소생술BLS_암기법', path: '02_Wiki/응급_중환자/암기법/응급중환자_기본소생술BLS_암기법.md' }] },
+  ]);
+  document.getElementById('docList').__groups = null;
+  document.getElementById('wikiDocs').click();
+  await new Promise((r) => setTimeout(r, 600));
+  out.push({ name: '같은 서랍이 열린다(목록이 두 벌이 아니다)',
+    ok: !document.getElementById('docDrawer').classList.contains('hidden') });
+
+  const grp = document.querySelector('#docList .dd-group');
+  if (grp && !grp.classList.contains('open')) { grp.click(); await new Promise((r) => setTimeout(r, 120)); }
+  const item = document.querySelector('#docList .dd-item');
+  out.push({ name: '암기법이 목록에 보인다', ok: !!item,
+    detail: item ? item.textContent : '없음' });
+  if (item) {
+    item.click();
+    await new Promise((r) => setTimeout(r, 800));
+    out.push({ name: '**풀던 화면 그대로, 옆칸에 그 노트가 뜬다**',
+      ok: document.body.dataset.screen === 'quizScreen'
+        && /암기법/.test(document.getElementById('wikiNote').textContent),
+      detail: `${document.body.dataset.screen} / ${document.getElementById('wikiNote').textContent}` });
+    out.push({ name: '내가 고른 노트는 안 가린다(정답 가림막 없음)',
+      ok: document.getElementById('wikiLock').classList.contains('hidden') });
+    out.push({ name: '본문이 실제로 보인다',
+      ok: /외울 것/.test(document.getElementById('wikiBody').textContent),
+      detail: document.getElementById('wikiBody').textContent.slice(0, 24) });
+    // 보고 있던 게 없었으면 돌아갈 곳도 없다 — 그때는 ↩를 숨기는 게 맞다
+    out.push({ name: '돌아갈 곳이 없으면 ↩를 안 띄운다',
+      ok: document.getElementById('wikiBack').classList.contains('hidden') });
+
+    // 하나 더 열면 그때부터는 돌아갈 곳이 생긴다
+    const noteName = document.getElementById('wikiNote').textContent;
+    document.getElementById('wikiDocs').click();
+    await new Promise((r) => setTimeout(r, 450));
+    const g2 = document.querySelector('#docList .dd-group');
+    if (g2 && !g2.classList.contains('open')) { g2.click(); await new Promise((r) => setTimeout(r, 120)); }
+    const it2 = document.querySelector('#docList .dd-item');
+    if (it2) {
+      it2.click();
+      await new Promise((r) => setTimeout(r, 700));
+      out.push({ name: '**두 번째부터는 ↩로 돌아갈 수 있다**',
+        ok: !document.getElementById('wikiBack').classList.contains('hidden') });
+      document.getElementById('wikiBack').click();
+      await new Promise((r) => setTimeout(r, 150));
+      out.push({ name: '↩가 바로 전 노트로 되돌린다',
+        ok: document.getElementById('wikiNote').textContent === noteName,
+        detail: document.getElementById('wikiNote').textContent });
+    }
+  }
+  window.fetch = realFetch;
+  return out;
+});
+
+// ══════════ 노트에서 고르기 — 암기법 채택을 아이패드에서 (2026-10-14) ══════════
+await run('체크 상자', async () => {
+  const out = [];
+  const { renderMarkdown } = await import('/js/markdown.js');
+  const html = renderMarkdown('- [ ] 채택 (안 1)\n- [x] 채택 (안 2)\n- 그냥 항목');
+  const box = document.createElement('div');
+  box.innerHTML = html;
+  out.push({ name: '`- [ ]` 가 눌리는 상자가 된다',
+    ok: box.querySelectorAll('.task-box').length === 2,
+    detail: `${box.querySelectorAll('.task-box').length}개` });
+  out.push({ name: '이미 고른 것은 켜져 있다',
+    ok: box.querySelectorAll('.task.done').length === 1 });
+  out.push({ name: '평범한 항목은 그대로 둔다',
+    ok: box.querySelectorAll('li:not(.task)').length === 1 });
+  out.push({ name: '무엇을 고르는 건지 글이 남는다',
+    ok: /채택 \(안 1\)/.test(box.textContent) });
+  out.push({ name: '손가락으로 누를 만한 크기',
+    ok: (document.body.appendChild(box),
+      box.querySelector('.task-box').getBoundingClientRect().height >= 28),
+    detail: `${Math.round(box.querySelector('.task-box').getBoundingClientRect().height)}px` });
+  out.push({ name: '화면 읽기 프로그램도 상태를 안다',
+    ok: box.querySelector('.task-box').getAttribute('aria-checked') === 'false' });
+  box.remove();
+  return out;
+});
+
+
+// 눌렀을 때 **vault 원본까지** 바뀌어야 뜻이 있다
+await run('고른 것이 vault로', async () => {
+  const out = [];
+  const a = await import('/js/auth.js');
+  await a.setToken('fake'); await a.setRepo('me/v');
+  const RAW = '# 암기법 후보\n\n## 후보\n\n- [ ] 채택 (안 1)\n- [ ] 채택 (안 2)\n';
+  let put = null;
+  const realFetch = window.fetch;
+  window.fetch = async (u, i) => {
+    const url = String(u);
+    if (!url.includes('api.github.com')) return realFetch(u, i);
+    if (i && i.method === 'PUT') { put = JSON.parse(i.body); return { ok: true, status: 200, json: async () => ({}) }; }
+    return { ok: true, status: 200, text: async () => RAW, json: async () => ({ sha: 'abc' }) };
+  };
+  // 읽기 화면에 그 노트를 실제로 연다(앱의 길을 그대로 탄다)
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  document.querySelectorAll('.sheet, .ask-float, #docDrawer, #docScrim').forEach((x) => x.classList.add('hidden'));
+  const d = await import('/js/db.js');
+  await d.kvSet('note_index_v2', [{ root: '02_Wiki', subject: '응급_중환자 · 암기법',
+    notes: [{ name: 't_암기법', path: '02_Wiki/응급_중환자/암기법/t_암기법.md' }] }]);
+  document.getElementById('docList').__groups = null;
+  document.getElementById('readDocs').click();
+  await new Promise((r) => setTimeout(r, 600));
+  const grp = document.querySelector('#docList .dd-group');
+  if (grp && !grp.classList.contains('open')) { grp.click(); await new Promise((r) => setTimeout(r, 120)); }
+  const it = document.querySelector('#docList .dd-item');
+  if (!it) { window.fetch = realFetch; out.push({ name: '노트를 열 수 있다', ok: false }); return out; }
+  it.click();
+  await new Promise((r) => setTimeout(r, 900));
+
+  const boxes = [...document.querySelectorAll('#readBody .task-box')];
+  out.push({ name: '노트 본문에 체크 상자가 뜬다', ok: boxes.length === 2, detail: `${boxes.length}개` });
+  if (!boxes.length) { window.fetch = realFetch; return out; }
+
+  boxes[0].click();
+  await new Promise((r) => setTimeout(r, 700));
+  out.push({ name: '**눌렀더니 vault로 올라간다**', ok: !!put });
+  if (put) {
+    const sent = decodeURIComponent(escape(atob(put.content)));
+    out.push({ name: '고른 줄만 [x]로 바뀐다',
+      ok: /- \[x\] 채택 \(안 1\)/.test(sent), detail: (sent.match(/- \[.\] 채택 \(안 1\)/) || [''])[0] });
+    out.push({ name: '**다른 줄은 그대로 둔다**(사람이 고치던 곳과 안 부딪히게)',
+      ok: /- \[ \] 채택 \(안 2\)/.test(sent) && /# 암기법 후보/.test(sent) });
+    out.push({ name: '덮어쓰기 충돌을 막는 sha를 함께 보낸다', ok: put.sha === 'abc' });
+    out.push({ name: '무엇을 했는지 커밋 글에 남는다', ok: /채택/.test(put.message), detail: put.message });
+  }
+  out.push({ name: '화면에서도 바로 켜진다',
+    ok: boxes[0].getAttribute('aria-checked') === 'true' });
+
+  window.fetch = realFetch;
   return out;
 });
 await browser.close();

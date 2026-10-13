@@ -1,7 +1,7 @@
 // 메인 — 화면 전환, 모의고사 목록, 결과 저장, 동기화 큐.
 
 import { hasToken, setToken, clearToken, verifyToken, getRepo, setRepo } from './auth.js';
-import { listDir, getText, getBlobUrl, createFile } from './github.js';
+import { listDir, getText, getBlobUrl, createFile, putFile, getTextIfExists } from './github.js';
 import { parseExamHtml, prettyExamName, examDate, examSortKey, teacherName } from './parser.js';
 import { Quiz, isAns } from './quiz.js';
 import { PenLayer, tokenizeTree } from './pen.js';
@@ -1295,10 +1295,45 @@ async function loadWiki(q, answered) {
   renderWikiSection();
 }
 
+/**
+ * 풀다가 다른 노트를 옆에 띄운다 (2026-10-14 요청).
+ *
+ * 문제를 풀 때 보고 싶은 건 연계노트 하나가 아니다 — 암기법·Q&A·다른 강의를 오간다.
+ * 읽기 화면의 서랍을 **그대로** 쓴다. 두 군데에 비슷한 목록을 두면 한쪽만 고쳐진다.
+ */
+let wikiHome = null;        // 원래 걸려 있던 연계노트 — ↩로 돌아간다
+
+async function openNoteInWikiPanel(note) {
+  if (!wikiHome && wikiState) wikiHome = wikiState;
+  wikiState = {
+    refs: {
+      noteName: note.title,
+      notePath: note.path,
+      sections: note.sections,
+      auto: false,
+      manual: true,
+    },
+    secIdx: 0,
+    unlocked: true,         // 내가 직접 고른 노트다 — 가릴 이유가 없다
+  };
+  document.getElementById('wikiPanel').classList.remove('hidden');
+  document.getElementById('toolWiki').classList.add('active');
+  syncSideCol();
+  renderWikiSection();
+}
+
+function restoreWikiHome() {
+  if (!wikiHome) return;
+  wikiState = wikiHome;
+  wikiHome = null;
+  renderWikiSection();
+}
+
 function renderWikiSection() {
   if (!wikiState) return;
   const { refs, secIdx, unlocked } = wikiState;
   const sec = refs.sections[secIdx];
+  document.getElementById('wikiBack').classList.toggle('hidden', !wikiHome);
 
   // 섹션 목록을 드롭다운으로 — 자동 매칭이 빗나가도 한 번에 찾아간다.
   // (자동 매칭은 추정이라 100%가 될 수 없다. 틀렸을 때 바로잡는 비용을 0에 가깝게 만든다.)
@@ -1651,23 +1686,85 @@ async function captureFromPen(penLayer, box) {
     width: box.r - box.l, height: box.b - box.t,
   };
   const busy = capToast('캡처하는 중…', 20000);
+
+  // ⚠️ 사파리는 **손을 뗀 그 순간**에만 클립보드 쓰기를 허용한다. 그림을 다 만든 뒤에
+  //    쓰면 이미 늦어서 거절당한다("캡처했지만 복사 권한이 없습니다" — 2026-10-14).
+  //    그래서 **아직 안 끝난 Promise를 먼저 건네고** 그림은 그 뒤에 완성시킨다.
+  let settle;
+  const pending = new Promise((res, rej) => { settle = { res, rej }; });
+  const writing = copyBlobToClipboard(pending).then(() => true, () => false);
+
   try {
     const cv = await captureRect(rect);
     const blob = await canvasToBlob(cv);
     if (!blob) throw new Error('이미지를 만들지 못했습니다.');
     lastCapture = blob;                       // 복사에 실패해도 손에 남겨둔다
-    try {
-      await copyBlobToClipboard(Promise.resolve(blob));
-      busy.remove();
-      capToast('📋 복사했습니다');
-    } catch {
-      busy.remove();
-      capToast('캡처했지만 복사 권한이 없습니다 — 길게 눌러 복사하세요', 2600);
-    }
+    settle.res(blob);
+    const copied = await writing;
+    busy.remove();
+    if (copied) { capToast('📋 복사했습니다'); return; }
+    // 클립보드가 막혔으면 **그림을 띄워준다** — 길게 눌러 복사하거나 다른 앱으로 보낸다.
+    showCapturePreview(blob);
   } catch (e) {
+    settle.rej(e);
+    writing.catch(() => {});
     busy.remove();
     capToast(`캡처 실패 — ${e.message}`, 2400);
   }
+}
+
+/**
+ * 클립보드가 막혔을 때 뜨는 작은 창.
+ *
+ * "복사 권한이 없습니다"라고만 하면 **캡처한 그림이 어디에도 없다**. 띄워두면
+ * 길게 눌러 복사하거나, 공유 시트로 다른 앱에 보내거나, 모아두기에 넣을 수 있다.
+ */
+function showCapturePreview(blob) {
+  document.getElementById('capPrev')?.remove();
+  const url = URL.createObjectURL(blob);
+  const box = document.createElement('div');
+  box.id = 'capPrev';
+  box.className = 'cap-prev';
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = '캡처한 그림';
+  const hint = document.createElement('p');
+  hint.className = 'muted';
+  hint.textContent = '그림을 길게 눌러 복사하거나, 아래에서 고르세요.';
+  const acts = document.createElement('div');
+  acts.className = 'cap-acts';
+  const mk = (label, fn) => {
+    const b = document.createElement('button');
+    b.className = 'btn small';
+    b.textContent = label;
+    b.onclick = fn;
+    return b;
+  };
+  const close = () => { box.remove(); URL.revokeObjectURL(url); };
+  acts.append(
+    mk('📋 다시 복사', async () => {
+      // 이번엔 **누른 그 순간**이라 사파리가 받아준다
+      try { await copyBlobToClipboard(Promise.resolve(blob)); capToast('📋 복사했습니다'); close(); }
+      catch { capToast('그래도 막혔습니다 — 그림을 길게 눌러 복사하세요', 2600); }
+    }),
+    mk('＋ 모아두기', async () => {
+      close();
+      openScrap();
+      await addShot(blob);
+      document.getElementById('scStatus').textContent = '캡처한 그림을 담았습니다';
+    }),
+    mk('↗ 다른 앱으로', async () => {
+      const file = new File([blob], '캡처.png', { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file] }); close(); return; } catch { /* 취소 */ }
+      }
+      const a = document.createElement('a');
+      a.href = url; a.download = '캡처.png'; a.click();
+    }),
+    mk('닫기', close),
+  );
+  box.append(img, hint, acts);
+  document.body.appendChild(box);
 }
 let lastCapture = null;
 
@@ -2692,9 +2789,10 @@ function noteKind(path, name) {
  * 이름 규칙이 이미 일정하니 계산으로 짝을 지어 맨 위에 올려 둔다.
  */
 function pairedNotes(groups) {
-  if (!(reader && reader.note)) return [];
-  const mine = reader.note.path;
-  const key = lectureKey(reader.note.title || mine.split('/').pop().replace(/\.md$/, ''));
+  const doc = currentDoc();
+  if (!doc) return [];
+  const mine = doc.path || '';
+  const key = lectureKey(doc.title || mine.split('/').pop().replace(/\.md$/, ''));
   if (key.length < 6) return [];
   const out = [];
   for (const g of groups || []) {
@@ -2718,9 +2816,13 @@ function renderDocList(groups, q) {
   // 지금 보고 있는 노트와 **같은 과목**을 맨 위로 — 응급을 보는 중이면 응급이 먼저다.
   // 암기법·QA는 `응급_중환자 · 암기법`이라는 **별도 묶음**이라 과목 이름만 보면 안 걸렸다 —
   // 그래서 "노트를 눌러도 암기법이 바로 안 나온다"가 됐다(2026-10-13). 밑동만 보고 가른다.
-  const here = reader && reader.note ? reader.note.path.split('/') : [];
-  const hereSubject = here[1] || '';
-  const hereRoot = here[0] || '';
+  // 퀴즈를 푸는 중이면 **그 시험의 과목**이 기준이다 — 읽던 노트가 아니라(2026-10-14).
+  const doc = currentDoc();
+  const herePath = (doc && doc.path) || (reader && reader.note ? reader.note.path : '');
+  const here = herePath ? herePath.split('/') : [];
+  const hereSubject = here[1]
+    || (document.body.dataset.screen === 'quizScreen' && currentExam ? currentExam.subject : '');
+  const hereRoot = here[0] || '02_Wiki';
   const base = (x) => String(x).split(' · ')[0];
   const sorted = [...groups].sort((a, b) => {
     const sa = base(a.subject) === hereSubject, sb = base(b.subject) === hereSubject;
@@ -2814,6 +2916,9 @@ function docItem(n, asPair) {
     closeDocDrawer();
     try {
       const note = await loadNote(n.path);
+      // 어디서 열었느냐에 따라 **들어갈 자리**가 다르다 — 문제를 풀던 중이면 옆칸으로,
+      // 노트를 읽던 중이면 그 창으로(2026-10-14).
+      if (document.body.dataset.screen === 'quizScreen') { await openNoteInWikiPanel(note); return; }
       openInPane(note, { pane: activePane });
       renderPanes();
     } catch (e) { toast(`노트를 열지 못했습니다: ${e.message}`); }
@@ -2910,6 +3015,8 @@ function initDocDrop() {
 }
 
 document.getElementById('readDocs').onclick = openDocDrawer;
+document.getElementById('wikiDocs').onclick = openDocDrawer;
+document.getElementById('wikiBack').onclick = restoreWikiHome;
 
 // ---------- 더보기 메뉴 (2026-10-13) ----------
 // 머리줄 아이콘이 9개까지 늘었는데 정작 늘 쓰는 건 서넛뿐이다. 자주 쓰는 것만 밖에 두고
@@ -2957,7 +3064,6 @@ document.addEventListener('pointerdown', (e) => {
 
 const mm = (id, fn) => { document.getElementById(id).onclick = () => { closeMore(); fn(); }; };
 mm('mmCards', openCardManager);
-mm('mmScrap', openScrap);
 mm('mmAwake', () => document.getElementById('readAwake').click());
 mm('mmTts', () => toggleTts());
 mm('mmTop', () => scrollReadTop());
@@ -3598,7 +3704,8 @@ async function saveScrap() {
   if (ctx.path) lines.push(`원본: ${ctx.path}`);
   lines.push(`수집일시: 20${stamp} ${p2(now.getHours())}:${p2(now.getMinutes())}`);
   lines.push('tags: [달모/모아두기]');
-  lines.push('처리: 대기');          // vault가 아직 안 본 것을 찾는 표시
+  lines.push('처리:');
+  lines.push('  위키: 대기        # 공부하다 그 자리에서 모은 것');
   lines.push('---', '');
   lines.push(`# ${ctx.title || '모아둔 메모'}${ctx.where ? ` — ${ctx.where}` : ''}`, '');
   lines.push('> [!note] 아직 정리 안 된 수집물');
@@ -3624,7 +3731,64 @@ async function saveScrap() {
   setTimeout(closeScrap, r.queued.length ? 2600 : 1100);
 }
 
+/**
+ * 노트의 체크 상자를 눌러 고른다 — 그리고 **vault 원본까지 바꾼다**(2026-10-14 요청).
+ *
+ * 암기법 후보가 셋 떠 있고 그중 하나를 고르는 일이 실제로 있다. 전에는 맥에서 열어
+ * 손으로 고쳐야 했다. 이제 아이패드에서 눌러 정하면 그대로 올라간다.
+ *
+ * ⚠️ 이 저장소는 append-only가 원칙이다(노트를 덮어쓰면 옵시디언·클로드코드 편집과
+ *    충돌한다). 여기서는 **그 한 줄의 `[ ]` 한 글자만** 바꾼다 — 사람이 같은 파일의
+ *    다른 데를 고치고 있어도 부딪히지 않는다. 그래도 혹시 모르니 바꾸기 직전에
+ *    원본을 다시 읽어 그 줄이 그대로인지 확인한다.
+ */
+async function toggleTask(btn) {
+  const doc = currentDoc();
+  if (!(doc && doc.path)) { toast('어느 노트인지 알 수 없습니다.'); return; }
+  const want = btn.getAttribute('aria-checked') !== 'true';
+  const label = btn.dataset.text || '';
+  btn.disabled = true;
+  try {
+    const raw = await getTextIfExists(doc.path);
+    if (raw == null) throw new Error('원본을 찾지 못했습니다.');
+    const lines = raw.split('\n');
+    // 같은 글이 여러 줄일 수 있다 — 지금 상태가 맞는 줄만 고른다
+    const norm = (t) => t.replace(/\s+/g, ' ').trim().normalize('NFC');
+    const hits = [];
+    lines.forEach((l, i) => {
+      const m = l.match(/^(\s*[-*+]\s*)\[([ xX])\]\s*(.*)$/);
+      if (m && norm(m[3]) === norm(label) && (m[2] === ' ') === want) hits.push(i);
+    });
+    if (!hits.length) throw new Error('원본에서 그 줄을 못 찾았습니다 — 새로고침해 보세요.');
+    if (hits.length > 1) throw new Error(`같은 줄이 ${hits.length}개라 어느 것인지 알 수 없습니다.`);
+    const i = hits[0];
+    lines[i] = lines[i].replace(/\[([ xX])\]/, want ? '[x]' : '[ ]');
+    await putFile(doc.path, lines.join('\n'),
+      `iPad: ${want ? '채택' : '취소'} — ${label.slice(0, 40)}`);
+    // 화면과 캐시를 같이 맞춘다 — 다시 열었을 때 되돌아가 있으면 안 바뀐 줄 안다
+    btn.setAttribute('aria-checked', String(want));
+    btn.textContent = want ? '☑' : '☐';
+    btn.closest('.task')?.classList.toggle('done', want);
+    const sec = doc.sections[(reader && reader.secIdx) || 0];
+    if (sec) sec.text = sec.text.split('\n').map((l) =>
+      (norm(l.replace(/^\s*[-*+]\s*\[[ xX]\]\s*/, '')) === norm(label)
+        ? l.replace(/\[([ xX])\]/, want ? '[x]' : '[ ]') : l)).join('\n');
+    toast(want ? '✅ 채택했습니다 — vault에 반영됨' : '선택을 풀었습니다');
+  } catch (e) {
+    toast(`바꾸지 못했습니다: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+// 본문·옆 패널 어디서 눌러도 같은 길로
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('.task-box');
+  if (b) { e.preventDefault(); toggleTask(b); }
+});
+
 document.getElementById('readScrap').onclick = openScrap;
+// 모아두기는 어느 화면에서든 핵심이다 — 메뉴 안에 두지 않는다(2026-10-14 요청)
+document.getElementById('readScrapBtn').onclick = openScrap;
 document.getElementById('toolScrap').onclick = openScrap;
 
 // ---- 만든 카드 미리보기 창 (2026-10-12) ----
@@ -5494,8 +5658,20 @@ function buildMarkdown(res) {
   lines.push(`tags: [${tagList.join(', ')}]`);
   // vault 쪽이 "아직 안 본 것"을 확실히 찾게 하는 표시. 사람이 세는 목록(처리기록 파일)은
   // 반드시 어긋난다 — 파일 자신이 상태를 들고 있게 한다(2026-10-13).
-  // /lecture-integrate·/log-wrong-answer가 반영한 뒤 `처리: 반영됨 (날짜)`으로 바꾼다.
-  lines.push('처리: 대기');
+  //
+  // 한 파일이 **두 군데로 간다**(2026-10-14). 시험을 풀면서 남기는 건 틀린 문제만이
+  // 아니다 — 메모·북마크·색·찍어서 맞힌 것은 "몰랐던 것"이라 위키에도 들어가야 한다.
+  // 그래서 갈 곳마다 따로 적는다. 하나가 끝나도 나머지가 `대기`로 남는다.
+  const memoN = res.items.filter((x) => x.memo).length;
+  const markN = res.items.filter((x) => x.bookmarked).length;
+  const luckyN = (res.lucky || []).length;
+  const toWiki = memoN + markN + luckyN + usedColors.length;
+  lines.push('처리:');
+  if (res.wrong.length) lines.push(`  오답: 대기        # 틀린 문항 ${res.wrong.length}개`);
+  if (toWiki) {
+    lines.push(`  위키: 대기        # 메모 ${memoN} · 북마크 ${markN} · 찍어맞힘 ${luckyN} · 색 ${usedColors.length}`);
+  }
+  if (!res.wrong.length && !toWiki) lines.push('  없음: 해당없음     # 다 맞았고 남긴 것도 없다');
   lines.push('---');
   lines.push('');
   lines.push(`# ${topic} 모의고사 풀이 기록`);
@@ -5543,6 +5719,20 @@ function buildMarkdown(res) {
       mine.forEach((x) => lines.push(`- ${x.q.num}. ${x.q.q.slice(0, 80)}…`));
       lines.push('');
     }
+  }
+
+  // 맞았지만 찍은 것 — 점수에는 안 보이지만 **다음에 틀릴 것**이다. 오답과 같은 무게로 남긴다.
+  if (res.lucky && res.lucky.length) {
+    lines.push(`## 🎲 찍어서 맞힌 문제 ${res.lucky.length}개`);
+    lines.push('');
+    lines.push('> 점수에는 안 들어갔지만 모르고 맞힌 것이다 — 노트에 반영할 후보.');
+    lines.push('');
+    res.lucky.forEach((x) => {
+      lines.push(`### ${markOf(x)}${x.q.num}. ${x.q.q.slice(0, 100)}`);
+      if (x.q.explain) lines.push(`> ${x.q.explain.slice(0, 300).replace(/\n/g, '\n> ')}`);
+      if (x.memo) lines.push(`🧩 *내 메모: ${x.memo}*`);
+      lines.push('');
+    });
   }
 
   const memos = res.items.filter((x) => x.memo && !res.wrong.includes(x));
@@ -5688,38 +5878,166 @@ async function saveToVault(payloads, { statusEl = null } = {}) {
     statusEl.classList.toggle('save-warn', !m.ok);
   }
   toast(m.text);
-  if (m.needSetup) setTimeout(openSetup, 1400);
+  // 설정 화면으로 끌고 가는 건 **그 자리에 그대로 있을 때만**. 1.4초 뒤에 열다 보면
+  // 그 사이 다른 걸 하고 있을 수 있는데, 보던 화면을 뺏는 건 저장 실패보다 더 나쁘다.
+  if (m.needSetup) {
+    const where = document.body.dataset.screen;
+    setTimeout(() => { if (document.body.dataset.screen === where) openSetup(); }, 1400);
+  }
   return { ...r, ...m };
 }
 
 // ---------- 아웃박스(동기화 대기열) ----------
+const STUCK_AT = 4;        // 이만큼 실패하면 "네트워크 탓"이 아니다 — 사람이 봐야 한다
+
 async function refreshSyncBar() {
   const items = await listOutbox();
   const bar = document.getElementById('syncBar');
   if (!items.length) { bar.classList.add('hidden'); return; }
-  document.getElementById('syncText').textContent = `저장 대기 ${items.length}건`;
+  // 띠를 눌러도 열리게 — "지금 보내기"만 있으면 안 되는 걸 계속 누르게 된다
+  bar.onclick = (e) => { if (e.target === bar || e.target.id === 'syncText') openOutbox(); };
+  const stuck = items.filter((x) => (x.tries || 0) >= STUCK_AT);
+  document.getElementById('syncText').textContent = stuck.length
+    ? `저장 대기 ${items.length}건 — ${stuck.length}건이 막혀 있습니다`
+    : `저장 대기 ${items.length}건`;
+  bar.classList.toggle('stuck', stuck.length > 0);
   bar.classList.remove('hidden');
+  // 여러 번 실패한 게 있으면 **한 번은** 직접 보여준다. 띠만 띄워두면 "계속 안 없어진다"로
+  // 끝나고 아무도 손대지 않는다(2026-10-14 겪음). 한 번 보여준 뒤로는 조용히 둔다.
+  if (stuck.length && !sessionStorage.getItem('outbox_shown')) {
+    sessionStorage.setItem('outbox_shown', '1');
+    setTimeout(openOutbox, 900);
+  }
 }
 
+/**
+ * 대기열을 비운다.
+ *
+ * ⚠️ 전에는 **첫 실패에서 통째로 멈췄다**. 그래서 영영 못 올라갈 항목 하나가 뒤의 멀쩡한
+ *    것들까지 막았고, "저장 대기 1건"이 사라지지 않았다(2026-10-14 겪음).
+ *    이제 끊긴 것(네트워크)만 멈추고, 그 밖의 거절은 **건너뛰고 다음 걸 보낸다**.
+ */
 async function flushOutbox() {
   if (!(await hasToken())) return;
   const items = await listOutbox();
+  let sent = 0;
   for (const it of items) {
     try {
       await createFile(it.path, it.content, it.message);
       await dequeue(it.id);
+      sent++;
     } catch (e) {
       await bumpTries(it.id, e.message);
-      break; // 하나 실패하면 이번 회차는 중단(네트워크 문제일 가능성이 높음)
+      if (looksOffline(e)) break;        // 끊긴 상태면 뒤엣것도 어차피 안 된다
     }
   }
   refreshSyncBar();
+  return sent;
 }
 
 document.getElementById('syncNowBtn').onclick = async () => {
   document.getElementById('syncText').textContent = '보내는 중…';
-  await flushOutbox();
+  const before = (await listOutbox()).length;
+  const sent = await flushOutbox();
+  const left = (await listOutbox()).length;
+  if (left && !sent) {
+    const why = (await listOutbox())[0].lastError || '';
+    toast(`${left}건이 아직 안 올라갑니다${why ? ` — ${why.slice(0, 60)}` : ''}`);
+    openOutbox();
+  } else if (sent) {
+    toast(`${sent}건을 보냈습니다${left ? ` · ${left}건 남음` : ''}`);
+  } else if (!before) toast('보낼 게 없습니다.');
 };
+
+// ── 대기열 속사정 ──
+// "저장 대기 1건이 계속 안 없어짐" — 왜인지 안 보이면 손쓸 방법이 없다(2026-10-14).
+document.getElementById('syncWhyBtn').onclick = () => openOutbox();
+document.getElementById('outboxClose').onclick = () =>
+  document.getElementById('outboxSheet').classList.add('hidden');
+document.getElementById('outboxSheet').onclick = (e) => {
+  if (e.target.id === 'outboxSheet') e.target.classList.add('hidden');
+};
+document.getElementById('outboxRetry').onclick = async () => {
+  await flushOutbox();
+  openOutbox();
+};
+document.getElementById('outboxSaveAll').onclick = async () => {
+  for (const it of await listOutbox()) downloadPayload(it);
+};
+
+/** 대기 중인 것을 파일로 받아둔다 — 끝내 안 올라가도 **내용은 건진다**. */
+function downloadPayload(it) {
+  const name = it.path.split('/').pop();
+  const isB64 = it.content && typeof it.content === 'object' && it.content.base64;
+  let blob;
+  if (isB64) {
+    const bin = atob(it.content.base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    blob = new Blob([bytes], { type: it.content.mime || 'application/octet-stream' });
+  } else {
+    blob = new Blob([String(it.content)], { type: 'text/markdown' });
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+async function openOutbox() {
+  const items = await listOutbox();
+  const box = document.getElementById('outboxList');
+  box.innerHTML = '';
+  if (!items.length) {
+    box.innerHTML = '<p class="muted">비어 있습니다 — 전부 올라갔습니다.</p>';
+  }
+  // 여러 번 막힌 게 있으면 **뭘 해야 하는지** 먼저 말해준다
+  const stuck = items.filter((x) => (x.tries || 0) >= STUCK_AT);
+  if (stuck.length) {
+    const tip = document.createElement('div');
+    tip.className = 'warn-box';
+    tip.style.marginBottom = '10px';
+    const why = stuck[0].lastError || '';
+    tip.textContent = /401|403|credential|권한|NO_TOKEN/i.test(why)
+      ? '저장 권한이 막혀 있습니다 — 설정에서 토큰을 다시 넣은 뒤 "전부 다시 보내기"를 누르세요.'
+      : '여러 번 보내봤지만 안 올라갑니다. 내용은 아래에서 파일로 받아둘 수 있습니다.';
+    box.appendChild(tip);
+  }
+  for (const it of items) {
+    const row = document.createElement('div');
+    row.className = `ob-row${(it.tries || 0) >= STUCK_AT ? ' stuck' : ''}`;
+    const t = document.createElement('div');
+    t.className = 'ob-name';
+    t.textContent = it.path.split('/').pop();
+    const d = document.createElement('div');
+    d.className = 'ob-why muted';
+    d.textContent = it.tries
+      ? `${it.tries}번 시도${it.lastError ? ` · ${it.lastError.slice(0, 70)}` : ''}`
+      : '아직 보내기 전';
+    const acts = document.createElement('div');
+    acts.className = 'ob-acts';
+    const dl = document.createElement('button');
+    dl.className = 'btn small';
+    dl.textContent = '내려받기';
+    dl.onclick = () => downloadPayload(it);
+    const rm = document.createElement('button');
+    rm.className = 'btn small danger';
+    rm.textContent = '버리기';
+    rm.onclick = async () => {
+      // 버리기 전에 내용을 꼭 손에 쥐여준다 — 지우고 나면 되돌릴 수 없다
+      downloadPayload(it);
+      await dequeue(it.id);
+      toast('파일로 내려받고 대기열에서 뺐습니다.');
+      refreshSyncBar();
+      openOutbox();
+    };
+    acts.append(dl, rm);
+    row.append(t, d, acts);
+    box.appendChild(row);
+  }
+  document.getElementById('outboxSheet').classList.remove('hidden');
+}
 
 window.addEventListener('online', flushOutbox);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) flushOutbox(); });
@@ -5932,6 +6250,21 @@ function reserveForTools(el) {
       w ? `${w}px` : '');
     // 반대쪽에 남아 있던 여백은 돌려준다
     head.style.setProperty(el.dataset.dock === 'tl' ? 'padding-right' : 'padding-left', '');
+    // 위에 붙였으면 **머리줄 줄에 맞춰 앉힌다**. 그냥 top:8px로 두면 머리줄보다 키가 커서
+    // 아래 패널 제목을 덮는다(2026-10-14: 관련 노트 제목이 가려졌다).
+    if (top) {
+      // **바닥을 머리줄 바닥에 맞춘다.** 가운데 맞추면 막대가 머리줄보다 키가 클 때
+      // 아래로 비어져 나와 패널 제목을 덮는다(2026-10-14에 실제로 그랬다).
+      // 위로 비어져 나오는 건 머리줄 위 빈 자리라 아무것도 안 가린다.
+      // 막대 **바닥**이 놓일 자리만 준다. 높이는 CSS가 translateY(-100%)로 알아서 뺀다 —
+      // 높이를 재서 top을 계산하면 버튼이 늘었다 줄 때마다 어긋났다(2026-10-14).
+      //
+      // ⚠️ 바로 위에서 머리줄 padding을 바꿨다 — 그 반영이 끝난 **다음 프레임**에 재야
+      //    맞는 값이 나온다. 같은 프레임에서 재면 4px쯤 어긋나 패널을 덮는다.
+      requestAnimationFrame(() => {
+        el.style.setProperty('--rt-base', `${Math.round(head.getBoundingClientRect().bottom - 2)}px`);
+      });
+    } else el.style.removeProperty('--rt-base');
   });
 }
 
@@ -6028,8 +6361,10 @@ document.addEventListener('keydown', (e) => {
     openSearch(e.shiftKey ? 'all' : undefined);        // 기본은 "지금 떠 있는 문서"
     return;
   }
-  if (mod && (e.key === 'o' || e.key === 'O') && inReader()) {   // ⌘O — 다른 노트
-    e.preventDefault(); openDocDrawer(); return;
+  if (mod && (e.key === 'o' || e.key === 'O')) {                // ⌘O — 다른 노트
+    if (inReader() || document.body.dataset.screen === 'quizScreen') {
+      e.preventDefault(); openDocDrawer(); return;
+    }
   }
   if (mod && e.key === '\\' && inReader()) {           // ⌘\ — 화면 나누기
     e.preventDefault(); document.getElementById('readSplitBtn').click(); return;

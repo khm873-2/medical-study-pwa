@@ -124,6 +124,15 @@ export function canvasToBlob(cv) {
  * 비동기로 이미지를 만드는 동안 권한이 날아간다 → ClipboardItem에 Promise를 넘겨
  * "지금 쓰겠다"고 먼저 선언하는 방식을 쓴다.
  */
+/**
+ * 그림을 클립보드에 넣는다.
+ *
+ * ⚠️ 사파리는 "사용자가 방금 누른 그 순간"에만 클립보드 쓰기를 허용한다. 그런데 캡처는
+ *    SVG를 굽느라 수백 ms가 걸려서, **다 만든 뒤에 쓰면 이미 권한이 식어 있다**
+ *    ("캡처했지만 복사 권한이 없습니다" — 2026-10-14). 그래서 blob을 기다리지 말고
+ *    **아직 안 끝난 Promise 그대로** 넘긴다. ClipboardItem이 Promise를 받는 이유가 이것이다.
+ * @param {Promise<Blob>} blobPromise  await 하지 말고 그대로 넘길 것
+ */
 export async function copyBlobToClipboard(blobPromise) {
   if (!navigator.clipboard || !window.ClipboardItem) throw new Error('이 브라우저는 이미지 복사를 지원하지 않습니다.');
   await navigator.clipboard.write([new ClipboardItem({ 'image/png': blobPromise })]);

@@ -25,6 +25,8 @@ export function escapeHtml(s) {
  * @param {Function} opts.onImage  (파일명) => void — 임베드 이미지 발견 시 호출(지연 로딩용).
  *                                 img 태그에 data-embed="파일명"을 달아두고 나중에 src를 채운다.
  */
+const escapeAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+
 export function renderMarkdown(md, opts = {}) {
   const lines = String(md).replace(/\r\n/g, '\n').split('\n');
   const out = [];
@@ -98,7 +100,17 @@ export function renderMarkdown(md, opts = {}) {
         }
       }
       const tag = ordered ? 'ol' : 'ul';
-      out.push(`<${tag}>` + items.map((t) => `<li>${inline(t)}</li>`).join('') + `</${tag}>`);
+      // 체크 상자 — `- [ ] 채택 (안 1)`. 노트에서 **고르는 일**이 실제로 있어서
+      // (암기법 후보 중 하나 채택 등) 눌러서 바꿀 수 있게 한다(2026-10-14 요청).
+      out.push(`<${tag}>` + items.map((t) => {
+        const m = t.match(/^\[([ xX])\]\s*(.*)$/);
+        if (!m) return `<li>${inline(t)}</li>`;
+        const on = m[1] !== ' ';
+        return `<li class="task${on ? ' done' : ''}">`
+          + `<button class="task-box" role="checkbox" aria-checked="${on}" `
+          + `data-text="${escapeAttr(m[2])}">${on ? '☑' : '☐'}</button>`
+          + `<span class="task-t">${inline(m[2])}</span></li>`;
+      }).join('') + `</${tag}>`);
       continue;
     }
 

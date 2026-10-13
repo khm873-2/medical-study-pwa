@@ -93,7 +93,9 @@ export function buildQaMarkdown({ subject, lecture, examPath, items }) {
   L.push(`강의: ${lecture}`);
   L.push(`작성: 20${yy}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}:${p(now.getMinutes())}`);
   L.push('tags: [달모/질문기록]');
-  L.push('처리: 대기');          // vault가 아직 안 본 것을 찾는 표시(2026-10-13)
+  // 갈 곳을 적어 둔다 — 질문기록은 "내가 모르던 것"의 직접 증거라 위키로 간다(2026-10-14)
+  L.push('처리:');
+  L.push(`  위키: 대기        # 풀다가 물어본 것 ${items.length}건`);
   L.push('---');
   L.push('');
   L.push(`# ${lecture} — 풀면서 모르던 것 (${items.length}건)`);
