@@ -9,6 +9,23 @@ import { tokenize, tokenizeTree } from './pen.js';
 
 const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
 
+/**
+ * 정답이 여럿인 문항을 위한 판정.
+ *
+ * 학교 족보에는 "답 2개" 문항이 흔하다(응급_중환자만 116개). 하나만 정답으로 보면
+ * 나머지를 고른 사람이 맞는데도 틀렸다고 나온다 — 오답노트까지 오염된다(2026-10-13).
+ */
+export function isAns(q, i) {
+  if (!q || i === null || i === undefined) return false;
+  return q.ansAll ? q.ansAll.includes(i) : i === q.ans;
+}
+
+/** "②" 또는 "②④ (둘 중 아무거나)" */
+function ansLabel_(q) {
+  if (!q.ansAll) return CIRCLED[q.ans] || q.ans + 1;
+  return `${q.ansAll.map((i) => CIRCLED[i] || i + 1).join('')} (어느 것이든 정답)`;
+}
+
 export class Quiz {
   /**
    * @param {object} opts
@@ -138,7 +155,7 @@ export class Quiz {
   isCorrect(i) {
     if (!this.isGraded(i)) return false;
     const a = this.answers[i];
-    return a !== null && a === this.all[i].ans;
+    return a !== null && isAns(this.all[i], a);
   }
 
   start() {
@@ -254,7 +271,7 @@ export class Quiz {
         row.onclick = () => this.select(i);
       } else {
         row.classList.add('locked');
-        if (i === q.ans) row.classList.add('correct');
+        if (isAns(q, i)) row.classList.add('correct');
         else if (i === this.answers[idx]) row.classList.add('wrong');
       }
       this.el.opts.appendChild(row);
@@ -294,7 +311,7 @@ export class Quiz {
       b.classList.remove('correct', 'wrong');
       b.disabled = locked;
       if (locked) {
-        if (i === q.ans) b.classList.add('correct');
+        if (isAns(q, i)) b.classList.add('correct');
         else if (i === this.answers[idx]) b.classList.add('wrong');
       }
     });
@@ -404,8 +421,8 @@ export class Quiz {
 
     // 'open'은 맞고 틀림이 없다 — ❌로 띄우면 틀린 줄 안다
     const open = q.type === 'open';
-    const correct = !open && this.answers[idx] === q.ans;
-    const ansLabel = q.type === 'ox' ? (q.ans === 0 ? 'O' : 'X') : (CIRCLED[q.ans] || q.ans + 1);
+    const correct = !open && isAns(q, this.answers[idx]);
+    const ansLabel = q.type === 'ox' ? (q.ans === 0 ? 'O' : 'X') : ansLabel_(q);
     const head = mk(open
       ? '📖 족보 원문 — 정답은 아래 해설에 있습니다'
       : `${correct ? '✅ 정답' : '❌ 오답'} — 정답 <b class="opt-num">${ansLabel}</b>`);

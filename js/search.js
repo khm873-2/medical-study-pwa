@@ -52,12 +52,66 @@ export async function cacheSubject(subject, onProgress = () => {}) {
   return done;
 }
 
-/** 캐시된 범위 안에서 검색. 문항과 노트 둘 다 뒤진다. */
-export async function search(query, limit = 40) {
+/**
+ * 찾을 말을 "맞는지 보는 함수"로 바꾼다.
+ *
+ * 평소엔 그냥 글자 비교지만, 정규식을 켜면 grep처럼 쓸 수 있다
+ * (obsidian-another-quick-switcher의 custom search를 본뜬 것 — 2026-10-13 요청).
+ * 한글은 NFC/NFD가 섞여 들어와 "분명히 있는데 안 찾아지는" 일이 잦아서 양쪽 다 맞춘다.
+ */
+export function matcher(query, { regex = false, caseSensitive = false } = {}) {
+  const q = String(query).normalize('NFC');
+  if (regex) {
+    let re;
+    try { re = new RegExp(q, caseSensitive ? 'g' : 'gi'); } catch { return null; }
+    return (text) => {
+      re.lastIndex = 0;
+      const m = re.exec(String(text).normalize('NFC'));
+      return m ? { at: m.index, len: m[0].length || 1 } : null;
+    };
+  }
+  const needle = caseSensitive ? q : q.toLowerCase();
+  return (text) => {
+    const hay = caseSensitive ? String(text).normalize('NFC')
+      : String(text).normalize('NFC').toLowerCase();
+    const i = hay.indexOf(needle);
+    return i >= 0 ? { at: i, len: needle.length } : null;
+  };
+}
+
+/** 한 글 안에서 맞는 자리를 **전부** 찾는다(이 문서 안에서 찾을 때 쓴다). */
+export function findAll(text, match, limit = 200) {
+  const out = [];
+  let from = 0;
+  const src = String(text);
+  while (out.length < limit && from < src.length) {
+    const r = match(src.slice(from));
+    if (!r) break;
+    out.push({ at: from + r.at, len: r.len });
+    from += r.at + Math.max(1, r.len);
+  }
+  return out;
+}
+
+export { snip };
+
+/**
+ * 캐시된 범위 안에서 검색. 문항과 노트 둘 다 뒤진다.
+ * @param {object} [opt]
+ * @param {string} [opt.dir]   이 경로로 시작하는 것만(폴더 한정)
+ * @param {boolean} [opt.regex]
+ * @param {boolean} [opt.caseSensitive]
+ */
+export async function search(query, limit = 40, opt = {}) {
   const q = String(query).trim();
   if (q.length < 2) return [];
-  const needle = q.toLowerCase();
-  const paths = await cachedPaths();
+  const match = matcher(q, opt);
+  if (!match) return [];
+  let paths = await cachedPaths();
+  if (opt.dir) {
+    const d = opt.dir.normalize('NFC');
+    paths = paths.filter((p) => p.normalize('NFC').startsWith(d));
+  }
   const hits = [];
 
   for (const p of paths) {
@@ -73,12 +127,12 @@ export async function search(query, limit = 40) {
       const examName = prettyExamName(p.split('/').pop());
       for (const item of qs) {
         const hay = `${item.q} ${(item.opts || []).join(' ')} ${item.explain || ''}`;
-        const i = hay.toLowerCase().indexOf(needle);
-        if (i >= 0) {
+        const r = match(hay);
+        if (r) {
           hits.push({
             kind: 'question',
             title: `${examName} — ${item.num}번`,
-            snippet: snip(hay, i, q.length),
+            snippet: snip(hay, r.at, r.len),
             path: p,
             qnum: item.num,
           });
@@ -86,12 +140,12 @@ export async function search(query, limit = 40) {
         }
       }
     } else if (p.endsWith('.md')) {
-      const i = text.toLowerCase().indexOf(needle);
-      if (i >= 0) {
+      const r = match(text);
+      if (r) {
         hits.push({
           kind: 'note',
           title: p.split('/').pop().replace(/\.md$/, ''),
-          snippet: snip(text, i, q.length),
+          snippet: snip(text, r.at, r.len),
           path: p,
         });
       }

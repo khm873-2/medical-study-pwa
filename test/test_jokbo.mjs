@@ -36,6 +36,16 @@ ok('정답 "5 (VF)"', J.answerIndex('5 (VF)') === 4);
 ok('정답이 글이면 -1', J.answerIndex('숫자가 아닌 서술형 정답') === -1);
 ok('정답이 비면 -1', J.answerIndex('') === -1);
 
+// ★ 복수정답 — 족보에 제일 흔한 함정. 하나만 보면 나머지를 고른 사람이 억울하게 틀린다.
+ok('"2, 4" → 둘 다 정답', String(J.answerIndices('2, 4')) === '1,3');
+ok('"1,3,5" (공백 없이)', String(J.answerIndices('1,3,5')) === '0,2,4');
+ok('"3 · 5"', String(J.answerIndices('3 · 5')) === '2,4');
+ok('"②④"', String(J.answerIndices('②④')) === '1,3');
+ok('뒤에 말이 붙어도 번호까지만', String(J.answerIndices('2, 4 (최초 항목 참조 — 위 6번과 동일)')) === '1,3');
+ok('"3번??(확실한 듯?)" 은 3번 하나', String(J.answerIndices('3번??(확실한 듯?)')) === '2');
+ok('"5 (VF)" 는 5번 하나', String(J.answerIndices('5 (VF)')) === '4');
+ok('서술형은 빈 배열', J.answerIndices('급성 전격성 심근염').length === 0);
+
 {
   // ⚠️ 이 저장소는 공개다 — 예시 지문은 의학 내용이 아니라 **형식만** 흉내 낸 가짜를 쓴다.
   //    진짜 문항으로 도는 검사는 아래 "실제 vault 전수"가 맡는다(내용은 안 남긴다).
@@ -112,6 +122,37 @@ if (!existsSync(DIR)) {
     ok('읽기 문항은 정답을 해설에 담는다', openOne && /정답\(족보\)/.test(openOne.explain));
     ok('출처에 연도와 교수가 들어간다', /족보 \d{4} · /.test(questions[0].source), questions[0].source);
   }
+}
+
+// ── 원문이 통째로 사라지는 곳이 없는가(2026-10-13 전수 대조) ──
+if (existsSync(DIR)) {
+  const files = readdirSync(DIR).filter((f) => /^\d{2}_.+\.md$/.test(f) && !f.startsWith('00_')).sort();
+  const norm = (x) => String(x).normalize('NFC').replace(/[\s*`>#_\-–—·…"'“”‘’()[\]{}]/g, '');
+  let blocks = 0, qs = 0, multi = 0, introChars = 0;
+  const lost = [];
+  for (const f of files) {
+    const md = readFileSync(`${DIR}/${f}`, 'utf8').replace(/\r\n/g, '\n');
+    const { questions, intro } = J.parseJokbo(md, `${REL}/${f}`);
+    blocks += md.split(/\n(?=##\s*\[)/).length - 1;
+    qs += questions.length;
+    multi += questions.filter((q) => q.ansAll).length;
+    introChars += (intro || '').length;
+    const all = questions.map((q) => norm(`${q.q}\n${q.opts.join('\n')}\n${q.explain}`)).join('\n');
+    for (const b of md.split(/\n(?=##\s*\[)/).slice(1)) {
+      for (const m of b.matchAll(/^\*\*(.+?)\*\*\s*[:：]?\s*([\s\S]*?)(?=\n\*\*|\n---|\n##|$)/gm)) {
+        const name = m[1].split('(')[0].trim();
+        if (name === '첨부 이미지') continue;        // 그림은 q.imgs로 따로 간다(위에서 전수 확인)
+        const val = norm(m[2]);
+        if (val.length < 8) continue;
+        if (!all.includes(val.slice(0, 40))) lost.push(`${f} · ${name}: ${m[2].trim().slice(0, 30)}`);
+      }
+    }
+  }
+  ok('블록 하나가 문항 하나가 된다(빠짐없이)', blocks === qs, `${blocks}블록 → ${qs}문항`);
+  ok('**원문 어느 필드도 사라지지 않는다**', lost.length === 0, lost.slice(0, 3).join(' / '));
+  ok('복수정답 문항을 살려낸다(100개 이상)', multi >= 100, `${multi}개`);
+  ok('챕터 출제 경향이 앱으로 간다(2만 자 이상)', introChars >= 18000, `${introChars}자`);
+  console.log(`  실측: 복수정답 ${multi}문항 · 챕터 머리말 ${introChars}자`);
 }
 
 // ── 챕터 ↔ 강의 노트 짝짓기 ──

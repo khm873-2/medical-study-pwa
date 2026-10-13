@@ -102,11 +102,28 @@ export function splitStemOptions(text) {
 
 /** "3", "3번", "③", "3 (VF)" → 2(0-based). 숫자를 못 찾으면 -1. */
 export function answerIndex(raw) {
+  return answerIndices(raw)[0] ?? -1;
+}
+
+/**
+ * "2, 4", "1,3,5", "②④" → [1,3] / [0,2,4] — **정답이 여럿인 문항**.
+ *
+ * 응급_중환자만 116개가 "답 2개" 꼴이다. 첫 번째만 보면 나머지를 고른 사람은
+ * 정답인데 오답 처리된다(2026-10-13 전수 대조에서 드러남).
+ * "3번??(확실한 듯?)"처럼 뒤에 말이 붙는 것도 있어서, **번호 나열이 끝나는 지점까지**만 읽는다.
+ */
+export function answerIndices(raw) {
   const t = String(raw || '').trim();
-  const circ = '①②③④⑤⑥'.indexOf(t[0]);
-  if (circ >= 0) return circ;
-  const m = t.match(/^([1-6])\s*(번|[\.\)）,·&/]|$|\s)/);
-  return m ? Number(m[1]) - 1 : -1;
+  const out = [];
+  // 앞머리에서 "번호 + 구분자"가 이어지는 동안만 모은다
+  const head = t.match(/^(?:[①②③④⑤⑥]|[1-6])(?:\s*(?:번|,|·|&|\/|와|및|\s)\s*(?:[①②③④⑤⑥]|[1-6])|[①②③④⑤⑥])*/);
+  if (!head) return [];
+  for (const m of head[0].matchAll(/[①②③④⑤⑥]|[1-6]/g)) {
+    const c = '①②③④⑤⑥'.indexOf(m[0]);
+    const i = c >= 0 ? c : Number(m[0]) - 1;
+    if (!out.includes(i)) out.push(i);
+  }
+  return out;
 }
 
 /** 블록을 `**필드**` 단위로 나눈다. */
@@ -114,7 +131,15 @@ function fields(block) {
   const out = {};
   let cur = null;
   const buf = [];
-  const flush = () => { if (cur) out[cur] = buf.join('\n').trim(); buf.length = 0; };
+  // 한 블록에 같은 이름의 필드가 두 번 나오는 경우가 있다 — 같은 문항을 두 사람이
+  // 각기 다르게 복원한 것(05_Acute_stroke 33번/60번). 덮어쓰면 앞엣것이 통째로 사라진다.
+  const flush = () => {
+    if (cur) {
+      const v = buf.join('\n').trim();
+      out[cur] = out[cur] ? `${out[cur]}\n\n${v}` : v;
+    }
+    buf.length = 0;
+  };
   for (const line of block.split('\n')) {
     const m = line.match(FIELD);
     if (m) {
@@ -162,6 +187,17 @@ export function parseJokbo(md, path = '') {
   const h1 = text.match(/^#\s+(.+)$/m);
   const title = h1 ? h1[1].trim() : chapterTitle(path.split('/').pop() || '');
 
+  // 챕터 머리말 — "이 챕터는 매년 ①②③ 세 축에서 나온다" 식의 출제 경향 분석이다.
+  // 응급_중환자만 20,424자가 여기 있는데 앱에는 한 줄도 안 나왔다(2026-10-13 전수 대조).
+  // 문항보다 먼저 읽어야 할 내용이라 따로 꺼내 둔다.
+  const intro = text
+    .split(BLOCK)[0]
+    .replace(/^---[\s\S]*?\n---\n/, '')          // 앞머리(강의주제·교수·PDF 쪽수)
+    .replace(/^#\s+.+$/m, '')                     // 제목
+    .replace(/^검증 상태 범례.*$/m, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
   const questions = [];
   for (const block of text.split(BLOCK).slice(1)) {
     const head = block.split('\n')[0].match(HEAD);
@@ -173,10 +209,15 @@ export function parseJokbo(md, path = '') {
     const { imgs, notes } = imagesOf(block, dir);
 
     const body = f['문제'] || f['원문'] || '';
-    const { stem, opts } = splitStemOptions(stripImages(body));
+    // 한 블록에 복원본이 둘일 수 있다(05_Acute_stroke 33번/60번). 선지 묶음 뒤에 남은 글도
+    // 지문에 이어 붙인다 — 안 그러면 두 번째 복원본이 통째로 사라진다(2026-10-13).
+    const first = splitStemOptions(stripImages(body));
+    const stem = [first.stem, ...restStems(first.tail)].filter(Boolean).join('\n\n');
+    const opts = first.opts;
     const ansRaw = f['정답'] || '';
-    const ai = answerIndex(ansRaw);
-    const graded = opts.length >= 4 && ai >= 0 && ai < opts.length;
+    const all = answerIndices(ansRaw).filter((i) => i < opts.length);
+    const ai = all.length ? all[0] : -1;
+    const graded = opts.length >= 4 && ai >= 0;
 
     const stemText = stem || stripImages(body).trim();
     // 지문이 통째로 비어 있으면 문항이 아니다("복원 x"만 있는 블록은 해설로 남는다)
@@ -188,8 +229,10 @@ export function parseJokbo(md, path = '') {
       q: stemText || '(족보 원문에 문제 지문이 복원되지 않았습니다)',
       opts: graded ? opts : [],
       ans: graded ? ai : -1,
+      // 정답이 여럿이면 전부 — 어느 것을 골라도 맞다(응급_중환자 116문항)
+      ansAll: graded && all.length > 1 ? all : null,
       opt: [],
-      explain: explainOf(f, ansRaw, graded, notes),
+      explain: explainOf(f, ansRaw, graded, notes, all.length > 1),
       imgs,
       srcTag: who,
       source: `족보 ${who}${label ? ` · ${label}` : ''}`,
@@ -198,7 +241,20 @@ export function parseJokbo(md, path = '') {
       qno: meta.qno || label,
     });
   }
-  return { title, questions };
+  return { title, intro, questions };
+}
+
+/** 선지 묶음 뒤에 남은 글에서 지문만 더 캐낸다(선지가 같으면 한 번만 보여주면 된다). */
+function restStems(tail) {
+  const out = [];
+  let rest = String(tail || '').trim();
+  for (let i = 0; rest && i < 4; i++) {
+    const r = splitStemOptions(rest);
+    if (r.stem) out.push(r.stem);
+    if (!r.opts.length) break;
+    rest = r.tail.trim();
+  }
+  return out;
 }
 
 /** `![](...)`와 그 설명 줄을 지문에서 걷어낸다 — 이미지는 따로 보여준다. */
@@ -215,9 +271,12 @@ function stripImages(s) {
  * 족보 가공본은 원본 해설을 **고치지 않고 보존**하고 그 옆에 검증·교정을 덧붙인다
  * (_FORMAT_GUIDE 0절). 그 구조가 보이게 이름표를 붙여서 이어 쓴다.
  */
-function explainOf(f, ansRaw, graded, imgNotes) {
+function explainOf(f, ansRaw, graded, imgNotes, multi = false) {
   const parts = [];
-  if (!graded && ansRaw) parts.push(`정답(족보): ${ansRaw}`);
+  // 번호 말고 **딸린 말**이 있으면 그것도 보여준다. "3번??(확실한 듯?)", "2, 4 (최초 항목 참조)"
+  // 처럼 족보가 남긴 불확실 표시를 지우면 학생이 그 문항을 믿어버린다(2026-10-13).
+  const bare = /^(?:[①②③④⑤⑥]|[1-6])(?:\s*(?:번|,|·|&|\/|와|및|\s)\s*(?:[①②③④⑤⑥]|[1-6]))*\s*번?\s*$/;
+  if (ansRaw && (!graded || multi || !bare.test(ansRaw.trim()))) parts.push(`정답(족보): ${ansRaw}`);
   if (f['원본 해설']) parts.push(`원본 해설 — ${f['원본 해설']}`);
   if (f['교정 해설']) parts.push(`교정 해설 — ${f['교정 해설']}`);
   if (f['검증']) parts.push(`검증 — ${f['검증']}`);

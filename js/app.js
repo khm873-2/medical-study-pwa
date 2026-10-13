@@ -3,7 +3,7 @@
 import { hasToken, setToken, clearToken, verifyToken, getRepo, setRepo } from './auth.js';
 import { listDir, getText, getBlobUrl, createFile } from './github.js';
 import { parseExamHtml, prettyExamName, examDate, examSortKey, teacherName } from './parser.js';
-import { Quiz } from './quiz.js';
+import { Quiz, isAns } from './quiz.js';
 import { PenLayer, tokenizeTree } from './pen.js';
 import * as gem from './gemini.js';
 import { wikiFor, fitLabel } from './wiki.js';
@@ -20,7 +20,7 @@ import {
   isStarred, isSuspended, isLeech, LEECH_AT, retrievability, parseExamDates, nextExam,
   parseSchedule, lecturesFor, lectureDays, weekOf, dayKey, qaCards, dueToday,
 } from './reader.js';
-import { search, cacheSubject, storageInfo } from './search.js';
+import { search, cacheSubject, storageInfo, matcher, findAll } from './search.js';
 import { JOKBO_ROOT, parseJokbo, chapterTitle } from './jokbo.js';
 import { nameSimilarity } from './wiki.js';
 import {
@@ -60,6 +60,7 @@ function show(id) {
   // 목차·본문을 각자 스크롤시키기 때문(2026-10-12).
   document.body.dataset.screen = id;
   window.scrollTo(0, 0);
+  updateAskDock();                   // AI 답변 단추는 읽기 화면에서만 뜬다
 }
 
 // ---------- 테마 · 표시 설정 ----------
@@ -917,6 +918,26 @@ function findJokboChapter(index, subject, file) {
   return null;
 }
 
+/**
+ * 족보 챕터 머리말 — "이 챕터는 매년 무엇이 나오는가".
+ *
+ * vault 가공본은 문항마다 해설을 달기 전에 챕터 전체 출제 경향을 먼저 적어둔다.
+ * 그 2만 자가 앱에는 한 줄도 안 나오고 있었다(2026-10-13 전수 대조에서 드러남).
+ */
+function showJokboIntro(intro, subject) {
+  const box = document.getElementById('jokboIntro');
+  if (!box) return;
+  box.classList.toggle('hidden', !intro);
+  box.open = false;
+  if (!intro) return;
+  document.getElementById('jokboIntroBody').innerHTML = renderMarkdown(intro);
+  const btn = document.getElementById('jokboOverview');
+  btn.onclick = (e) => {
+    e.preventDefault();
+    openNote(`${JOKBO_ROOT}/${subject}/00_과목소개.md`);
+  };
+}
+
 // ---------- 시험 열기 ----------
 async function openExam(subject, ex) {
   const body = document.getElementById('listBody');
@@ -927,7 +948,9 @@ async function openExam(subject, ex) {
     // 족보는 HTML이 아니라 가공된 마크다운이다 — 파서만 갈아끼우면 나머지(펜·뜯어보기·
     // 사이드 노트·이어풀기)는 그대로 돈다.
     const isJokbo = (ex.kind || '') === '족보';
-    const { questions, title } = isJokbo ? parseJokbo(raw, ex.path) : parseExamHtml(raw);
+    const parsed = isJokbo ? parseJokbo(raw, ex.path) : parseExamHtml(raw);
+    const { questions, title } = parsed;
+    showJokboIntro(isJokbo ? parsed.intro : '', subject);
     if (!questions.length) throw new Error('이 파일에서 문항을 찾지 못했습니다.');
     const fallbackTitle = isJokbo ? chapterTitle(ex.file) : prettyExamName(ex.file);
     currentExam = { subject, file: ex.file, path: ex.path, title: title || fallbackTitle,
@@ -1347,10 +1370,26 @@ function handleSelect(text, info) {
   showSelPop(text, info && info.box);
 }
 
+/**
+ * 긴 글을 앞머리 … 꼬리로 줄인다.
+ *
+ * 앞만 보여주면 "어디까지 골랐는지"를 알 수 없다 — 긁은 범위의 **끝**을 확인하려고
+ * 보는 팝업인데 정작 그게 안 보였다(2026-10-13 지적).
+ */
+function selPreview(text, head = 70, tail = 45) {
+  const t = String(text).replace(/\s+/g, ' ').trim();
+  if (t.length <= head + tail + 10) return t;
+  return tail > 0 ? `${t.slice(0, head)} … ${t.slice(-tail)}` : `${t.slice(0, head)}…`;
+}
+
 /** 선택한 자리 근처에 팝업을 띄운다. */
 function showSelPop(text, box) {
   const pop = document.getElementById('selPop');
-  document.getElementById('selPopText').textContent = text;
+  const full = String(text).replace(/\s+/g, ' ').trim();
+  const body = document.getElementById('selPopText');
+  body.textContent = selPreview(full);
+  body.title = full;                       // 길게 누르면 전문
+  document.getElementById('selPopCount').textContent = `${full.length}자`;
   pop.classList.remove('hidden');
 
   // 선택 영역 바로 아래에 두되 화면 밖으로 나가지 않게
@@ -2719,7 +2758,50 @@ mm('mmCapture', () => document.getElementById('readCapture').click());
 mm('mmAwake', () => document.getElementById('readAwake').click());
 mm('mmTts', () => toggleTts());
 mm('mmTop', () => scrollReadTop());
-mm('mmSearch', () => openSearch());
+mm('mmKeys', () => showKeyHelp());
+
+document.getElementById('readFind').onclick = () => openSearch('doc');
+
+// ── 키보드 · 마우스 ────────────────────────────────────────
+// 아이패드에 키보드를 붙여 쓸 때가 있고(2026-10-13 요청), 마우스 보조 버튼도
+// 쓴다. 손이 어디 있든 같은 일을 할 수 있게 한자리에 모아 둔다.
+// 단축키는 Obsidian 습관을 그대로 따른다 — 머리로 외울 게 하나라도 적게.
+const KEYS = [
+  ['⌘F', '이 문서에서 찾기'],
+  ['⌘⇧F', '열어본 모든 자료에서 찾기'],
+  ['⌘O', '다른 노트 열기'],
+  ['⌘\\', '화면 나누기 / 합치기'],
+  ['⌘[ ⌘]', '이전 / 다음 섹션'],
+  ['⌘⇧A', '긁은 곳에 AI 질문'],
+  ['Enter ⇧Enter', '찾은 다음 / 이전 자리로'],
+  ['Esc', '찾기·팝업 닫기'],
+  ['/', '찾기 (글자 칸 밖에서)'],
+  ['?', '이 목록'],
+];
+const MOUSE = [
+  ['오른쪽 버튼', '찾기 열기'],
+  ['가운데(휠) 버튼', '뒤로'],
+  ['4·5번 버튼', '이전 / 다음 섹션'],
+  ['엄지 휠(좌우)', '이전 / 다음 섹션'],
+  ['끌기', '글 선택 → 질문·복사·카드'],
+];
+function showKeyHelp() {
+  const rows = (list) => list
+    .map(([k, d]) => `<div class="kh-row"><kbd>${escapeText(k)}</kbd><span>${escapeText(d)}</span></div>`)
+    .join('');
+  document.getElementById('keyHelpBody').innerHTML = `
+    <div class="kh-sec">키보드</div>${rows(KEYS)}
+    <div class="kh-sec">마우스 (MX Master 등 버튼 많은 마우스)</div>${rows(MOUSE)}
+    <p class="muted kh-note">아이패드는 마우스 보조 버튼을 시스템이 먼저 가져갑니다.
+    설정 › 손쉬운 사용 › 터치 › AssistiveTouch › 기기 에서 버튼마다 할 일을 정해 두면
+    위 동작이 앱까지 전달됩니다.</p>`;
+  document.getElementById('keySheet').classList.remove('hidden');
+}
+document.getElementById('keyClose').onclick = () =>
+  document.getElementById('keySheet').classList.add('hidden');
+document.getElementById('keySheet').onclick = (e) => {
+  if (e.target.id === 'keySheet') e.target.classList.add('hidden');
+};
 
 // ---- 읽어주기 ----
 // 머리줄에서는 뺐지만(거의 안 쓴다) 누워서 들을 때가 있어 메뉴에 남긴다.
@@ -3654,10 +3736,99 @@ function openAskFloat(term) {
   afEl('afQWrap').open = false;
   afEl('afBody').innerHTML = '<p class="muted">묻는 중…</p>';
   afEl('afStatus').textContent = '';
+  afEl('afLogList').classList.add('hidden');
   f.classList.remove('hidden');
+  afEl('askDock').classList.add('hidden');
   restoreFloatBox();
 }
-function closeAskFloat() { afEl('askFloat').classList.add('hidden'); }
+
+/**
+ * 닫기가 아니라 **접기**다.
+ *
+ * 답이 그냥 사라지면 그걸 보면서 하던 일을 이어갈 수가 없다(2026-10-13 지적:
+ * "바로 없어져버리면 작업을 할 수 없음"). 접으면 화면 귀퉁이에 단추로 남고,
+ * 내용은 기기에 저장돼 앱을 껐다 켜도 돌아온다.
+ */
+function closeAskFloat() {
+  afEl('askFloat').classList.add('hidden');
+  afEl('afLogList').classList.add('hidden');
+  updateAskDock();
+}
+
+// ── 지난 질문 ──────────────────────────────────────────────
+// 메모리에만 두면 새로고침 한 번에 날아간다. 아이패드는 앱을 잠깐 떠나도
+// 통째로 다시 뜨는 일이 잦아서, 기기에 적어둬야 "계속 떠 있는" 느낌이 된다.
+let askLog = [];              // [{id, ts, term, html, note}]  최신이 앞
+const ASK_LOG_MAX = 30;
+
+async function loadAskLog() {
+  askLog = (await kvGet('ask_log')) || [];
+  updateAskDock();
+}
+async function rememberAsk(term, html, note) {
+  const id = `${Date.now()}`;
+  askLog = [{ id, ts: Date.now(), term, html, note: note || '' },
+    ...askLog.filter((x) => x.term !== term)].slice(0, ASK_LOG_MAX);
+  await kvSet('ask_log', askLog);
+  updateAskDock();
+  return id;
+}
+
+/** 접혀 있을 때 귀퉁이에 뜨는 단추. 읽기 화면에서만 보인다. */
+function updateAskDock() {
+  const dock = afEl('askDock');
+  if (!dock) return;
+  const open = !afEl('askFloat').classList.contains('hidden');
+  const here = document.body.dataset.screen === 'readScreen';
+  dock.classList.toggle('hidden', open || !here || !askLog.length);
+  if (askLog.length) {
+    afEl('askDockText').textContent = selPreview(askLog[0].term, 16, 0).replace(/ … $/, '…');
+    dock.title = `AI 답변 다시 보기 — ${askLog[0].term}`;
+  }
+}
+
+/** 지난 질문 하나를 그대로 되살린다(다시 묻지 않는다 — 한도도 아끼고 빠르다). */
+function replayAsk(item) {
+  askCtx = { ...(askCtx || {}), term: item.term, answer: null, qtext: item.note || '' };
+  afEl('afQ').textContent = item.term;
+  afEl('afQFull').textContent = item.term;
+  afEl('afQWrap').open = false;
+  afEl('afBody').innerHTML = item.html;
+  tokenizeTree(afEl('afBody'));
+  askCtx.answer = afEl('afBody').textContent;
+  afEl('afStatus').textContent = item.note
+    ? `${item.note} · ${new Date(item.ts).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+    : '지난 답변';
+  afEl('afLogList').classList.add('hidden');
+  afEl('askFloat').classList.remove('hidden');
+  afEl('askDock').classList.add('hidden');
+  restoreFloatBox();
+  updateAfSaveLabel();
+}
+
+function toggleAskLog() {
+  const box = afEl('afLogList');
+  if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+  box.innerHTML = '';
+  if (!askLog.length) {
+    box.innerHTML = '<p class="muted" style="padding:10px 12px">아직 물어본 게 없습니다.</p>';
+  } else {
+    for (const item of askLog) {
+      const b = document.createElement('button');
+      b.className = 'af-log-item';
+      const t = document.createElement('span');
+      t.className = 'al-t';
+      t.textContent = selPreview(item.term, 40, 0).replace(/ … $/, '…');
+      const d = document.createElement('span');
+      d.className = 'al-d';
+      d.textContent = new Date(item.ts).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      b.append(t, d);
+      b.onclick = () => replayAsk(item);
+      box.appendChild(b);
+    }
+  }
+  box.classList.remove('hidden');
+}
 
 /** 이 요소 안에서 긁어둔 글. 없으면 빈 문자열. */
 function selectedInside(root) {
@@ -3686,6 +3857,9 @@ function initAskFloat() {
   });
 
   afEl('afClose').onclick = closeAskFloat;
+  afEl('afLog').onclick = toggleAskLog;
+  afEl('askDock').onclick = () => { if (askLog.length) replayAsk(askLog[0]); };
+  loadAskLog();
 
   // 긁는 동안 버튼 글씨를 바꿔 "지금 누르면 뭐가 저장되는지" 알려준다
   document.addEventListener('selectionchange', () => {
@@ -3726,6 +3900,7 @@ async function askInReader(term) {
     askCtx.answer = answer;
     body.innerHTML = renderMarkdown(answer);
     tokenizeTree(body);                 // 답변에서도 긁어서 다시 물을 수 있게
+    rememberAsk(term, body.innerHTML, reader ? reader.note.title : '');
     status.textContent = '쓸 만한 부분만 긁어서 저장할 수 있습니다';
     updateAfSaveLabel();
   } catch (e) {
@@ -4671,33 +4846,129 @@ function shuffle(a) {
 
 // ═══════════ Phase 5 — 검색 ═══════════
 
-/** 검색 시트 — 목록 화면의 🔍와 읽기 화면의 더보기 메뉴가 같이 쓴다. */
-function openSearch() {
-  document.getElementById('searchSheet').classList.remove('hidden');
-  document.getElementById('searchInput').focus();
+// ── 찾기 ───────────────────────────────────────────────────
+// 범위를 고르게 한 이유: "이 문서 안에서"가 압도적으로 많은데 전체 검색만 있어서
+// 결과가 딴 데 것으로 뒤덮였다. obsidian-another-quick-switcher의 custom search처럼
+// 범위(이 문서/이 폴더/전체)와 정규식을 앞에 꺼내 뒀다(2026-10-13 요청).
+
+const sEl = (id) => document.getElementById(id);
+let searchScope = 'all';        // doc | dir | all
+let searchOpt = { regex: false, caseSensitive: false };
+let docHits = [];               // 이 문서 안에서 찾은 자리들
+let docHitAt = -1;
+
+/** 지금 읽는 노트가 들어 있는 폴더. 없으면 null. */
+function currentDir() {
+  if (!(reader && reader.note && reader.note.path)) return null;
+  const p = reader.note.path;
+  return p.slice(0, p.lastIndexOf('/'));
 }
-document.getElementById('searchBtn').onclick = openSearch;
-document.getElementById('searchClose').onclick = () =>
-  document.getElementById('searchSheet').classList.add('hidden');
-document.getElementById('searchSheet').onclick = (e) => {
-  if (e.target.id === 'searchSheet') e.target.classList.add('hidden');
+
+function setScope(scope) {
+  // 노트를 안 보고 있으면 "이 문서"·"이 폴더"는 의미가 없다 — 전체로 돌린다
+  const canDoc = !!(reader && reader.note);
+  searchScope = (scope === 'doc' || scope === 'dir') && !canDoc ? 'all' : scope;
+  document.querySelectorAll('#searchSheet .scope-btn[data-scope]').forEach((b) => {
+    b.classList.toggle('on', b.dataset.scope === searchScope);
+    b.disabled = !canDoc && b.dataset.scope !== 'all';
+  });
+  const dir = currentDir();
+  sEl('searchInput').placeholder =
+    searchScope === 'doc' ? `${reader.note.title} 안에서 찾기`
+      : searchScope === 'dir' ? `${(dir || '').split('/').pop()} 폴더에서 찾기`
+        : '열어본 모든 자료에서 찾기';
+  runSearch(sEl('searchInput').value);
+}
+
+/**
+ * 찾기 열기.
+ * @param {string} [scope] 'doc'이면 이 문서 안에서(⌘F), 'all'이면 전체(⌘⇧F)
+ */
+function openSearch(scope) {
+  sEl('searchSheet').classList.remove('hidden');
+  setScope(scope || (reader && reader.note ? 'doc' : 'all'));
+  const inp = sEl('searchInput');
+  inp.focus();
+  inp.select();
+}
+function closeSearch() {
+  sEl('searchSheet').classList.add('hidden');
+  clearDocMarks();
+}
+sEl('searchBtn').onclick = () => openSearch();
+sEl('searchClose').onclick = closeSearch;
+sEl('searchSheet').onclick = (e) => { if (e.target.id === 'searchSheet') closeSearch(); };
+document.querySelectorAll('#searchSheet .scope-btn[data-scope]')
+  .forEach((b) => { b.onclick = () => setScope(b.dataset.scope); });
+sEl('searchRegex').onclick = (e) => {
+  searchOpt.regex = !searchOpt.regex;
+  e.currentTarget.classList.toggle('on', searchOpt.regex);
+  runSearch(sEl('searchInput').value);
+};
+sEl('searchCase').onclick = (e) => {
+  searchOpt.caseSensitive = !searchOpt.caseSensitive;
+  e.currentTarget.classList.toggle('on', searchOpt.caseSensitive);
+  runSearch(sEl('searchInput').value);
 };
 
+// ── 말로 받아쓰기 ────────────────────────────────────────
+// 아이패드에서 쓸 수 있는 길은 둘이다:
+//   ① 웹 음성 인식(webkitSpeechRecognition) — 되는 기기에서는 이 단추로 바로 받는다.
+//   ② 안 되면 키보드의 🎤(시스템 받아쓰기) — 글자 칸에 커서를 두고 쓰면 된다.
+// 마우스 버튼 하나를 AssistiveTouch로 "보조 클릭"에 걸어두면 ①까지 손 안 떼고 간다.
+let recog = null;
+function dictate(input, onDone) {
+  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Rec) {
+    toast('이 기기는 앱 받아쓰기를 지원하지 않습니다 — 글자 칸을 누르고 키보드의 🎤 를 쓰세요.');
+    input.focus();
+    return;
+  }
+  if (recog) { try { recog.stop(); } catch {} recog = null; return; }
+  recog = new Rec();
+  recog.lang = 'ko-KR';
+  recog.interimResults = true;
+  recog.continuous = false;
+  const mic = document.getElementById('searchMic');
+  mic && mic.classList.add('on');
+  recog.onresult = (e) => {
+    input.value = [...e.results].map((r) => r[0].transcript).join('');
+    onDone && onDone(input.value);
+  };
+  const end = () => { mic && mic.classList.remove('on'); recog = null; };
+  recog.onerror = end;
+  recog.onend = end;
+  try { recog.start(); } catch { end(); }
+}
+sEl('searchMic').onclick = () =>
+  dictate(sEl('searchInput'), (v) => runSearch(v));
+
 let searchTimer = null;
-document.getElementById('searchInput').oninput = (e) => {
+sEl('searchInput').oninput = (e) => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => runSearch(e.target.value), 250);
+  searchTimer = setTimeout(() => runSearch(e.target.value), 200);
+};
+// Enter로 다음, Shift+Enter로 이전 — 브라우저 찾기와 같은 손버릇
+sEl('searchInput').onkeydown = (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); stepDocHit(e.shiftKey ? -1 : 1); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeSearch(); }
 };
 
 async function runSearch(q) {
-  const msg = document.getElementById('searchMsg');
-  const box = document.getElementById('searchResults');
-  if (String(q).trim().length < 2) { box.innerHTML = ''; msg.textContent = ''; return; }
+  const msg = sEl('searchMsg');
+  const box = sEl('searchResults');
+  if (String(q).trim().length < 2) {
+    box.innerHTML = ''; msg.textContent = ''; clearDocMarks(); return;
+  }
+  if (searchScope === 'doc') { runDocSearch(q); return; }
+  clearDocMarks();
   msg.textContent = '찾는 중…';
-  const hits = await search(q);
+  const hits = await search(q, 60, { ...searchOpt, dir: searchScope === 'dir' ? currentDir() : null });
   box.innerHTML = '';
   if (!hits.length) {
-    msg.textContent = '결과가 없습니다. (한 번도 열어보지 않은 자료는 검색되지 않습니다 — 설정에서 과목을 오프라인 저장하면 전체가 검색됩니다.)';
+    msg.textContent = searchOpt.regex && !matcher(q, searchOpt)
+      ? '정규식이 올바르지 않습니다.'
+      : '결과가 없습니다. (한 번도 열어보지 않은 자료는 검색되지 않습니다 — 설정에서 과목을 오프라인 저장하면 전체가 검색됩니다.)';
     return;
   }
   msg.textContent = `${hits.length}건`;
@@ -4715,12 +4986,104 @@ async function runSearch(q) {
     s.append(mk, h.snippet.after);
     b.append(t, s);
     b.onclick = () => {
-      document.getElementById('searchSheet').classList.add('hidden');
+      closeSearch();
       if (h.kind === 'note') openNote(h.path);
       else openExamAt(h.path, h.qnum);
     };
     box.appendChild(b);
   }
+}
+
+/** 이 문서 안에서 — 섹션별로 몇 군데 걸렸는지 보여주고 눌러서 그 자리로 간다. */
+function runDocSearch(q) {
+  const msg = sEl('searchMsg');
+  const box = sEl('searchResults');
+  box.innerHTML = '';
+  docHits = []; docHitAt = -1;
+  const match = matcher(q, searchOpt);
+  if (!match) { msg.textContent = '정규식이 올바르지 않습니다.'; return; }
+  if (!(reader && reader.note)) { msg.textContent = '열려 있는 노트가 없습니다.'; return; }
+
+  reader.note.sections.forEach((sec, i) => {
+    for (const at of findAll(sec.text, match, 50)) docHits.push({ sec: i, ...at });
+  });
+  if (!docHits.length) { msg.textContent = '이 문서에는 없습니다.'; clearDocMarks(); return; }
+  msg.textContent = `${docHits.length}군데 — Enter로 다음, Shift+Enter로 이전`;
+
+  let lastSec = -1;
+  docHits.forEach((h, idx) => {
+    const sec = reader.note.sections[h.sec];
+    if (h.sec !== lastSec) {
+      lastSec = h.sec;
+      const head = document.createElement('div');
+      head.className = 'sh-group';
+      head.textContent = `${h.sec + 1}. ${sec.heading}`;
+      box.appendChild(head);
+    }
+    const b = document.createElement('button');
+    b.className = 'search-hit';
+    const s = document.createElement('div');
+    s.className = 'sh-snip';
+    const start = Math.max(0, h.at - 40);
+    s.append((start ? '…' : '') + sec.text.slice(start, h.at).replace(/\n+/g, ' '));
+    const mk = document.createElement('mark');
+    mk.textContent = sec.text.slice(h.at, h.at + h.len);
+    s.append(mk, sec.text.slice(h.at + h.len, h.at + h.len + 60).replace(/\n+/g, ' ') + '…');
+    b.append(s);
+    b.onclick = () => goDocHit(idx);
+    box.appendChild(b);
+  });
+  goDocHit(0, { keepFocus: true });
+}
+
+/** n번째 자리로 간다 — 섹션을 넘기고, 그 글자에 표시를 남긴다. */
+function goDocHit(idx, { keepFocus = false } = {}) {
+  if (!docHits.length) return;
+  docHitAt = (idx + docHits.length) % docHits.length;
+  const h = docHits[docHitAt];
+  const go = () => {
+    markDocHit(h);
+    sEl('searchMsg').textContent =
+      `${docHitAt + 1}/${docHits.length}군데 — Enter로 다음, Shift+Enter로 이전`;
+    if (!keepFocus) sEl('searchInput').focus();
+  };
+  if (reader.secIdx !== h.sec) { reader.secIdx = h.sec; renderReader(); setTimeout(go, 80); } else go();
+}
+function stepDocHit(d) {
+  if (!docHits.length) { runSearch(sEl('searchInput').value); return; }
+  goDocHit(docHitAt + d);
+}
+
+/** 본문에서 그 자리를 노랗게 칠한다. `.tok`을 세어 글자 위치를 찾는다. */
+function markDocHit(h) {
+  clearDocMarks();
+  const body = document.getElementById('readBody');
+  if (!body) return;
+  const sec = reader.note.sections[h.sec];
+  const target = sec.text.slice(h.at, h.at + h.len).replace(/\s+/g, '');
+  if (!target) return;
+  const walk = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  let node, first = null;
+  while ((node = walk.nextNode())) {
+    const i = node.nodeValue.indexOf(target.slice(0, Math.min(target.length, 12)));
+    if (i < 0) continue;
+    const r = document.createRange();
+    r.setStart(node, i);
+    r.setEnd(node, Math.min(node.nodeValue.length, i + target.length));
+    const mk = document.createElement('mark');
+    mk.className = 'find-mark';
+    try { r.surroundContents(mk); } catch { continue; }
+    if (!first) first = mk;
+    break;
+  }
+  if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+function clearDocMarks() {
+  document.querySelectorAll('mark.find-mark').forEach((m) => {
+    const t = document.createTextNode(m.textContent);
+    m.replaceWith(t);
+    t.parentNode && t.parentNode.normalize();
+  });
 }
 
 /** 검색 결과에서 특정 문항으로 바로 이동 */
@@ -4735,6 +5098,13 @@ async function openExamAt(path, qnum) {
 }
 
 // ---------- 결과 ----------
+
+/** 결과·오답노트에 쓰는 정답 표기. 족보에는 정답이 둘 이상인 문항이 흔하다. */
+function ansText(q) {
+  const list = q.ansAll || [q.ans];
+  return list.map((i) => `${i + 1}번`).join('·');
+}
+
 function showResult(res) {
   lastResult = res;
   document.getElementById('resultTitle').textContent = currentExam.title;
@@ -4757,7 +5127,7 @@ function showResult(res) {
     res.wrong.forEach((x) => {
       const d = document.createElement('div');
       const picked = x.q.type === 'ox' ? (x.picked === 0 ? 'O' : 'X') : `${x.picked + 1}번`;
-      const ans = x.q.type === 'ox' ? (x.q.ans === 0 ? 'O' : 'X') : `${x.q.ans + 1}번`;
+      const ans = x.q.type === 'ox' ? (x.q.ans === 0 ? 'O' : 'X') : ansText(x.q);
       d.textContent = `${x.q.num}. ${x.q.q.slice(0, 60)}… (내 답 ${picked} / 정답 ${ans})`;
       wl.appendChild(d);
     });
@@ -4842,7 +5212,7 @@ function buildMarkdown(res) {
     lines.push('');
     res.wrong.forEach((x) => {
       const picked = x.q.type === 'ox' ? (x.picked === 0 ? 'O' : 'X') : `${x.picked + 1}번`;
-      const ans = x.q.type === 'ox' ? (x.q.ans === 0 ? 'O' : 'X') : `${x.q.ans + 1}번`;
+      const ans = x.q.type === 'ox' ? (x.q.ans === 0 ? 'O' : 'X') : ansText(x.q);
       lines.push(`### ${markOf(x)}${x.q.num}. (내 답 ${picked} → 정답 ${ans})`);
       if (x.q.source || x.q.srcTag) lines.push(`*출처: ${x.q.source || x.q.srcTag}*`);
       lines.push('');
@@ -5020,6 +5390,142 @@ function alertBox(text) {
   box.textContent = text;
   body.prepend(box);
 }
+
+
+// ═══════════ 키보드 · 마우스 ═══════════
+//
+// 왜 필요한가: 아이패드에 키보드를 붙이거나 MX Master 같은 버튼 많은 마우스를
+// 붙여 쓴다(2026-10-13 요청). 손이 화면에서 떨어져 있을 때도 찾기·뒤로·섹션 넘기기가
+// 되어야 한다. 단축키는 **Obsidian과 같게** 잡았다 — 평소 쓰던 손버릇 그대로.
+
+/** 지금 글자를 치고 있는 중인가 — 그럴 땐 단축키를 가로채면 안 된다. */
+function typingNow(t) {
+  return !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable));
+}
+const inReader = () => document.body.dataset.screen === 'readScreen';
+
+function prevSection() { document.getElementById('readPrev').click(); }
+function nextSection() { document.getElementById('readNext').click(); }
+
+document.addEventListener('keydown', (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  const typing = typingNow(e.target);
+
+  // Esc는 어디서든 — 지금 열려 있는 것 하나를 닫는다
+  if (e.key === 'Escape') {
+    const layers = [
+      ['searchSheet', closeSearch],
+      ['keySheet', () => document.getElementById('keySheet').classList.add('hidden')],
+      ['selPop', () => document.getElementById('selCancel').click()],
+      ['askFloat', closeAskFloat],
+      ['docDrawer', () => document.getElementById('docClose').click()],
+    ];
+    for (const [id, close] of layers) {
+      const el = document.getElementById(id);
+      if (el && !el.classList.contains('hidden')) { e.preventDefault(); close(); return; }
+    }
+    return;
+  }
+
+  if (mod && (e.key === 'f' || e.key === 'F')) {       // ⌘F / ⌘⇧F
+    e.preventDefault();
+    openSearch(e.shiftKey ? 'all' : (inReader() ? 'doc' : 'all'));
+    return;
+  }
+  if (mod && (e.key === 'o' || e.key === 'O') && inReader()) {   // ⌘O — 다른 노트
+    e.preventDefault(); openDocDrawer(); return;
+  }
+  if (mod && e.key === '\\' && inReader()) {           // ⌘\ — 화면 나누기
+    e.preventDefault(); document.getElementById('readSplitBtn').click(); return;
+  }
+  if (mod && (e.key === '[' || e.key === ']') && inReader()) {
+    e.preventDefault(); (e.key === '[' ? prevSection : nextSection)(); return;
+  }
+  if (mod && e.shiftKey && (e.key === 'a' || e.key === 'A')) {   // ⌘⇧A — 긁은 곳에 질문
+    const ask = document.getElementById('selAsk');
+    if (ask && !document.getElementById('selPop').classList.contains('hidden')) {
+      e.preventDefault(); ask.click();
+    }
+    return;
+  }
+  if (typing) return;
+  if (e.key === '/') { e.preventDefault(); openSearch(); return; }
+  if (e.key === '?') { e.preventDefault(); showKeyHelp(); return; }
+  if (inReader() && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    e.preventDefault(); (e.key === 'ArrowLeft' ? prevSection : nextSection)();
+  }
+});
+
+// ── 마우스 보조 버튼 ──────────────────────────────────────
+//
+// 아이패드에서 실제로 앱까지 오는 것만 쓴다(2026-10-13 조사):
+//   · 오른쪽 버튼  → contextmenu 로 온다. 가장 믿을 만하다.
+//   · 가운데·4·5번 → auxclick / pointerdown 의 button 1·3·4. 기종에 따라
+//     시스템이 먼저 먹기도 해서, 오면 쓰고 안 와도 다른 길을 남겨 둔다.
+//   · 엄지 휠(좌우) → wheel 의 deltaX. 이건 거의 항상 온다.
+// 버튼이 시스템에 막히면 설정 › 손쉬운 사용 › 터치 › AssistiveTouch › 기기 에서
+// 그 버튼을 "보조 클릭"으로 바꿔 두면 오른쪽 버튼 경로로 들어온다.
+
+function initMouse() {
+  // 오른쪽 버튼 — 찾기. 글을 긁어 둔 채 누르면 그 말로 바로 찾는다.
+  document.addEventListener('contextmenu', (e) => {
+    if (typingNow(e.target) || !inReader()) return;
+    e.preventDefault();
+    const picked = String(window.getSelection() || '').trim();
+    openSearch(picked ? 'doc' : undefined);
+    if (picked) {
+      const inp = document.getElementById('searchInput');
+      inp.value = picked.slice(0, 60);
+      runSearch(inp.value);
+    }
+  });
+
+  document.addEventListener('auxclick', (e) => {
+    if (!inReader()) return;
+    if (e.button === 1) { e.preventDefault(); document.getElementById('readBack').click(); }
+    else if (e.button === 3) { e.preventDefault(); prevSection(); }
+    else if (e.button === 4) { e.preventDefault(); nextSection(); }
+  });
+  // 브라우저가 auxclick을 안 주는 경우를 위한 두 번째 길
+  document.addEventListener('pointerdown', (e) => {
+    if (!inReader() || e.pointerType !== 'mouse') return;
+    if (e.button === 3) { e.preventDefault(); prevSection(); }
+    else if (e.button === 4) { e.preventDefault(); nextSection(); }
+  });
+
+  // 엄지 휠(좌우 스크롤) — 섹션 넘기기. 한 번 넘기면 잠깐 쉰다(한 번에 주르륵 넘어가지 않게)
+  let wheelAt = 0;
+  document.addEventListener('wheel', (e) => {
+    if (!inReader()) return;
+    if (Math.abs(e.deltaX) < 24 || Math.abs(e.deltaX) < Math.abs(e.deltaY) * 1.5) return;
+    const now = Date.now();
+    if (now - wheelAt < 420) return;
+    wheelAt = now;
+    (e.deltaX < 0 ? prevSection : nextSection)();
+  }, { passive: true });
+
+  // 마우스로 글을 긁어도 펜과 **같은 팝업**이 뜬다 — 질문·복사·카드를 그대로 쓴다
+  document.addEventListener('mouseup', (e) => {
+    if (!inReader() || e.button !== 0) return;
+    setTimeout(() => {
+      const sel = window.getSelection();
+      const text = String(sel || '').trim();
+      const body = document.getElementById('readBody');
+      if (text.length < 2 || !body || !sel.rangeCount) return;
+      if (!body.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
+      const r = sel.getRangeAt(0).getBoundingClientRect();
+      if (!(reader && reader.note)) return;
+      openAskFromReader(text, null);          // 펜으로 긁었을 때와 **같은 길**로 보낸다
+      const pop = document.getElementById('selPop');
+      requestAnimationFrame(() => {
+        const pr = pop.getBoundingClientRect();
+        pop.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - pr.width / 2, innerWidth - pr.width - 8))}px`;
+        pop.style.top = `${Math.max(8, Math.min(r.bottom + 10, innerHeight - pr.height - 8))}px`;
+      });
+    }, 10);
+  });
+}
+initMouse();
 
 // ---------- 서비스워커 · 업데이트 ----------
 // 배포해도 아이패드에서 안 바뀌는 일이 있었다. 두 겹의 캐시가 원인이다:

@@ -3269,8 +3269,15 @@ await run('분할 읽기', async () => {
 
     // 탐색은 글씨 버튼으로 — 아이콘만 두니 목차·노트·카드가 서로 구분이 안 됐다
     const txt = [...document.querySelectorAll('#readScreen > header .txt-btn')].map((b) => b.textContent);
-    out.push({ name: '목차·노트가 글씨 버튼이다(카드는 더보기로 내렸다)',
-      ok: txt.join(',') === '목차,노트', detail: txt.join(',') });
+    out.push({ name: '찾기·목차·노트가 글씨 버튼이다(카드는 더보기로 내렸다)',
+      ok: txt.join(',') === '찾기,목차,노트', detail: txt.join(',') });
+    // 찾기가 **제일 왼쪽** — 가장 자주 쓰는데 ⋯ 안에 묻혀 있었다(2026-10-13)
+    const findB = document.getElementById('readFind');
+    const splitB = document.getElementById('readSplitBtn');
+    out.push({ name: '찾기가 나누기보다 왼쪽에 있다',
+      ok: findB.getBoundingClientRect().left < splitB.getBoundingClientRect().left,
+      detail: `찾기 ${Math.round(findB.getBoundingClientRect().left)} / 나누기 ${Math.round(splitB.getBoundingClientRect().left)}` });
+    out.push({ name: '찾기가 글씨 버튼 중 맨 앞', ok: txt[0] === '찾기' });
     out.push({ name: '머리줄 버튼이 8개를 넘지 않는다(늘 쓰는 것만 밖에)',
       ok: ids.length <= 8, detail: `${ids.length}개: ${ids.join(',')}` });
     const tg = document.querySelector('#readScreen > header .txt-group');
@@ -3599,22 +3606,34 @@ await run('펜 되돌리기 · 더보기', async () => {
 await run('선택 팝업', async () => {
   const out = [];
   const pop = document.getElementById('selPop');
+  const { tokenize } = await import('/js/pen.js');
 
-  // 긴 글을 넣어본다 — 실제 노트 한 문단 길이
+  // 긴 글을 긋는다 — 실제 노트 한 문단 길이
   const LONG = '성인 가슴압박 표준수치는 속도 100~120회/분, 깊이 5cm 이상 6cm 이하, '
     + '위치는 흉골 하부 1/2이며, 압박:환기 비율은 1인·2인 구조자 모두 30:2(전문기도 삽관 전)다. '
     + '전문기도 삽입 후에는 압박을 끊지 않고 환기만 6초마다 1회로 독립적으로 시행한다.';
+  // **실제로 긋는다** — 앱의 showSelPop을 거쳐야 진짜 검사가 된다.
+  // (손으로 글자를 넣어 보면 app.js가 그 일을 안 해도 통과해버린다.)
   {
-    // app.js의 selPreview와 같은 규칙으로 넣는다(모듈이 비공개라 같은 식을 쓴다)
-    const el = document.getElementById('selPopText');
-    const t = LONG.replace(/\s+/g, ' ').trim();
-    el.textContent = t.length <= 125 ? t : `${t.slice(0, 70)} … ${t.slice(-45)}`;
-    el.title = t;
-    document.getElementById('selPopCount').textContent = `${t.length}자`;
-    pop.classList.remove('hidden');
-    pop.style.cssText = 'left:40px;top:60px;visibility:visible';
+    const body = document.getElementById('readBody');
+    body.innerHTML = '<p id="selpopP"></p>';
+    tokenize(document.getElementById('selpopP'), LONG);
+    const toks = [...document.querySelectorAll('#selpopP .tok')];
+    const a = toks[0].getBoundingClientRect();
+    const z = toks[toks.length - 1].getBoundingClientRect();
+    const cv = document.querySelector('#readCard .penlayer');
+    const ev = (t, x, y) => cv.dispatchEvent(new PointerEvent(t, {
+      pointerType: 'pen', pointerId: 7, isPrimary: true,
+      buttons: t === 'pointerup' ? 0 : 1, pressure: .5,
+      clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    const x1 = a.left + 2, y1 = a.top + a.height / 2;
+    const x2 = z.right - 2, y2 = z.top + z.height / 2;
+    ev('pointerdown', x1, y1);
+    for (let i = 1; i <= 12; i++) ev('pointermove', x1 + (x2 - x1) * i / 12, y1 + (y2 - y1) * i / 12);
+    ev('pointerup', x2, y2);
   }
-  await new Promise((r) => setTimeout(r, 80));
+  await new Promise((r) => setTimeout(r, 900));
+  out.push({ name: '길게 그으면 팝업이 뜬다', ok: !pop.classList.contains('hidden') });
 
   const shown = document.getElementById('selPopText').textContent;
   out.push({ name: '앞부분이 보인다', ok: shown.startsWith('성인 가슴압박'), detail: shown.slice(0, 20) });
@@ -3653,6 +3672,143 @@ await run('선택 팝업', async () => {
 
   pop.classList.add('hidden');
   pop.style.cssText = '';
+  return out;
+});
+
+// ══════════ 찾기 · 단축키 · 되돌아오는 AI 답변 (2026-10-13) ══════════
+await run('찾기', async () => {
+  const out = [];
+  const sheet = document.getElementById('searchSheet');
+
+  document.getElementById('readFind').click();
+  out.push({ name: '찾기 버튼이 찾기를 연다', ok: !sheet.classList.contains('hidden') });
+
+  const chips = [...document.querySelectorAll('#searchSheet .scope-btn[data-scope]')];
+  out.push({ name: '범위를 고를 수 있다(이 문서/이 폴더/전체)',
+    ok: chips.map((b) => b.textContent).join('/') === '이 문서/이 폴더/전체',
+    detail: chips.map((b) => b.textContent).join('/') });
+  out.push({ name: '범위는 늘 하나만 켜져 있다',
+    ok: chips.filter((b) => b.classList.contains('on')).length === 1,
+    detail: chips.filter((b) => b.classList.contains('on')).map((b) => b.dataset.scope).join(',') });
+  // 노트를 안 열었으면 "이 문서"는 뜻이 없다 — 눌리지 않고 전체로 간다
+  const noNote = chips.find((b) => b.dataset.scope === 'doc').disabled;
+  out.push({ name: '노트가 없으면 전체, 있으면 이 문서가 기본',
+    ok: noNote
+      ? chips.find((b) => b.dataset.scope === 'all').classList.contains('on')
+      : chips.find((b) => b.dataset.scope === 'doc').classList.contains('on'),
+    detail: noNote ? '노트 없음' : '노트 있음' });
+  out.push({ name: '못 쓰는 범위는 눌리지 않게 막는다',
+    ok: chips.filter((b) => b.dataset.scope !== 'all').every((b) => b.disabled === noNote) });
+  chips.find((b) => b.dataset.scope === 'all').click();
+  out.push({ name: '눌러서 범위를 바꾼다',
+    ok: chips.find((b) => b.dataset.scope === 'all').classList.contains('on') });
+
+  const rx = document.getElementById('searchRegex');
+  rx.click();
+  out.push({ name: '정규식(grep)을 켤 수 있다', ok: rx.classList.contains('on') });
+  rx.click();
+  out.push({ name: '다시 누르면 꺼진다', ok: !rx.classList.contains('on') });
+  out.push({ name: '대소문자 구분도 있다', ok: !!document.getElementById('searchCase') });
+
+  // 글자 칸에 바로 커서가 간다 — 키보드로 쓸 때 제일 중요하다
+  out.push({ name: '열면 바로 칠 수 있다', ok: document.activeElement.id === 'searchInput',
+    detail: document.activeElement.id });
+
+  // Esc로 닫힌다
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  out.push({ name: 'Esc로 닫힌다', ok: sheet.classList.contains('hidden') });
+
+  // ⌘F로 열린다(아이패드에 키보드를 붙여 쓸 때)
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true, cancelable: true }));
+  out.push({ name: '⌘F로 열린다', ok: !sheet.classList.contains('hidden') });
+  document.getElementById('searchClose').click();
+
+  // ⌘⇧F는 전체 범위로
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'F', metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+  out.push({ name: '⌘⇧F는 전체에서 찾는다',
+    ok: !sheet.classList.contains('hidden')
+      && document.querySelector('#searchSheet .scope-btn[data-scope="all"]').classList.contains('on') });
+  document.getElementById('searchClose').click();
+
+  // ── 이 문서 안에서 찾기 — ⌘F의 본 일 ──
+  // 앞 검사가 본문을 갈아끼웠으니 원래 노트로 되돌린다(섹션을 한 번 넘겼다 온다)
+  document.getElementById('readNext').click();
+  document.getElementById('readPrev').click();
+  await new Promise((r) => setTimeout(r, 120));
+  const docChip = chips.find((b) => b.dataset.scope === 'doc');
+  if (!docChip.disabled) {
+    docChip.click();
+    const inp = document.getElementById('searchInput');
+    inp.value = '내용';
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 400));
+    const msg = document.getElementById('searchMsg').textContent;
+    out.push({ name: '이 문서에서 여러 군데를 찾는다', ok: /\d+군데/.test(msg), detail: msg });
+    out.push({ name: '섹션별로 묶어 보여준다(어디 있는 말인지)',
+      ok: document.querySelectorAll('#searchResults .sh-group').length >= 2,
+      detail: `${document.querySelectorAll('#searchResults .sh-group').length}개 섹션` });
+    out.push({ name: '**본문에서 그 자리를 칠해 준다**', ok: !!document.querySelector('mark.find-mark'),
+      detail: (document.querySelector('mark.find-mark') || {}).textContent || '없음' });
+    // Enter로 다음 자리
+    const before = document.getElementById('searchMsg').textContent;
+    inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 250));
+    out.push({ name: 'Enter로 다음 자리로 넘어간다',
+      ok: document.getElementById('searchMsg').textContent !== before,
+      detail: document.getElementById('searchMsg').textContent });
+    out.push({ name: '없는 말은 없다고 한다',
+      ok: (inp.value = 'ㅋㅋ없는말ㅋㅋ', inp.dispatchEvent(new Event('input', { bubbles: true })), true) });
+    await new Promise((r) => setTimeout(r, 350));
+    out.push({ name: '— 그렇게 말한다', ok: /없습니다/.test(document.getElementById('searchMsg').textContent),
+      detail: document.getElementById('searchMsg').textContent });
+  }
+  document.getElementById('searchClose').click();
+  out.push({ name: '닫으면 본문 표시도 지운다', ok: !document.querySelector('mark.find-mark') });
+  return out;
+});
+
+await run('단축키 안내', () => {
+  const out = [];
+  document.getElementById('mmKeys').click();
+  const sheet = document.getElementById('keySheet');
+  out.push({ name: '더보기에 단축키 안내가 있다', ok: !sheet.classList.contains('hidden') });
+  const txt = document.getElementById('keyHelpBody').textContent;
+  out.push({ name: '키보드와 마우스를 같이 알려준다',
+    ok: txt.includes('키보드') && txt.includes('마우스') });
+  out.push({ name: 'Obsidian과 같은 ⌘F를 적어 뒀다', ok: txt.includes('⌘F') });
+  out.push({ name: '아이패드에서 마우스 버튼 여는 법도 적었다',
+    ok: txt.includes('AssistiveTouch') });
+  document.getElementById('keyClose').click();
+  out.push({ name: '닫힌다', ok: sheet.classList.contains('hidden') });
+  return out;
+});
+
+// ★ 질문해둔 답이 사라지면 그걸 보며 하던 일을 이어갈 수가 없다(2026-10-13 지적)
+await run('AI 답변이 남는다', () => {
+  const out = [];
+  const f = document.getElementById('askFloat');
+  const dock = document.getElementById('askDock');
+  out.push({ name: '접으면 돌아갈 단추가 있다', ok: !!dock });
+  out.push({ name: '지난 질문 목록을 여는 단추가 있다', ok: !!document.getElementById('afLog') });
+  document.getElementById('afLog').click();
+  out.push({ name: '눌러서 펼쳐진다', ok: !document.getElementById('afLogList').classList.contains('hidden') });
+  document.getElementById('afLog').click();
+  out.push({ name: '다시 눌러 접는다', ok: document.getElementById('afLogList').classList.contains('hidden') });
+  out.push({ name: '✕는 "닫기"가 아니라 "접기"라고 말한다',
+    ok: /접기/.test(document.getElementById('afClose').title),
+    detail: document.getElementById('afClose').title });
+  f.classList.add('hidden');
+  return out;
+});
+
+// 족보 챕터 머리말 — vault에만 있고 앱에는 한 줄도 안 나오던 2만 자
+await run('족보 출제 경향', () => {
+  const out = [];
+  const box = document.getElementById('jokboIntro');
+  out.push({ name: '출제 경향 자리가 있다', ok: !!box });
+  out.push({ name: '족보가 아니면 안 보인다', ok: box.classList.contains('hidden') });
+  out.push({ name: '접혀 있다가 펼쳐진다', ok: box.tagName === 'DETAILS' && !box.open });
+  out.push({ name: '과목 전체 총평으로 가는 길도 있다', ok: !!document.getElementById('jokboOverview') });
   return out;
 });
 await browser.close();
