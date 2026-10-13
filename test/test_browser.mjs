@@ -2286,15 +2286,29 @@ await run('일괄 버리기 · 삭제 확인', async () => {
   await new Promise((r) => setTimeout(r, 250));
   [...document.querySelectorAll('.deck-card .deck-btn')].find((b) => b.textContent === '선택').click();
   await new Promise((r) => setTimeout(r, 200));
+  // 되돌릴 수 있으니 두 번 묻지 않는다 — 묻고 또 묻는 것보다 손이 덜 간다(2026-10-14)
   const del = () => [...document.querySelectorAll('.sel-btn2')].find((b) => /삭제/.test(b.textContent));
-  del().click();
-  await new Promise((r) => setTimeout(r, 150));
-  out.push({ name: '삭제는 한 번 더 묻는다', ok: /정말 삭제/.test(del().textContent), detail: del().textContent });
+  out.push({ name: '몇 장 지우는지 버튼에 적힌다', ok: /삭제 \(\d+장\)/.test(del().textContent),
+    detail: del().textContent });
   const n0 = (await (await import('/js/db.js')).allCards()).length;
   del().click();
-  await new Promise((r) => setTimeout(r, 450));
+  await new Promise((r) => setTimeout(r, 500));
   const n1 = (await (await import('/js/db.js')).allCards()).length;
-  out.push({ name: '두 번째 누르면 실제로 지워진다', ok: n1 === n0 - 1, detail: `${n0} → ${n1}` });
+  out.push({ name: '**한 번에 지워진다**(두 번 안 묻는다)', ok: n1 === n0 - 1, detail: `${n0} → ${n1}` });
+
+  // ★ 대신 되돌릴 수 있다
+  const t = document.getElementById('undoToast');
+  out.push({ name: '되돌릴 수 있다고 알려준다', ok: !!t, detail: (t || {}).textContent || '없음' });
+  const ub = t && t.querySelector('button');
+  out.push({ name: '되돌리기 버튼이 있다', ok: !!ub && /되돌리기/.test(ub.textContent) });
+  if (ub) {
+    ub.click();
+    await new Promise((r) => setTimeout(r, 600));
+    out.push({ name: '**누르면 되살아난다**',
+      ok: (await (await import('/js/db.js')).allCards()).length === n0,
+      detail: `${(await (await import('/js/db.js')).allCards()).length}장` });
+    out.push({ name: '되돌린 뒤 알림이 사라진다', ok: !document.getElementById('undoToast') });
+  }
   return out;
 });
 
@@ -3439,7 +3453,15 @@ await run('카드 창', async () => {
   out.push({ name: '네모를 쳐도 바로 저장하지 않는다',
     ok: !/readerCardMode\(false\);\s*\n\s*saveCards\(cards\)/.test(app) });
   out.push({ name: '＋추가를 눌러야 저장된다', ok: /await saveCards\(\[c\]\)/.test(app) });
-  out.push({ name: '같은 창에서 지울 수 있다', ok: /await deleteCard\(c\.id\);[\s\S]{0,120}refreshCardFloat/.test(app) });
+  out.push({ name: '같은 창에서 지울 수 있다',
+    ok: /deleteCardsUndoable\(c, refreshCardFloat\)/.test(app) });
+  // 지우기는 세 군데 다 **되돌릴 수 있어야** 한다 — 한 군데만 빠지면 거기서 잃는다
+  // 지우기는 세 군데 다 **되돌릴 수 있어야** 한다 — 한 군데만 빠지면 거기서 잃는다.
+  // 바닥에서 deleteCard를 부르는 건 그 되돌리기 함수 하나뿐이어야 한다.
+  const raw = (app.match(/\bawait deleteCard\(/g) || []).length;
+  out.push({ name: '지우기가 전부 되돌릴 수 있는 길로 간다',
+    ok: (app.match(/deleteCardsUndoable\(/g) || []).length >= 4 && raw === 1,
+    detail: `되돌리기 경유 ${(app.match(/deleteCardsUndoable\(/g) || []).length}곳 · 직접 삭제 ${raw}곳(함수 내부)` });
   out.push({ name: '카드 버튼은 네모 모드만 켠다(누르자마자 창이 뜨면 화면만 가린다)',
     ok: !/if \(on\) openCardManager\(\)/.test(app) });
   out.push({ name: '카드 보기·지우기는 더보기의 "카드 관리"가 맡는다',
@@ -4975,6 +4997,33 @@ await run('아이콘 통일', () => {
   return out;
 });
 
+
+// 빈 화면은 **어디를 보는 중이고 무엇을 하면 되는지**를 말해야 한다
+await run('빈 화면 안내', async () => {
+  const out = [];
+  const d = await import('/js/db.js');
+  await d.kvSet('exam_index_v3', []);
+  await d.kvSet('note_index_v2', []);
+  const says = {};
+  const bodyOf = () => document.querySelector('#quizBody:not(.hidden), #listBody:not(.hidden), #jokboBody:not(.hidden), #notesBody:not(.hidden)');
+  for (const tab of ['quizzes', 'exams', 'jokbo', 'notes']) {
+    document.querySelector(`.tabs [data-tab="${tab}"]`).click();
+    // 불러오는 동안은 "…중"이 떠 있다 — 끝날 때까지 기다렸다 읽는다
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 120));
+      const b = bodyOf();
+      if (b && !/중…/.test(b.textContent)) break;
+    }
+    const box = bodyOf();
+    says[tab] = box ? box.textContent.replace(/\s+/g, ' ').trim() : '';
+  }
+  for (const [tab, t] of Object.entries(says)) {
+    out.push({ name: `${tab}: 어디를 보는지 알려준다`, ok: /vault의/.test(t),
+      detail: t.slice(0, 50) });
+    out.push({ name: `${tab}: 다시 찾을 길이 있다`, ok: /다시 찾기/.test(t) });
+  }
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════

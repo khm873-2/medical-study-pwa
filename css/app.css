@@ -2518,3 +2518,17 @@ li.task.done .task-box { color: var(--accent); }
 #selPop .sel-btn.primary { flex-direction: row; gap: 6px; }
 #selPop .sel-btn.primary .sb-t { font-size: 13px; color: inherit; }
 
+
+/* 되돌릴 수 있는 알림 — 지우기는 묻지 말고 되돌리게 하는 쪽이 손이 덜 간다(2026-10-14) */
+.undo-toast {
+  position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); z-index: 99;
+  display: flex; align-items: center; gap: 12px;
+  background: rgba(0,0,0,.86); color: #fff; padding: 8px 10px 8px 18px;
+  border-radius: 20px; font-size: 14px; max-width: calc(100vw - 32px);
+}
+.undo-toast button {
+  border: 1px solid rgba(255,255,255,.45); background: none; color: #fff;
+  border-radius: 999px; padding: 5px 13px; min-height: 32px;
+  font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.undo-toast button:active { background: rgba(255,255,255,.18); }

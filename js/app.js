@@ -550,9 +550,13 @@ function renderList(index, sessions, kind = '모의고사') {
     // 목록은 캐시해두기 때문에, 수업 후 vault에 새 폴더가 생겨도 새로고침 전에는
     // 안 보인다. 빈 화면에서 그걸 알려줘야 한다(2026-10-10).
     body.innerHTML = '';
-    body.appendChild(muted(`${kind}를 찾지 못했습니다.`
-      + (kind === '퀴즈' ? ' vault의 05_퀴즈/{과목}/ 에 파일이 생기면 여기에 나옵니다.' : '')
-      + (kind === '족보' ? ` vault의 ${JOKBO_ROOT}/{과목}/NN_챕터.md 를 읽습니다.` : '')));
+    // 어디를 보는 중인지 **전부** 알려준다 — 모의고사만 한 줄로 끝나고 있었다(2026-10-14)
+    const WHERE = {
+      퀴즈: 'vault의 05_퀴즈/{과목}/ 에 파일이 생기면 여기에 나옵니다.',
+      족보: `vault의 ${JOKBO_ROOT}/{과목}/NN_챕터.md 를 읽습니다.`,
+      모의고사: 'vault의 06_모의고사/{과목}/ 에 파일이 생기면 여기에 나옵니다.',
+    };
+    body.appendChild(muted(`${kind}를 찾지 못했습니다. ${WHERE[kind] || ''}`.trim()));
     const b = document.createElement('button');
     b.className = 'btn full';
     b.style.marginTop = '10px';
@@ -2291,6 +2295,22 @@ function showTab(which, { remember = true, force = false } = {}) {
   if (which === 'notes') loadNotesTab(force);
   if (which === 'cards') loadCardsTab();
   if (which === 'today') loadTodayTab(force);
+  // 퀴즈·모의고사·족보는 **숨겼다 보여주기만** 하고 있었다. 그래서 시험을 열다 만 뒤
+  // 돌아오면 "시험을 불러오는 중…"이 그대로 남아 있었다(2026-10-14 점검).
+  // 캐시해둔 목록으로 다시 그린다 — 네트워크를 타지 않으니 공짜다.
+  if (['quizzes', 'exams', 'jokbo'].includes(which)) redrawList(which).catch(() => {});
+}
+
+const KIND_OF = { quizzes: '퀴즈', exams: '모의고사', jokbo: '족보' };
+
+/** 캐시된 목록으로 그 탭을 다시 그린다. 캐시가 없으면 vault에서 한 번 읽는다. */
+async function redrawList(which) {
+  if (!(await hasToken())) return;
+  const body = document.getElementById(TAB_BODY[which]);
+  const stale = !body.children.length || /중…/.test(body.textContent);
+  const index = await buildExamIndex(false);
+  if (!index.length && !stale) return;
+  renderList(index, await allSessions(), KIND_OF[which]);
 }
 
 /** 마지막으로 보던 탭으로 돌아간다 — 매번 퀴즈 탭부터 찾아 들어가지 않게. */
@@ -2543,7 +2563,18 @@ async function loadNotesTab(force) {
   try {
     const groups = await noteList(force);
     body.innerHTML = '';
-    if (!groups.length) { body.innerHTML = '<p class="muted">노트를 찾지 못했습니다.</p>'; return; }
+    if (!groups.length) {
+      // 빈 화면은 **어디를 보는 중이고 무엇을 하면 되는지**를 말해야 한다.
+      // 다른 탭(퀴즈·족보)은 이미 그렇게 하는데 노트만 한 줄로 끝났다(2026-10-14 점검).
+      body.innerHTML = '';
+      body.append(muted('노트를 찾지 못했습니다. vault의 02_Wiki/{과목}/ · 98_예습노트_보관/{과목}/ 를 읽습니다.'));
+      const again = document.createElement('button');
+      again.className = 'btn';
+      again.textContent = '↻ vault에서 다시 찾기';
+      again.onclick = () => loadNotesTab(true);
+      body.appendChild(again);
+      return;
+    }
 
     // 이번 주 강의를 맨 위에 — 폴더를 더듬어 들어가지 않고 바로 열게(2026-10-13 요청).
     // 노트 목록은 뿌리 3개 × 과목 28개라 "지금 배우는 것"을 찾는 데 손이 많이 간다.
@@ -3176,12 +3207,38 @@ const READ_POS_KEY = 'read_pos';
 let readPos = {};
 
 async function loadReadPos() { readPos = (await kvGet(READ_POS_KEY)) || {}; }
+
+// 읽던 자리는 **섹션을 넘길 때마다** 바뀐다. 그때마다 통째로 저장하면 한 학기 뒤에는
+// 48KB짜리 덩어리를 한 번 넘길 때마다 다시 쓰게 된다(2026-10-14 실측). 둘로 줄인다:
+//   ① 모아서 쓴다(1.2초 안에 또 넘기면 한 번만)
+//   ② 오래된 것은 버린다 — 300개면 "요즘 보던 것"으로 충분하다
+const READ_POS_MAX = 300;
+let readPosTimer = 0;
 function rememberReadPos() {
   // 창이 하나일 때만 기억한다(분할 중에는 어느 쪽이 "읽던 자리"인지 정할 수 없다)
   if (panes.length !== 1 || !reader) return;
   readPos[reader.note.path] = reader.secIdx;
+  readPos.__t = readPos.__t || {};
+  readPos.__t[reader.note.path] = Date.now();
+  clearTimeout(readPosTimer);
+  readPosTimer = setTimeout(flushReadPos, 1200);
+}
+function flushReadPos() {
+  clearTimeout(readPosTimer);
+  readPosTimer = 0;
+  const t = readPos.__t || {};
+  const paths = Object.keys(readPos).filter((k) => k !== '__t');
+  if (paths.length > READ_POS_MAX) {
+    // 최근에 본 것부터 남긴다. 시각을 모르는 옛 항목은 뒤로 민다.
+    const keep = paths.sort((a, b) => (t[b] || 0) - (t[a] || 0)).slice(0, READ_POS_MAX);
+    const next = { __t: {} };
+    for (const k of keep) { next[k] = readPos[k]; if (t[k]) next.__t[k] = t[k]; }
+    readPos = next;
+  }
   kvSet(READ_POS_KEY, readPos).catch(() => {});
 }
+// 앱을 떠날 때는 미뤄둔 것을 바로 쓴다 — 아이패드는 백그라운드 타이머를 멈춘다
+document.addEventListener('visibilitychange', () => { if (document.hidden && readPosTimer) flushReadPos(); });
 
 function openInPane(note, { pane = activePane, secIdx = 0, force = false } = {}) {
   while (panes.length <= pane) panes.push({ tabs: [], active: 0 });
@@ -3966,10 +4023,7 @@ function renderCfList() {
     del.title = '이 카드 지우기';
     del.onclick = async (e) => {
       e.stopPropagation();
-      await deleteCard(c.id);
-      backup.scheduleBackup();
-      toast('카드를 지웠습니다.');
-      refreshCardFloat();
+      await deleteCardsUndoable(c, refreshCardFloat);
     };
     row.append(main, del);
     list.appendChild(row);
@@ -4278,9 +4332,18 @@ async function loadAskLog() {
   askLog = (await kvGet('ask_log')) || [];
   updateAskDock();
 }
+const ASK_HTML_MAX = 12000;      // 답변 하나당 — 이보다 길면 뒤를 접는다
+
 async function rememberAsk(term, html, note) {
   const id = `${Date.now()}`;
-  askLog = [{ id, ts: Date.now(), term, html, note: note || '' },
+  // 답변 HTML을 통으로 들고 있으면 30개에 128KB가 되고, **물어볼 때마다** 그걸 통째로
+  // 다시 쓴다(2026-10-14 실측). 아주 긴 답은 뒤를 접어 담는다 — 되살릴 때 쓸 만큼은 남는다.
+  let keep = String(html || '');
+  if (keep.length > ASK_HTML_MAX) {
+    keep = keep.slice(0, ASK_HTML_MAX)
+      + '<p class="muted">… (너무 길어 뒤는 접었습니다 — ↻ 로 다시 물으면 전문이 나옵니다)</p>';
+  }
+  askLog = [{ id, ts: Date.now(), term, html: keep, note: note || '' },
     ...askLog.filter((x) => x.term !== term)].slice(0, ASK_LOG_MAX);
   await kvSet('ask_log', askLog);
   updateAskDock();
@@ -5235,16 +5298,13 @@ function renderSelBar() {
     if (picked.length) startDeck(picked, `고른 카드 ${picked.length}장`, { backTo: 'deck' });
   }, 'primary');
 
-  // 삭제는 되돌릴 수 없다 — 한 번 더 묻는다
-  btn(deckView.confirmDel ? `정말 삭제 (${ids.size}장)` : '삭제',
-    async () => {
-      if (!deckView.confirmDel) { deckView.confirmDel = true; renderSelBar(); return; }
-      const list2 = [...ids];
-      for (const id of list2) await deleteCard(id);
-      toast(`${list2.length}장을 삭제했습니다.`);
-      clearSel();
-      openDeck(true);
-    }, deckView.confirmDel ? 'danger on' : 'danger');
+  // 되돌릴 수 있으니 두 번 묻지 않는다 — 묻고 또 묻는 것보다 손이 덜 간다(2026-10-14)
+  btn(`삭제 (${ids.size}장)`, async () => {
+    const all = await allCards();
+    const picked2 = all.filter((c) => ids.has(c.id));
+    clearSel();
+    await deleteCardsUndoable(picked2, () => openDeck(true));
+  }, 'danger');
 
   btn('취소', () => { clearSel(); renderDeck(); });
 }
@@ -5334,7 +5394,7 @@ function deckCard(c, srs, idx = 0) {
     const del = document.createElement('button');
     del.className = 'deck-btn danger';
     del.textContent = '삭제';
-    del.onclick = async () => { await deleteCard(c.id); openDeck(true); };
+    del.onclick = () => deleteCardsUndoable(c, () => openDeck(true));
     acts.appendChild(del);
   }
 
@@ -6168,6 +6228,50 @@ function toast(text) {
   });
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 1800);
+}
+
+/**
+ * 되돌릴 수 있는 알림 — "지웠습니다 · 되돌리기".
+ *
+ * 카드 삭제가 세 군데에서 **되돌릴 길 없이** 일어나고 있었다(2026-10-14 점검).
+ * 묻고 또 묻는 것보다, 일단 하고 되돌릴 수 있게 하는 쪽이 손이 덜 간다 — 상용 앱이
+ * 다 그렇게 한다. 되돌리기를 누르지 않고 지나가면 그대로 지워진 채 남는다.
+ */
+function toastUndo(text, undo, { ms = 6000 } = {}) {
+  document.getElementById('undoToast')?.remove();
+  const el = document.createElement('div');
+  el.id = 'undoToast';
+  el.className = 'undo-toast';
+  const t = document.createElement('span');
+  t.textContent = text;
+  const b = document.createElement('button');
+  b.textContent = '되돌리기';
+  let done = false;
+  const close = () => { if (!done) { done = true; el.remove(); } };
+  b.onclick = async () => {
+    if (done) return;
+    done = true;
+    el.remove();
+    try { await undo(); toast('되돌렸습니다.'); }
+    catch (e) { toast(`되돌리지 못했습니다: ${e.message}`); }
+  };
+  el.append(t, b);
+  document.body.appendChild(el);
+  setTimeout(close, ms);
+}
+
+/** 카드를 지우되 되돌릴 수 있게. 지운 카드를 들고 있다가 그대로 되살린다. */
+async function deleteCardsUndoable(cards, after = () => {}) {
+  const list = (Array.isArray(cards) ? cards : [cards]).filter(Boolean);
+  if (!list.length) return;
+  for (const c of list) await deleteCard(c.id);
+  backup.scheduleBackup();
+  after();
+  toastUndo(`${list.length}장을 지웠습니다.`, async () => {
+    await saveCards(list);
+    backup.scheduleBackup();
+    after();
+  });
 }
 
 function alertBox(text) {
