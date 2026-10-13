@@ -25,9 +25,11 @@ export function escapeHtml(s) {
  * @param {Function} opts.onImage  (파일명) => void — 임베드 이미지 발견 시 호출(지연 로딩용).
  *                                 img 태그에 data-embed="파일명"을 달아두고 나중에 src를 채운다.
  */
+let taskSeq = 0;
 const escapeAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
 export function renderMarkdown(md, opts = {}) {
+  taskSeq = 0;              // 이 글 안에서 체크 상자가 나온 순서(원본과 맞춰 센다)
   const lines = String(md).replace(/\r\n/g, '\n').split('\n');
   const out = [];
   let i = 0;
@@ -106,9 +108,13 @@ export function renderMarkdown(md, opts = {}) {
         const m = t.match(/^\[([ xX])\]\s*(.*)$/);
         if (!m) return `<li>${inline(t)}</li>`;
         const on = m[1] !== ' ';
+        // ⚠️ 글만으로는 어느 줄인지 못 찾는다 — "채택 (안 1)"이 한 노트에 13번 나온다
+        //    (2026-10-14: "같은 줄이 13개라 어느 것인지 알 수 없습니다"). **몇 번째 상자인지**를
+        //    같이 적어둔다. 원본에서도 같은 순서로 세면 정확히 그 줄을 집는다.
+        const idx = taskSeq++;
         return `<li class="task${on ? ' done' : ''}">`
           + `<button class="task-box" role="checkbox" aria-checked="${on}" `
-          + `data-text="${escapeAttr(m[2])}">${on ? '☑' : '☐'}</button>`
+          + `data-idx="${idx}" data-text="${escapeAttr(m[2])}">${on ? '☑' : '☐'}</button>`
           + `<span class="task-t">${inline(m[2])}</span></li>`;
       }).join('') + `</${tag}>`);
       continue;

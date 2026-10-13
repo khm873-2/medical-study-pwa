@@ -40,9 +40,12 @@ export class PenLayer {
     this.onCapture = onCapture || (() => {});
     this.onCard = onCard || (() => {});
 
-    this.erasing = false;        // 지우개 버튼을 켠 상태
-    this.capturing = false;      // 캡처 버튼을 켠 상태 — 네모 친 영역을 이미지로 뜬다
-    this.carding = false;        // 카드 버튼을 켠 상태 — 네모 안 강조를 가려 플래시카드로
+    // 지금 펜이 할 일 — 하나만 켜진다(setTool 참고)
+    this.tool = 'select';
+    this.erasing = false;
+    this.capturing = false;
+    this.carding = false;
+    this.writing = false;
     this.color = '#2563eb';
     this.width = 2.6;
     this.strokes = [];
@@ -329,7 +332,7 @@ export class PenLayer {
     this._liveRaf = requestAnimationFrame(() => {
       this._liveRaf = 0;
       if (!this._cur && !this._pending) return;
-      if (this.erasing) return;
+      if (this.erasing || this.writing) return;      // 필기는 궤적 그대로가 미리보기다
       // 캡처·카드도 **어디까지 잡히는지** 보여야 한다. 다만 가져가는 것이 글이 아니라
       // 네모난 영역이라, 줄 단위 하이라이트가 아니라 자르는 틀을 그린다(2026-10-13 요청).
       this._refreshPreview();
@@ -377,6 +380,15 @@ export class PenLayer {
     if (this.carding) {
       this.redraw();
       if (Math.max(w, h) >= BOX_MIN) this.onCard(box);
+      return;
+    }
+
+    // 필기 모드 — 그은 것을 **무조건** 손글씨로 남긴다. 글을 잡지도, 팝업을 띄우지도 않는다.
+    // 전에는 "작게 그으면 필기, 크게 그으면 선택"이라 메모를 쓰다 말고 팝업이 떴다.
+    if (this.writing) {
+      pend.forEach((st) => { if (st.pts.length > 1) this.strokes.push(st); });
+      this.onChange();
+      this.redraw();
       return;
     }
 
@@ -618,14 +630,39 @@ export class PenLayer {
   }
 
   /** 모드는 하나만 켜진다 — 지우개·캡처·카드가 겹치면 뭐가 일어날지 알 수 없다. */
-  _setMode(which) {
-    this.erasing = which === 'erase';
-    this.capturing = which === 'capture';
-    this.carding = which === 'card';
+  /**
+   * 펜으로 무엇을 할지 — **하나만** 켜진다.
+   *
+   *   select  긁으면 글이 잡힌다(기본)
+   *   write   그리면 필기로 남는다
+   *   erase   지나가면 지워진다
+   *   card    네모 치면 그 범위로 카드
+   *   shot    네모 치면 그림으로 복사
+   *
+   * 전에는 erasing·capturing·carding 세 깃발을 따로 두고, 켜는 함수마다 나머지를
+   * 껐다. 그래서 `setErasing(false)` 한 번에 **카드 모드가 조용히 꺼졌고**, 버튼은
+   * 켜진 채라 "카드 만들기를 켰는데 선택 팝업이 뜬다"가 됐다(2026-10-14 지적).
+   * 이제 상태가 하나다 — 끌 때 다른 게 같이 꺼질 길이 없다.
+   */
+  setTool(tool) {
+    this.tool = ['select', 'write', 'erase', 'card', 'shot'].includes(tool) ? tool : 'select';
+    this.erasing = this.tool === 'erase';
+    this.capturing = this.tool === 'shot';
+    this.carding = this.tool === 'card';
+    this.writing = this.tool === 'write';
+    // 모드를 바꾸면 그리다 만 것은 버린다 — 전 모드의 획이 새 모드로 확정되면 안 된다
+    clearTimeout(this._settle);
+    this._cur = null;
+    this._pending = null;
+    this._previewBox = null;
+    this._previewKind = null;
+    this._coveredLines = null;
+    this.redraw();
   }
-  setErasing(on) { this._setMode(on ? 'erase' : null); }
-  setCapturing(on) { this._setMode(on ? 'capture' : null); }
-  setCarding(on) { this._setMode(on ? 'card' : null); }
+  _setMode(which) { this.setTool(which === 'capture' ? 'shot' : (which || 'select')); }
+  setErasing(on) { this.setTool(on ? 'erase' : 'select'); }
+  setCapturing(on) { this.setTool(on ? 'shot' : 'select'); }
+  setCarding(on) { this.setTool(on ? 'card' : 'select'); }
   clear() { this.strokes = []; this.redraw(); this.onChange(); }
   undo() { this.strokes.pop(); this.redraw(); this.onChange(); }
   get isEmpty() { return this.strokes.length === 0; }

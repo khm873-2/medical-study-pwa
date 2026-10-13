@@ -71,12 +71,17 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
   transition: background .14s, color .14s, transform .12s var(--ease); }
 .icon-btn:active { background: var(--badge-bg); transform: scale(.92); }
 .icon-btn.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.card { background: var(--card); border-radius: 14px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.06); border: 1px solid var(--border); }
-.badge-pill { background: var(--badge-bg); border-radius: 20px; padding: 5px 12px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.card { background: var(--card); padding: 16px;
+  border-radius: var(--r-3); box-shadow: var(--sh-2);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.badge-pill { background: var(--badge-bg); border-radius: 20px; padding: 5px 12px; font-size: 13px; font-weight: 600; white-space: nowrap;
+  box-shadow: var(--sh-1); font-variant-numeric: tabular-nums; }
 .btn {
   border: 1px solid var(--border); background: var(--card); color: var(--text);
-  border-radius: 10px; padding: 13px 16px; font-size: 15px; font-weight: 600;
+  padding: 13px 16px; font-size: 15px; font-weight: 600;
   cursor: pointer; font-family: inherit; min-height: 46px;
+  border-radius: var(--r-2); box-shadow: var(--sh-1);
+  transition: transform .12s var(--ease), box-shadow .16s var(--ease), background .14s;
 }
 .btn:active { background: var(--badge-bg); }
 .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -178,14 +183,31 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 .wronglist { text-align: left; margin-top: 18px; font-size: 14px; max-height: 40vh; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 12px; }
 .wronglist div { padding: 8px 0; border-bottom: 1px dashed var(--border); line-height: 1.5; }
 
-/* ---- 동기화 상태 ---- */
+/* ---- 동기화 상태 ----
+   화면 아래를 가로로 통째로 먹고 있었다 — 주황색 경고 띠가 공부하는 내내 떠 있을
+   이유가 없다(2026-10-14 지적). **오른쪽 아래 작은 알약**으로 줄인다.
+   진짜 막힌 게 있을 때(.stuck)만 눈에 띄는 색을 쓴다. */
 #syncBar {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
-  padding: 10px 16px calc(env(safe-area-inset-bottom) + 10px);
-  background: var(--warn-bg); color: var(--warn); border-top: 1px solid var(--warn);
-  font-size: 13px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  position: fixed; right: 12px; z-index: 50;
+  bottom: calc(env(safe-area-inset-bottom) + 72px);
+  max-width: min(320px, 70vw);
+  padding: 7px 8px 7px 13px; border-radius: 999px;
+  background: var(--card); color: var(--sub); border: 1px solid var(--border);
+  box-shadow: var(--sh-2);
+  font-size: 12px; display: flex; align-items: center; gap: 8px;
+  cursor: pointer;
 }
-#syncBar button { border: 1px solid currentColor; background: none; color: inherit; border-radius: 8px; padding: 7px 12px; font-size: 13px; font-weight: 600; font-family: inherit; }
+#syncBar #syncText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#syncBar button {
+  flex: 0 0 auto; border: 1px solid var(--border); background: var(--bg); color: var(--sub);
+  border-radius: 999px; padding: 4px 10px; min-height: 28px;
+  font-size: 11.5px; font-weight: 600; font-family: inherit; cursor: pointer;
+}
+/* 네 번 넘게 실패한 게 있을 때만 — 그때는 사람이 봐야 한다 */
+#syncBar.stuck { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
+#syncBar.stuck button { border-color: currentColor; color: inherit; background: none; }
+/* 읽기 화면에서는 AI 답변 단추와 겹치지 않게 한 칸 더 올린다 */
+body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-bottom) + 120px); }
 
 /* ---- 가로모드(누워서 볼 때 포함) ---- */
 @media (orientation: landscape) and (min-width: 900px) {
@@ -307,7 +329,7 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 .tab.active { background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 
 /* ---- 읽기 모드 ---- */
-#readCard { position: relative; }
+.read-card { position: relative; }   /* id가 창을 따라 옮겨다니므로 class로 잡는다 */
 .read-heading { font-size: 17px; font-weight: 700; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 .read-body {
   max-height: none; padding: 0;
@@ -324,7 +346,10 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
    지적이 있었고, 적당한 글줄 길이는 사람마다 다르다(2026-10-12). */
 @media (orientation: landscape) {
   .read-body { max-width: var(--read-measure); margin: 0 auto; }
-  #readCard { padding: 26px 30px; }
+  /* ⚠️ **class로 잡는다.** `#readCard`로 잡으면 그 id가 활성 창을 따라 옮겨다니므로
+     (moveReaderIds), 다른 창을 누를 때마다 **양쪽 여백이 서로 바뀌며 글이 출렁였다**
+     (2026-10-14: "다른 split을 클릭할 때 갑자기 크기가 변하면서 이질감"). */
+  .read-card { padding: 26px 30px; }
 }
 
 /* ---- 플래시카드 ---- */
@@ -1283,19 +1308,7 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
    레이아웃은 건드리지 않고 **표면과 반응**만 다듬는다.
    한 겹 그림자·평평한 배지·넓기만 한 선지 간격이 화면을 딱딱하게 만들고 있었다. */
 
-/* ── 카드 ── */
-.card {
-  border-radius: var(--r-3);
-  box-shadow: var(--sh-2);
-  border-color: color-mix(in srgb, var(--border) 70%, transparent);
-}
-
 /* ── 버튼: 눌리는 느낌 ── */
-.btn {
-  border-radius: var(--r-2);
-  box-shadow: var(--sh-1);
-  transition: transform .12s var(--ease), box-shadow .16s var(--ease), background .14s;
-}
 .btn:active { transform: translateY(1px) scale(.992); box-shadow: none; }
 .btn.primary {
   background: linear-gradient(180deg,
@@ -1365,11 +1378,7 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
   background: color-mix(in srgb, var(--accent) 5%, var(--badge-bg));
 }
 
-/* ── 알약·배너 ── */
-.badge-pill {
-  box-shadow: var(--sh-1);
-  font-variant-numeric: tabular-nums;
-}
+/* ── 배너 ── */
 .warn-box { border-radius: var(--r-2); border-left-width: 3px; }
 
 /* ── 사이드 패널 ── */
@@ -2475,3 +2484,12 @@ li.task.done .task-box { color: var(--accent); }
 .cap-prev img { display: block; max-width: 100%; border-radius: var(--r-2); border: 1px solid var(--border); }
 .cap-prev p { margin: 10px 0 8px; font-size: 12.5px; }
 .cap-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* 버전 칩 — "내가 뭘 보고 있나"를 알려줄 뿐, 주 정보가 아니다(2026-10-14) */
+.ver-chip {
+  flex: 0 0 auto; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--sub);
+  font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  cursor: pointer; min-height: 24px;
+}
+.ver-chip:active { background: var(--badge-bg); }

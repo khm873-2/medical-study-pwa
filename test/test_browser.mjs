@@ -3322,18 +3322,46 @@ await run('분할 읽기', async () => {
     out.push({ name: '전체 화면이면 다시 올라간다',
       ok: document.getElementById('readBack').getBoundingClientRect().top < backTop });
 
-    // 펜 — 펜 ↔ 지우개 둘만 돈다. "끔"을 뒀더니 두 번 눌러 꺼진 줄 모르고
-    // **선택이 안 되는 것처럼** 보였다(2026-10-13).
+    // ★ 고르기와 필기를 **버튼으로 나눴다**(2026-10-14). 전에는 한 버튼이 둘을 겸해서
+    //   카드 만들기를 켜놔도 긁으면 선택 팝업이 떴다.
+    const sel = document.getElementById('readSelect');
     const pen = document.getElementById('readPen');
-    out.push({ name: '처음엔 펜(아이콘이 펜)', ok: !pen.classList.contains('erasing') });
+    out.push({ name: '**고르기와 필기가 다른 버튼이다**', ok: !!sel && !!pen && sel !== pen });
+    out.push({ name: '처음엔 고르기(긁으면 글이 잡힌다)', ok: sel.classList.contains('active') });
+
     pen.click();
-    out.push({ name: '누르면 지우개로 — 아이콘이 지우개로 바뀐다', ok: pen.classList.contains('erasing') });
+    out.push({ name: '필기를 누르면 고르기가 꺼진다',
+      ok: pen.classList.contains('active') && !sel.classList.contains('active') });
+    out.push({ name: '필기 중에는 지우개가 아니다', ok: !pen.classList.contains('erasing') });
+    pen.click();
+    out.push({ name: '필기를 다시 누르면 지우개', ok: pen.classList.contains('erasing') });
     out.push({ name: '지우개 아이콘이 실제로 보인다',
       ok: getComputedStyle(pen.querySelector('.erase-ic')).display !== 'none'
         && getComputedStyle(pen.querySelector('.pen-ic')).display === 'none' });
-    pen.click();
-    out.push({ name: '한 번 더 누르면 펜으로 돌아온다(끄는 상태는 없다)',
-      ok: !pen.classList.contains('erasing') });
+
+    // ★ 카드 만들기를 켜면 **고르기도 필기도 꺼져야** 한다 — 이게 안 돼서 팝업이 떴다
+    document.getElementById('readMakeCard').click();
+    out.push({ name: '**카드 만들기를 켜면 다른 모드가 전부 꺼진다**',
+      ok: document.getElementById('readMakeCard').classList.contains('active')
+        && !sel.classList.contains('active') && !pen.classList.contains('active'),
+      detail: [...document.querySelectorAll('#readTools .active')].map((b) => b.id).join(',') });
+    out.push({ name: '펜도 실제로 카드 모드다',
+      ok: !!(window.__penForTest && window.__penForTest.tool === 'card'),
+      detail: window.__penForTest ? window.__penForTest.tool : '펜 없음' });
+    out.push({ name: '그때는 글을 잡지 않는다(팝업이 안 뜬다)',
+      ok: !!(window.__penForTest && !window.__penForTest.writing) });
+
+    document.getElementById('readShot').click();
+    out.push({ name: '영역 복사로 바꾸면 카드가 꺼진다',
+      ok: !document.getElementById('readMakeCard').classList.contains('active')
+        && !!(window.__penForTest && window.__penForTest.tool === 'shot') });
+    out.push({ name: '한 번에 하나만 켜진다',
+      ok: [...document.querySelectorAll('#readTools .icon-btn.active')].length === 1,
+      detail: [...document.querySelectorAll('#readTools .icon-btn.active')].map((b) => b.id).join(',') });
+
+    sel.click();        // 다음 검사들이 긁을 수 있게 되돌린다
+    out.push({ name: '고르기로 돌아온다',
+      ok: sel.classList.contains('active') && window.__penForTest.tool === 'select' });
     out.push({ name: '펜을 숨기는 상태가 아예 없다(선택이 죽지 않게)',
       ok: !document.querySelector('.penlayer.pen-off') });
     return out;
@@ -4618,12 +4646,17 @@ await run('고른 것이 vault로', async () => {
   const a = await import('/js/auth.js');
   await a.setToken('fake'); await a.setRepo('me/v');
   const RAW = '# 암기법 후보\n\n## 후보\n\n- [ ] 채택 (안 1)\n- [ ] 채택 (안 2)\n';
-  let put = null;
+  // 두 가지가 올라간다: ① 원본의 [x] 한 글자 ② 고른 덩어리를 통째로 담은 새 파일
+  let put = null, picked = null;
   const realFetch = window.fetch;
   window.fetch = async (u, i) => {
     const url = String(u);
     if (!url.includes('api.github.com')) return realFetch(u, i);
-    if (i && i.method === 'PUT') { put = JSON.parse(i.body); return { ok: true, status: 200, json: async () => ({}) }; }
+    if (i && i.method === 'PUT') {
+      const b = JSON.parse(i.body);
+      if (/채택\.md$/.test(decodeURIComponent(url))) picked = b; else put = b;
+      return { ok: true, status: 200, json: async () => ({ content: { path: 'x.md' } }) };
+    }
     return { ok: true, status: 200, text: async () => RAW, json: async () => ({ sha: 'abc' }) };
   };
   // 읽기 화면에 그 노트를 실제로 연다(앱의 길을 그대로 탄다)
@@ -4663,7 +4696,136 @@ await run('고른 것이 vault로', async () => {
   out.push({ name: '화면에서도 바로 켜진다',
     ok: boxes[0].getAttribute('aria-checked') === 'true' });
 
+  // ★ 체크 한 글자만 바뀌면 vault 쪽이 "뭘 왜 골랐는지"를 되짚어야 한다 —
+  //   고른 덩어리를 통째로 따로 남긴다(2026-10-14 요청)
+  await new Promise((r) => setTimeout(r, 400));
+  out.push({ name: '**고른 내용을 통째로 따로 남긴다**', ok: !!picked });
+  if (picked) {
+    const rec = decodeURIComponent(escape(atob(picked.content)));
+    out.push({ name: '무엇을 골랐는지 적힌다', ok: /고른항목: "채택 \(안 1\)"/.test(rec),
+      detail: (rec.match(/고른항목:.*/) || [''])[0] });
+    out.push({ name: '**고른 덩어리 전문이 들어간다**(클로드가 그대로 가공한다)',
+      ok: /채택 \(안 1\)/.test(rec.split('---').slice(2).join('---')) });
+    out.push({ name: '원본 노트로 되돌아가는 링크가 있다', ok: /원본노트: "\[\[/.test(rec) });
+    out.push({ name: '어디로 갈지 적어 둔다(위키)', ok: /^ {2}위키: 대기/m.test(rec) });
+    out.push({ name: '갈래 태그가 붙는다', ok: /달모\/채택/.test(rec) });
+  }
+
   window.fetch = realFetch;
+  return out;
+});
+
+// ══════════ 저장 대기 띠 · 버전 칩 (2026-10-14) ══════════
+// "맨 밑에는 왜 주황색으로 해놓은 거임? 왜 계속 화면을 가리고 있는 거임 저만큼이나?"
+await run('저장 대기 띠', async () => {
+  const out = [];
+  const d = await import('/js/db.js');
+  for (const it of await d.listOutbox()) await d.dequeue(it.id);
+  const bar = document.getElementById('syncBar');
+  await d.enqueue({ path: 'x/대기.md', content: '내용', message: 'm' });
+  document.getElementById('syncNowBtn').click();     // refreshSyncBar를 거치게
+  await new Promise((r) => setTimeout(r, 400));
+  bar.classList.remove('hidden');
+
+  const r = bar.getBoundingClientRect();
+  out.push({ name: '**화면을 가로로 안 먹는다**(구석 알약이다)',
+    ok: r.width <= window.innerWidth * 0.75,
+    detail: `${Math.round(r.width)}px / 화면 ${window.innerWidth}px` });
+  out.push({ name: '오른쪽 구석에 있다', ok: r.right >= window.innerWidth - 40 });
+  out.push({ name: '키가 작다(한 줄)', ok: r.height <= 56, detail: `${Math.round(r.height)}px` });
+  out.push({ name: '**평소엔 경고색이 아니다**(그냥 알림일 뿐)',
+    ok: !bar.classList.contains('stuck'),
+    detail: getComputedStyle(bar).backgroundColor });
+
+  // 여러 번 실패한 게 있을 때만 눈에 띈다
+  const items = await d.listOutbox();
+  for (let i = 0; i < 5; i++) await d.bumpTries(items[0].id, '저장 실패 (403)');
+  document.getElementById('syncNowBtn').click();
+  await new Promise((r2) => setTimeout(r2, 500));
+  out.push({ name: '**막힌 게 있을 때만 경고색**', ok: bar.classList.contains('stuck') });
+  out.push({ name: '몇 건이 막혔는지 말해준다',
+    ok: /막혀 있습니다/.test(document.getElementById('syncText').textContent),
+    detail: document.getElementById('syncText').textContent });
+
+  // 눌러서 속사정을 본다
+  document.getElementById('syncWhyBtn').click();
+  await new Promise((r2) => setTimeout(r2, 200));
+  const sheet = document.getElementById('outboxSheet');
+  out.push({ name: '눌러서 무엇이 남았는지 볼 수 있다', ok: !sheet.classList.contains('hidden') });
+  out.push({ name: '왜 막혔는지 적혀 있다', ok: /403|실패|권한/.test(sheet.textContent),
+    detail: (sheet.textContent.match(/저장 실패[^·]*/) || [''])[0].slice(0, 40) });
+  out.push({ name: '내용을 파일로 받아둘 길이 있다', ok: /내려받기/.test(sheet.textContent) });
+  out.push({ name: '버릴 수도 있다(영영 안 올라가는 것)', ok: /버리기/.test(sheet.textContent) });
+  document.getElementById('outboxClose').click();
+
+  for (const it of await d.listOutbox()) await d.dequeue(it.id);
+  document.getElementById('syncNowBtn').click();
+  await new Promise((r2) => setTimeout(r2, 300));
+  out.push({ name: '비면 사라진다', ok: bar.classList.contains('hidden') });
+  return out;
+});
+
+await run('버전 칩', async () => {
+  const out = [];
+  // 목록 화면에서만 보인다 — 앞 검사가 다른 화면을 띄워놨을 수 있다
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('listScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'listScreen';
+  await new Promise((r) => setTimeout(r, 60));
+  const chip = document.getElementById('verChip');
+  out.push({ name: '머리줄 구석에 지금 버전이 있다', ok: !!chip });
+  await new Promise((r) => setTimeout(r, 300));
+  out.push({ name: '버전이 적힌다', ok: /^v\d+|서비스워커|\?/.test(chip.textContent),
+    detail: chip.textContent });
+  const r = chip.getBoundingClientRect();
+  out.push({ name: '**작다**(주 정보가 아니다)', ok: r.height <= 28 && r.width <= 110,
+    detail: `${Math.round(r.width)}×${Math.round(r.height)}` });
+  out.push({ name: '제목보다 오른쪽에 있다',
+    ok: r.left > document.querySelector('#listScreen h1').getBoundingClientRect().right });
+  out.push({ name: '언제 배포된 건지도 알려준다(길게 눌러서)', ok: /앱 /.test(chip.title),
+    detail: chip.title });
+  return out;
+});
+
+// ══════════ 창을 바꿔도 크기가 안 흔들린다 (2026-10-14) ══════════
+// "다른 split을 클릭할 때 옆 split 및 선택된 split이 갑자기 크기가 변하면서 이질감을 줌"
+// → `#readCard` 같은 **id로 잡은 스타일**이 활성 창을 따라 옮겨다녀서 양쪽 여백이 뒤바뀌었다.
+await run('창 전환이 흔들리지 않는다', async () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  document.getElementById('readScreen').classList.add('toc-off');
+  document.querySelectorAll('.sheet, .ask-float, #docDrawer, #docScrim').forEach((x) => x.classList.add('hidden'));
+  await new Promise((r) => setTimeout(r, 120));
+  const panes = [...document.querySelectorAll('#readPanes .read-pane')];
+  out.push({ name: '창이 둘이다', ok: panes.length === 2, detail: `${panes.length}개` });
+  if (panes.length < 2) return out;
+  out.push({ name: '화면에 실제로 떠 있다',
+    ok: panes.every((p) => p.getBoundingClientRect().width > 50),
+    detail: panes.map((p) => Math.round(p.getBoundingClientRect().width)).join(' / ') });
+
+  const card = (p) => p.querySelector('.read-card');
+  const box = (p) => { const r = card(p).getBoundingClientRect(); return `${Math.round(r.width)}×${Math.round(r.height)}`; };
+  const pad = (p) => getComputedStyle(card(p)).padding;
+
+  const before = panes.map(box);
+  const padBefore = panes.map(pad);
+  out.push({ name: '두 창의 안쪽 여백이 같다(활성 여부와 무관)',
+    ok: padBefore[0] === padBefore[1], detail: padBefore.join(' / ') });
+
+  // 비활성 창을 눌러 활성을 옮긴다
+  const other = panes.find((p) => !p.classList.contains('active')) || panes[1];
+  other.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+  await new Promise((r) => setTimeout(r, 250));
+
+  const after = panes.map(box);
+  const padAfter = panes.map(pad);
+  out.push({ name: '**눌러도 두 창 크기가 그대로다**', ok: after.join('|') === before.join('|'),
+    detail: `${before.join(' / ')} → ${after.join(' / ')}` });
+  out.push({ name: '여백도 그대로다', ok: padAfter.join('|') === padBefore.join('|'),
+    detail: `${padBefore.join(' / ')} → ${padAfter.join(' / ')}` });
+  out.push({ name: '활성 표시만 옮겨간다', ok: other.classList.contains('active') });
   return out;
 });
 await browser.close();

@@ -7,7 +7,10 @@
 // 또한 api.github.com 요청은 절대 가로채지 않는다 — 인증 헤더가 붙은 요청을 캐시하면
 // 토큰이 섞인 응답이 남을 수 있어서다.
 
-const VERSION = 'v54';
+const VERSION = 'v55';
+// 배포 시각 — 앱 화면에 "언제 것인지"를 보여주는 데 쓴다(2026-10-14).
+// deploy.sh가 VERSION과 함께 갈아 끼운다.
+const BUILT = '2026-10-14 00:00';
 const SHELL = `shell-${VERSION}`;
 
 const SHELL_FILES = [
@@ -78,7 +81,7 @@ self.addEventListener('fetch', (e) => {
 self.addEventListener('message', (e) => {
   if (e.data === 'SKIP_WAITING') self.skipWaiting();
   if (e.data === 'VERSION') {
-    const reply = { type: 'VERSION', version: VERSION };
+    const reply = { type: 'VERSION', version: VERSION, built: BUILT };
     if (e.ports && e.ports[0]) e.ports[0].postMessage(reply);
     else if (e.source) e.source.postMessage(reply);
   }

@@ -150,9 +150,9 @@ async function openSetup() {
   refreshBackupInfo();
   renderKeyList();
   renderSpeed();
-  runningVersion().then((v) => {
+  runningBuild().then(({ version, built }) => {
     const el = document.getElementById('appVersion');
-    if (el) el.textContent = `앱 버전 ${v}`;
+    if (el) el.textContent = `앱 버전 ${version}${built ? ` · ${built} 배포` : ''}`;
   });
   document.getElementById('backupMsg').textContent = '';
   if (await hasToken()) renderCacheList();
@@ -1034,12 +1034,7 @@ function handlePenTap(el) {
 
 document.getElementById('toolUndo').onclick = () => pen && pen.undo();
 document.getElementById('toolClear').onclick = () => pen && pen.clear();
-document.getElementById('toolErase').onclick = () => {
-  if (!pen) return;
-  const on = !pen.erasing;
-  pen.setErasing(on);
-  document.getElementById('toolErase').classList.toggle('active', on);
-};
+document.getElementById('toolErase').onclick = () => setTool(penTool === 'erase' ? 'write' : 'erase');
 document.getElementById('toolWiki').onclick = () => { closeOverview(); toggleWiki(); };
 // AI 해설도 위키처럼 탭으로 — 질문할 때마다 자동으로 열리기만 하던 걸 직접 열고 닫게 한다
 document.getElementById('toolAi').onclick = () => {
@@ -1768,14 +1763,7 @@ function showCapturePreview(blob) {
 }
 let lastCapture = null;
 
-document.getElementById('toolCapture').onclick = () => {
-  if (!pen) return;
-  const on = !pen.capturing;
-  pen.setCapturing(on);
-  document.getElementById('toolCapture').classList.toggle('active', on);
-  document.getElementById('toolErase').classList.remove('active');
-  capToast(on ? '펜으로 네모를 그리면 복사됩니다' : '캡처 모드 끔');
-};
+document.getElementById('toolCapture').onclick = () => setTool(penTool === 'shot' ? 'select' : 'shot');
 
 // ---------- 문제 뜯어보기 ----------
 // 지문을 단서별로 끊어 "시험에서 이게 뭘 뜻하는지"를 붙인다.
@@ -2692,10 +2680,20 @@ function renderToc() {
 }
 
 /** 넓은 화면에선 본문이 제 상자 안에서 스크롤된다 — 페이지가 아니라 그 상자를 올린다. */
+/**
+ * 지금 보는 창을 맨 위로.
+ *
+ * ⚠️ `querySelector('.read-main')`은 **항상 첫 창**(왼쪽)을 집는다. 그래서 오른쪽에
+ *    암기법을 띄워두고 목차를 누르면 **왼쪽 위키가 맨 위로 튀었다**(2026-10-14 지적).
+ *    활성 창만 올린다 — 다른 창은 보던 자리를 지킨다.
+ */
 function scrollReadTop() {
-  const main = document.querySelector('#readScreen .read-main');
+  const pane = document.querySelector(`#readPanes .read-pane[data-pane="${activePane}"]`)
+    || document.querySelector('#readScreen .read-pane');
+  const main = pane ? pane.querySelector('.read-main') : null;
   if (main) main.scrollTop = 0;
-  window.scrollTo(0, 0);
+  // 페이지 자체는 읽기 화면에서 스크롤되지 않는다 — 다른 화면에서만 올린다
+  if (document.body.dataset.screen !== 'readScreen') window.scrollTo(0, 0);
 }
 
 /**
@@ -3472,41 +3470,20 @@ function ensureReaderPen() {
     onCapture: (box) => captureFromPen(readerPen, box),
   });
   window.__penForTest = readerPen;     // 미리보기 동작을 테스트가 들여다본다
-  setPenMode(penMode);        // 창을 바꿔 펜을 새로 만들어도 모드는 유지된다
+  readerPen.setTool(penTool);   // 창을 바꿔 펜을 새로 만들어도 하던 모드가 이어진다
 }
 
 // ---------- 읽다가 바로 카드 만들기 ----------
 // "이 부분 외웠나?" 싶을 때 펜으로 네모 → 그 안의 **굵게·기울임·하이라이트**가
 // 빈칸이 되고 나머지 문장이 문제가 된다. 되새김질용(2026-10-10 요청).
-function readerCardMode(on) {
-  if (!readerPen) return;
-  readerPen.setCarding(on);
-  document.getElementById('readMakeCard').classList.toggle('active', on);
-  capBtns().forEach((b) => b.classList.remove('active'));
-  document.getElementById('readPen').classList.remove('active');
-  capToast(on ? '펜으로 네모를 치면 그 범위로 카드를 만듭니다' : '카드 만들기 끔');
-}
+function readerCardMode(on) { setTool(on ? 'card' : 'select'); }
 
 // 카드 버튼 = **네모 치기 모드만** 켠다(2026-10-13). 팝업은 네모를 쳐서 후보가
 // 생겼을 때만 뜬다 — 누르자마자 창이 뜨면 화면만 가린다.
 // 카드를 보고 지우는 건 "카드" 메뉴(readCards)가 따로 맡는다.
-document.getElementById('readMakeCard').onclick = () => {
-  if (!readerPen) return;
-  readerCardMode(!readerPen.carding);
-};
-
-// 영역 복사 버튼이 둘이다 — 도구막대에 나와 있는 것(readShot)과, 옛 코드가 부르는
-// 숨은 것(readCapture). 둘 다 같은 상태를 보여야 "켜졌나?"가 헷갈리지 않는다.
-const capBtns = () => ['readShot', 'readCapture'].map((id) => document.getElementById(id)).filter(Boolean);
-document.getElementById('readCapture').onclick = () => {
-  if (!readerPen) return;
-  const on = !readerPen.capturing;
-  readerPen.setCapturing(on);
-  capBtns().forEach((b) => b.classList.toggle('active', on));
-  document.getElementById('readMakeCard').classList.remove('active');
-  capToast(on ? '펜으로 네모를 치면 이미지로 복사됩니다' : '캡처 모드 끔');
-};
-document.getElementById('readShot').onclick = () => document.getElementById('readCapture').click();
+document.getElementById('readMakeCard').onclick = () => setTool(penTool === 'card' ? 'select' : 'card');
+document.getElementById('readCapture').onclick = () => setTool(penTool === 'shot' ? 'select' : 'shot');
+document.getElementById('readShot').onclick = () => setTool(penTool === 'shot' ? 'select' : 'shot');
 
 function makeCardsFromBox(box) {
   if (!reader) return;
@@ -3747,39 +3724,110 @@ async function toggleTask(btn) {
   if (!(doc && doc.path)) { toast('어느 노트인지 알 수 없습니다.'); return; }
   const want = btn.getAttribute('aria-checked') !== 'true';
   const label = btn.dataset.text || '';
+  const nth = Number(btn.dataset.idx);        // 이 글에서 몇 번째 상자인가
   btn.disabled = true;
   try {
     const raw = await getTextIfExists(doc.path);
     if (raw == null) throw new Error('원본을 찾지 못했습니다.');
     const lines = raw.split('\n');
-    // 같은 글이 여러 줄일 수 있다 — 지금 상태가 맞는 줄만 고른다
-    const norm = (t) => t.replace(/\s+/g, ' ').trim().normalize('NFC');
-    const hits = [];
-    lines.forEach((l, i) => {
-      const m = l.match(/^(\s*[-*+]\s*)\[([ xX])\]\s*(.*)$/);
-      if (m && norm(m[3]) === norm(label) && (m[2] === ' ') === want) hits.push(i);
-    });
-    if (!hits.length) throw new Error('원본에서 그 줄을 못 찾았습니다 — 새로고침해 보세요.');
-    if (hits.length > 1) throw new Error(`같은 줄이 ${hits.length}개라 어느 것인지 알 수 없습니다.`);
-    const i = hits[0];
+
+    // 원본에서도 **같은 순서로** 센다 — 글만 보면 "채택 (안 1)"이 13개라 못 고른다.
+    // 다만 화면에는 섹션 하나만 떠 있으므로, 그 섹션의 시작 줄부터 센다.
+    const head = doc.sections[currentSecIdx()]?.heading || '';
+    let from = 0;
+    if (head) {
+      const h = lines.findIndex((l) => /^#{1,6}\s/.test(l)
+        && l.replace(/^#{1,6}\s*/, '').trim().normalize('NFC') === head.trim().normalize('NFC'));
+      if (h >= 0) from = h + 1;
+    }
+    const boxes = [];
+    for (let i = from; i < lines.length; i++) {
+      if (from && /^#{1,6}\s/.test(lines[i]) && i > from) break;   // 다음 섹션으로 넘어가면 끝
+      if (/^\s*[-*+]\s*\[[ xX]\]/.test(lines[i])) boxes.push(i);
+    }
+    const i = boxes[nth];
+    if (i === undefined) throw new Error('원본에서 그 줄을 못 찾았습니다 — 새로고침해 보세요.');
+    // 안전장치: 글자도 맞는지 본다. 어긋나면 손대지 않는다(엉뚱한 줄을 고치는 게 제일 나쁘다).
+    const norm = (t) => String(t).replace(/\s+/g, ' ').trim().normalize('NFC');
+    const cur = lines[i].match(/^\s*[-*+]\s*\[([ xX])\]\s*(.*)$/);
+    if (!cur || norm(cur[2]) !== norm(label)) {
+      throw new Error('원본이 그사이 바뀐 것 같습니다 — 새로고침해 보세요.');
+    }
     lines[i] = lines[i].replace(/\[([ xX])\]/, want ? '[x]' : '[ ]');
     await putFile(doc.path, lines.join('\n'),
       `iPad: ${want ? '채택' : '취소'} — ${label.slice(0, 40)}`);
-    // 화면과 캐시를 같이 맞춘다 — 다시 열었을 때 되돌아가 있으면 안 바뀐 줄 안다
+
     btn.setAttribute('aria-checked', String(want));
     btn.textContent = want ? '☑' : '☐';
     btn.closest('.task')?.classList.toggle('done', want);
-    const sec = doc.sections[(reader && reader.secIdx) || 0];
-    if (sec) sec.text = sec.text.split('\n').map((l) =>
-      (norm(l.replace(/^\s*[-*+]\s*\[[ xX]\]\s*/, '')) === norm(label)
-        ? l.replace(/\[([ xX])\]/, want ? '[x]' : '[ ]') : l)).join('\n');
-    toast(want ? '✅ 채택했습니다 — vault에 반영됨' : '선택을 풀었습니다');
+
+    if (want) {
+      // ★ 체크만 하면 vault 쪽에서 "뭘 고른 건지"를 다시 읽어내야 한다. 고른 **덩어리를
+      //   통째로** 따로 적어둔다 — /lecture-integrate가 그대로 집어 위키에 녹인다
+      //   (2026-10-14: "저거 통째로 넣고 클로드가 가공을 해서 위키 안에 넣든가 해야지").
+      await recordPick(doc, i, lines, label);
+    }
+    toast(want ? '✅ 채택했습니다 — 고른 내용까지 vault로' : '선택을 풀었습니다');
   } catch (e) {
     toast(`바꾸지 못했습니다: ${e.message}`);
   } finally {
     btn.disabled = false;
   }
 }
+
+/** 지금 보고 있는 섹션 번호 — 읽기 화면이면 그 창, 퀴즈면 옆 패널. */
+function currentSecIdx() {
+  if (document.body.dataset.screen === 'readScreen' && reader) return reader.secIdx;
+  return (wikiState && wikiState.secIdx) || 0;
+}
+
+/**
+ * 고른 것을 **통째로** 적어 둔다.
+ *
+ * 체크 한 글자만 바뀌면 vault 쪽이 "무엇을 왜 골랐는지"를 노트 전체를 읽어 되짚어야 한다.
+ * 고른 덩어리(앞의 소제목부터 그 체크 줄까지)를 그대로 떠서 AI대화로그에 남기면,
+ * /lecture-integrate가 바로 집어 위키 본문에 녹일 수 있다.
+ */
+async function recordPick(doc, lineIdx, lines, label) {
+  // 이 선택이 속한 덩어리 — 바로 위의 소제목·번호 항목부터 체크 줄까지
+  let top = lineIdx;
+  while (top > 0 && !/^(#{1,6}\s|\s*\d+[.)]\s|\s*[-*+]\s*\*\*|\s*\*\*\[)/.test(lines[top - 1])
+         && lines[top - 1].trim() !== '') top--;
+  while (top > 0 && lines[top - 1].trim() !== '' && !/^#{1,6}\s/.test(lines[top - 1])) top--;
+  const chunk = lines.slice(top, lineIdx + 1).join('\n').trim();
+
+  const now = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const stamp = `${String(now.getFullYear()).slice(2)}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}`;
+  const subject = (doc.path.split('/')[1] || '').replace(/_/g, '_');
+  const slug = (doc.title || '노트').replace(/[\/\\:*?"<>|]/g, '_').slice(0, 40);
+
+  const L = [];
+  L.push('---');
+  L.push(`출처: 아이패드에서 고름 (${doc.path})`);
+  if (subject) L.push(`과목: ${subject}`);
+  L.push(`원본노트: "[[${(doc.title || '').replace(/\.md$/, '')}]]"`);
+  L.push(`고른항목: ${JSON.stringify(label)}`);
+  L.push(`고른줄: ${lineIdx + 1}`);
+  L.push(`시각: 20${stamp} ${p2(now.getHours())}:${p2(now.getMinutes())}`);
+  L.push('tags: [달모/채택]');
+  L.push('처리:');
+  L.push('  위키: 대기        # 고른 안을 본문에 녹일 것');
+  L.push('---', '');
+  L.push(`# ${doc.title} — 채택한 안`, '');
+  L.push('> [!check] 아이패드에서 이것을 골랐다');
+  L.push('> 아래가 고른 덩어리 전문이다. 원본 노트의 해당 줄도 `[x]`로 바뀌어 있다.');
+  L.push('> `/lecture-integrate`가 이 내용을 위키 본문에 녹인 뒤 `위키:` 줄을 닫는다.', '');
+  L.push(chunk || `(덩어리를 못 떴다 — 원본 ${doc.path} 의 ${lineIdx + 1}번째 줄)`);
+  L.push('');
+
+  await saveToVault([{
+    path: `${LOG_DIR}/${subject ? `${subject}_` : ''}${stamp}_${slug}_채택.md`,
+    content: L.join('\n'),
+    message: `iPad 채택: ${slug} — ${label.slice(0, 30)}`,
+  }]);
+}
+
 // 본문·옆 패널 어디서 눌러도 같은 길로
 document.addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('.task-box');
@@ -4028,21 +4076,70 @@ document.getElementById('readNext').onclick = () => {
 // ⚠️ "끔" 상태를 뒀더니 두 번 눌러 꺼진 줄 모르고 **선택이 안 되는 것처럼** 보였다
 //    (2026-10-13 — "펜으로 범위 지정이 갑자기 안 된다"). 읽기 모드에서 펜의 주 기능은
 //    긁어서 고르는 것이라, 끄면 화면이 죽은 것처럼 느껴진다. 펜 ↔ 지우개 둘만 돈다.
-let penMode = 'pen';          // 'pen' | 'erase'
 
-function setPenMode(m) {
-  penMode = m === 'erase' ? 'erase' : 'pen';
-  const btn = document.getElementById('readPen');
-  btn.classList.toggle('erasing', penMode === 'erase');   // 아이콘이 지우개로 바뀐다
-  btn.classList.toggle('active', penMode === 'erase');    // 지우개일 때만 켠 표시
-  btn.title = penMode === 'pen' ? '펜 — 누르면 지우개' : '지우개 — 누르면 펜';
-  if (readerPen) readerPen.setErasing(penMode === 'erase');
+/**
+ * 펜이 지금 할 일을 정한다 — **앱 전체가 한 군데서** 정한다(2026-10-14 재설계).
+ *
+ * 전에는 깃발이 셋(erasing·capturing·carding)이고 켜는 함수가 제각각이라,
+ * 한쪽을 끄면 다른 쪽이 조용히 꺼졌다. 그래서 "카드 만들기를 켜고 네모를 쳤는데
+ * 선택 팝업이 뜨는" 일이 생겼다. 이제 상태는 `penTool` 하나다.
+ *
+ *   select  긁으면 글이 잡힌다(기본)   write  그리면 손글씨
+ *   erase   지나가면 지워진다          card   네모 → 카드
+ *   shot    네모 → 그림으로 복사
+ *
+ * 읽기 화면과 퀴즈 화면이 같은 상태를 쓴다 — 화면을 옮겨도 하던 모드가 유지된다.
+ */
+let penTool = 'select';
+
+/** 버튼 짝: [도구, 읽기화면 버튼, 퀴즈화면 버튼] */
+const TOOL_BTNS = [
+  ['select', 'readSelect', 'toolSelect'],
+  ['write', 'readPen', 'toolWrite'],
+  ['erase', 'readPen', 'toolErase'],
+  ['card', 'readMakeCard', null],
+  ['shot', 'readShot', 'toolCapture'],
+];
+
+const TOOL_SAY = {
+  select: '고르기 — 긁으면 글이 잡힙니다',
+  write: '필기 — 그리면 손글씨로 남습니다',
+  erase: '지우개 — 손글씨 위를 지나가면 지워집니다',
+  card: '카드 만들기 — 네모를 치면 그 범위로 카드를 만듭니다',
+  shot: '영역 복사 — 네모를 치면 그림으로 복사됩니다',
+};
+
+function setTool(tool, { quiet = false } = {}) {
+  penTool = TOOL_SAY[tool] ? tool : 'select';
+  for (const p of [readerPen, pen]) if (p) p.setTool(penTool);
+
+  // 버튼 표시 — 켜진 것 하나만 밝다
+  const on = (id, yes) => { const el = document.getElementById(id); if (el) el.classList.toggle('active', yes); };
+  on('readSelect', penTool === 'select');
+  on('toolSelect', penTool === 'select');
+  on('readPen', penTool === 'write' || penTool === 'erase');
+  on('toolWrite', penTool === 'write');
+  on('toolErase', penTool === 'erase');
+  on('readMakeCard', penTool === 'card');
+  on('readShot', penTool === 'shot');
+  on('readCapture', penTool === 'shot');
+  on('toolCapture', penTool === 'shot');
+  // 펜 버튼은 지금 지우개인지 아이콘으로 보여준다
+  document.getElementById('readPen')?.classList.toggle('erasing', penTool === 'erase');
+  const rp = document.getElementById('readPen');
+  if (rp) rp.title = penTool === 'erase' ? '지우개 — 다시 누르면 필기' : '필기 — 다시 누르면 지우개';
+  if (!quiet) capToast(TOOL_SAY[penTool], 1500);
 }
 
-document.getElementById('readPen').onclick = () => {
-  setPenMode(penMode === 'pen' ? 'erase' : 'pen');
-  toast(penMode === 'erase' ? '지우개' : '펜');
-};
+/** 옛 이름 — 아직 부르는 데가 있어서 남긴다. */
+function setPenMode(m) { setTool(m === 'erase' ? 'erase' : 'select', { quiet: true }); }
+
+document.getElementById('readSelect').onclick = () => setTool('select');
+document.getElementById('readPen').onclick = () =>
+  setTool(penTool === 'write' ? 'erase' : 'write');   // 필기 ↔ 지우개
+document.getElementById('toolSelect').onclick = () => setTool('select');
+document.getElementById('toolWrite').onclick = () => setTool('write');
+
 document.getElementById('readAwake').onclick = async () => {
   const btn = document.getElementById('readAwake');
   const on = !btn.classList.contains('active');
@@ -6511,14 +6608,50 @@ function showUpdateBar(reg) {
 
 /** 지금 돌고 있는 앱 버전 — 설정에 표시해 "배포됐는데 안 바뀐다"를 바로 확인한다. */
 async function runningVersion() {
-  if (!navigator.serviceWorker || !navigator.serviceWorker.controller) return '(서비스워커 없음)';
+  const r = await runningBuild();
+  return r.version;
+}
+
+/** 지금 돌고 있는 버전과 그게 올라간 시각. */
+async function runningBuild() {
+  if (!navigator.serviceWorker || !navigator.serviceWorker.controller) {
+    return { version: '(서비스워커 없음)', built: '' };
+  }
   return new Promise((res) => {
     const ch = new MessageChannel();
-    ch.port1.onmessage = (e) => res((e.data && e.data.version) || '?');
+    ch.port1.onmessage = (e) => res({
+      version: (e.data && e.data.version) || '?',
+      built: (e.data && e.data.built) || '',
+    });
     navigator.serviceWorker.controller.postMessage('VERSION', [ch.port2]);
-    setTimeout(() => res('?'), 1000);
+    setTimeout(() => res({ version: '?', built: '' }), 1000);
   });
 }
+
+/**
+ * 머리줄 구석의 작은 버전 칩 — "내가 뭘 보고 있는지"를 알려준다(2026-10-14 요청).
+ * 주 정보가 아니니 작게. 누르면 새 버전이 있는지 확인하고 받아온다.
+ */
+async function paintVersionChip() {
+  const chip = document.getElementById('verChip');
+  if (!chip) return;
+  const { version, built } = await runningBuild();
+  chip.textContent = version;
+  chip.title = built ? `앱 ${version} · ${built} 배포 — 눌러서 새 버전 확인` : `앱 ${version}`;
+}
+document.getElementById('verChip').onclick = async () => {
+  const chip = document.getElementById('verChip');
+  const old = chip.textContent;
+  chip.textContent = '확인 중…';
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg) await reg.update();
+    await new Promise((r) => setTimeout(r, 900));
+    // 새 워커가 대기 중이면 업데이트 띠가 알아서 뜬다(showUpdateBar)
+    await paintVersionChip();
+    if (chip.textContent === old) toast(`최신입니다 (${old})`);
+  } catch { chip.textContent = old; }
+};
 
 // 앱이 가려질 때 대기 중인 백업을 밀어낸다 — iOS는 백그라운드 타이머를 멈춘다.
 document.addEventListener('visibilitychange', () => {
@@ -6544,6 +6677,7 @@ function hideSplash() {
   await loadDisplay();
   await loadWinMode();
   initTimer();
+  paintVersionChip();
   await loadReadPos();
   initServiceWorker();
   gem.loadDeadModels().catch(() => {});
