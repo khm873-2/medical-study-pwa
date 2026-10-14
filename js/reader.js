@@ -784,6 +784,84 @@ export function isLabel(el, text) {
  *
  * @returns {string[]} 바깥 → 안쪽 순서의 문맥 조각(최대 3개)
  */
+/**
+ * 이 조각이 **물어볼 만한가** — 추천이 고르는 기준(2026-10-14 재설계).
+ *
+ * "보통 숫자나 목적어 이런 게 중심이 되지 않겠어? 설명이면 맨 앞 단어가 될 것이고."
+ * 맞는 직관이라 그대로 점수로 옮겼다. 높을수록 먼저 가린다.
+ *   · 숫자·단위(35℃, 15:2, 10~30회/분)  — 시험에 그대로 나온다
+ *   · 영문 전문용어(capillary refill)      — 외워야 하는 이름
+ *   · 괄호 안 원어((umbilication))         — 같은 이유
+ *   · 조사·서술어(이, 는, 한다)             — 가리면 문장이 깨진다. 0점.
+ */
+export function wordScore(t) {
+  const w = String(t).trim();
+  if (!w) return 0;
+  // 괄호는 앞말에 딸린 원어다("함몰(umbilication)") — 혼자 뽑히면 엉뚱하다.
+  // 낮게 두고, 앞말이 뽑힐 때 같이 끌어온다(suggestCloze).
+  if (/^[([{]/.test(w)) return 1;
+  if (/\d/.test(w)) return 5;                           // 숫자가 든 것 — 가장 자주 묻는다
+  if (/^[A-Za-z][A-Za-z/\-]*$/.test(w)) return 3;       // 영문 용어
+  // 조사·이음말·서술 끝 — 가리면 안 된다
+  if (/^(이|가|은|는|을|를|와|과|로|으로|의|에|에서|및|또는|그리고|모두|함께|등|때|시|중|후|전)$/.test(w)) return 0;
+  if (/^(한다|된다|이다|있다|없다|낫는다|보인다|나눈다|말한다|시행한다|필요)[.,]?$/.test(w)) return 0;
+  if (w.length <= 1) return 0;
+  if (/[가-힣]$/.test(w) && w.length >= 2) return 2;     // 한글 명사구
+  return 1;
+}
+
+/**
+ * 한 낱말을 **고를 수 있는 조각**으로 쪼갠다 (2026-10-14 요청).
+ *
+ *   "함몰(umbilication)이"  → ["함몰", "(umbilication)", "이"]
+ *   "15:2로"                → ["15:2", "로"]
+ *   "35℃와"                 → ["35℃", "와"]
+ *   "capillary"             → ["capillary"]
+ *
+ * 왜: 괄호와 조사가 붙어 한 덩어리가 되면 **숫자만 가리기**가 안 된다.
+ * "15:2로 바뀐다"에서 묻고 싶은 건 15:2이지 "15:2로"가 아니다.
+ */
+export function splitWord(w) {
+  const out = [];
+  let rest = String(w);
+  while (rest) {
+    // ① 괄호 묶음은 통째로 한 조각 — 안쪽을 쪼개면 뜻이 깨진다
+    const par = rest.match(/^[([{][^)\]}]*[)\]}]/);
+    if (par) { out.push(par[0]); rest = rest.slice(par[0].length); continue; }
+    const upto = rest.search(/[([{]/);
+    const head = upto > 0 ? rest.slice(0, upto) : rest;
+    rest = upto > 0 ? rest.slice(upto) : '';
+    // ② 숫자·기호 덩어리 뒤에 한글이 붙으면 거기서 끊는다(조사·서술어)
+    //    숫자 사이의 `:`·`~`·`/`·`.`·`-` 와 바로 뒤의 단위는 숫자 쪽에 붙인다
+    const UNIT = '%|℃|°[CF]|mmHg|mg|kg|mL|cm|mm|분|초|회|도|세|개|주|일|시간';
+    const num = head.match(new RegExp(
+      `^[<>≥≤]?\\d+(?:[.:~\\-–/]\\d+)*(?:(?:${UNIT})(?:\\/(?:${UNIT}))?)?`));
+    if (num && num[0].length < head.length && /[가-힣]/.test(head[num[0].length])) {
+      out.push(num[0]);
+      out.push(head.slice(num[0].length));
+      continue;
+    }
+    if (head) out.push(head);
+  }
+  return out.filter(Boolean);
+}
+
+/**
+ * 이 요소가 든 **블록**(문단·목록 항목·표의 행)과 그 맥락.
+ *
+ * 긁어서 만드는 카드가 펜으로 네모 쳐 만드는 카드보다 초라했던 이유다 — 펜 쪽은
+ * 블록을 통째로 들고 와 서식과 맥락을 살리는데, 긁기 쪽은 맨 글자만 들고 갔다
+ * (2026-10-14 지적: "긁기로 긁어서 카드 만드는 건 아주 형편없음. 통일성 가지게").
+ */
+export function blockContext(node, root) {
+  const el = node && node.nodeType === 3 ? node.parentElement : node;
+  if (!el) return null;
+  const block = blockOf(el) || (el.closest ? el.closest('p,li,tr,blockquote,div') : null);
+  if (!block || !root.contains(block)) return null;
+  const anchor = block.tagName === 'TR' ? (block.closest('table') || block) : block;
+  return { block, trail: contextTrail(anchor, root) };
+}
+
 export function contextTrail(block, root) {
   const trail = [];
   const seenLevel = [];

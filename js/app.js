@@ -20,6 +20,7 @@ import {
   isStarred, isSuspended, isLeech, LEECH_AT, retrievability, parseExamDates, nextExam,
   parseSchedule, lecturesFor, lectureDays, weekOf, dayKey, qaCards, dueToday,
   splitAnswer,
+  splitWord, wordScore, blockContext,
 } from './reader.js';
 import { search, cacheSubject, storageInfo, matcher, findAll } from './search.js';
 import { JOKBO_ROOT, parseJokbo, chapterTitle } from './jokbo.js';
@@ -1478,6 +1479,22 @@ document.getElementById('selCopy').onclick = async () => {
 // 전에는 퀴즈에서만 되는 "메모"였고 아이콘도 필기와 같은 ✎라 뭘 하는 건지 알 수 없었다.
 document.getElementById('selCloze').onclick = () => {
   const t = selTerm();
+  // 블록을 **지금** 잡아둔다 — 팝업을 닫으면 선택이 풀려 못 찾는다
+  const root = document.getElementById('readBody') || document.getElementById('wikiBody');
+  let ctxBlock = null;
+  try {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && root) {
+      ctxBlock = blockContext(sel.getRangeAt(0).commonAncestorContainer, root);
+    }
+  } catch {}
+  if (!ctxBlock && root) {
+    // 펜으로 긁은 경우엔 브라우저 선택이 없다 — 그 글이 든 블록을 글자로 찾는다
+    const key = t.replace(/\s+/g, ' ').trim().slice(0, 24);
+    const hit = [...root.querySelectorAll('p,li,tr,blockquote')]
+      .find((b) => b.textContent.replace(/\s+/g, ' ').includes(key));
+    if (hit) ctxBlock = blockContext(hit, root);
+  }
   hideSelPop();
   if (!t) return;
   const doc = currentDoc();
@@ -1486,6 +1503,8 @@ document.getElementById('selCloze').onclick = () => {
     notePath: (doc && doc.path) || '',
     noteTitle: (doc && doc.title) || '',
     heading: sec ? sec.heading : '',
+    block: ctxBlock ? ctxBlock.block : null,
+    trail: ctxBlock ? ctxBlock.trail : [],
   });
 };
 document.getElementById('selNote').onclick = () => {
@@ -4645,9 +4664,15 @@ function updateAskDock() {
     : 'AI에게 묻기 — 긁어뒀으면 그 부분을, 아니면 새로 묻습니다';
   // 읽기 화면과 퀴즈 화면 **둘 다**에 둔다 — 문제를 풀다 물어본 걸 다시 볼 데가 없었다
   // (2026-10-14 지적). 두 화면이 같은 질문기록을 쓴다.
-  for (const [dotId, btnId] of [['readAskDot', 'readAsk'], ['quizAskDot', 'quizAsk']]) {
-    const dot = afEl(dotId);
-    if (dot) dot.classList.toggle('hidden', open || !askLog.length);
+  // 점만 찍으니 "뭘 물었더라"를 알 수 없었다 — **방금 물어본 말**을 짧게 붙인다
+  // (2026-10-14: "예전 버전 나쁘지 않았음. 좀 예쁘게 넣어봐").
+  const last = askLog.length ? selPreview(askLog[0].term, 12, 0).replace(/ … $/, '…') : '';
+  for (const [tagId, btnId] of [['readAskLast', 'readAsk'], ['quizAskLast', 'quizAsk']]) {
+    const tag = afEl(tagId);
+    if (tag) {
+      tag.textContent = last;
+      tag.classList.toggle('hidden', open || !last);
+    }
     const btn = afEl(btnId);
     if (btn) btn.title = say;
   }
@@ -6633,8 +6658,14 @@ let czCtx = null;        // {notePath, noteTitle, heading}
 
 function openClozeMaker(text, ctx) {
   czCtx = ctx;
-  czWords = String(text).replace(/\s+/g, ' ').trim().split(' ')
-    .filter(Boolean).map((t) => ({ t, blank: false }));
+  // 괄호·숫자는 따로 고를 수 있게 쪼갠다 — "15:2로"에서 묻고 싶은 건 15:2다(2026-10-14)
+  // 쪼개면서 **원래 띄어쓰기**를 기억한다 — 안 그러면 "함몰 (umbilication) 이"가 된다
+  czWords = [];
+  String(text).replace(/\s+/g, ' ').trim().split(' ').forEach((w, wi) => {
+    splitWord(w).forEach((t, pi) => {
+      czWords.push({ t, blank: false, sp: wi > 0 && pi === 0 });   // 낱말 사이에만 공백
+    });
+  });
   if (!czWords.length) { toast('고른 글이 없습니다.'); return; }
   suggestCloze();                       // 처음엔 추천을 얹어둔다 — 손댈 게 적게
   renderCloze();
@@ -6643,39 +6674,42 @@ function openClozeMaker(text, ctx) {
 }
 function closeCloze() { document.getElementById('clozeFloat').classList.add('hidden'); }
 
-/** 추천 — 지금 쓰는 규칙(splitAnswer)이 고르는 자리를 낱말에 표시한다. */
+/**
+ * 추천 — **물어볼 만한 것**을 고른다(2026-10-14 재설계).
+ *
+ * 전에는 문장 단위 규칙(splitAnswer)이 준 덩어리를 글자로 맞춰 찾았는데, 조각 단위로
+ * 쪼갠 뒤로는 거의 안 맞았다("추천대로도 아주 형편없이 동작").
+ * 이제 조각마다 점수를 매겨(wordScore) 높은 것부터 고른다 — 숫자·영문 용어·괄호 원어.
+ * 아무것도 못 고르면 **맨 앞 명사**를 가린다(설명문이면 그게 주제어다).
+ */
 function suggestCloze() {
-  const whole = czWords.map((w) => w.t).join(' ');
-  const r = splitAnswer(whole);
-  const want = (r.parts || [{ t: r.answer, blank: true }])
-    .filter((p) => p.blank).map((p) => p.t.replace(/\s+/g, ' ').trim());
   czWords.forEach((w) => { w.blank = false; });
-  // ⚠️ 글자가 딱 맞기를 바라면 안 된다 — 추천은 조사를 떼고 "저체온증"을 주는데
-  //    화면의 낱말은 "저체온증은"이다. 한쪽이 다른 쪽으로 시작하면 같은 말로 본다.
-  const same = (a, b) => a === b || a.startsWith(b) || b.startsWith(a);
-  for (const phrase of want) {
-    const ws = phrase.split(' ').filter(Boolean);
-    if (!ws.length) continue;
-    for (let i = 0; i + ws.length <= czWords.length; i++) {
-      if (ws.every((x, k) => same(czWords[i + k].t, x))) {
-        for (let k = 0; k < ws.length; k++) czWords[i + k].blank = true;
-        break;
-      }
-    }
+  const scored = czWords.map((w, i) => ({ i, s: wordScore(w.t) })).filter((x) => x.s > 0);
+  if (!scored.length) return;
+  const top = Math.max(...scored.map((x) => x.s));
+  // 가장 값진 것만 — 다만 너무 많으면(열거) 네 개까지
+  let pick = scored.filter((x) => x.s === top).slice(0, 4);
+  // 숫자가 하나도 없고 평범한 명사뿐이면 맨 앞 하나만 — 설명문의 주제어
+  if (top <= 2) pick = pick.slice(0, 1);
+  for (const x of pick) {
+    czWords[x.i].blank = true;
+    // 바로 뒤에 붙은 괄호 원어는 같이 가린다 — "함몰(umbilication)"은 한 개념이다
+    const nx = czWords[x.i + 1];
+    if (nx && !nx.sp && /^[([{]/.test(nx.t)) nx.blank = true;
   }
 }
 
 function renderCloze() {
   const box = document.getElementById('czBody');
   box.innerHTML = '';
-  czWords.forEach((w, i) => {
+  czWords.forEach((w) => {
+    // 원래 띄어쓰기를 그대로 — 붙어 있던 조각은 붙여서 보여줘야 읽힌다
+    if (w.sp) box.appendChild(document.createTextNode(' '));
     const b = document.createElement('button');
     b.className = `cz-w${w.blank ? ' on' : ''}`;
     b.textContent = w.t;
     b.onclick = () => { w.blank = !w.blank; renderCloze(); };
     box.appendChild(b);
-    box.appendChild(document.createTextNode(' '));
-    if (i < czWords.length - 1) { /* 칩 사이 공백은 위에서 넣었다 */ }
   });
   const n = czGroups().length;
   document.getElementById('czStatus').textContent = n
@@ -6689,10 +6723,10 @@ function czGroups() {
   const out = [];
   let run = null;
   for (const w of czWords) {
-    if (w.blank) { run = run || []; run.push(w.t); }
-    else if (run) { out.push(run.join(' ')); run = null; }
+    if (w.blank) { run = run === null ? w.t : run + (w.sp ? ' ' : '') + w.t; }
+    else if (run !== null) { out.push(run); run = null; }
   }
-  if (run) out.push(run.join(' '));
+  if (run !== null) out.push(run);
   return out;
 }
 
@@ -6713,17 +6747,28 @@ function initClozeMaker() {
     const frag = document.createElement('div');
     let run = null;
     for (const w of czWords) {
-      if (w.blank) { run = run || []; run.push(w.t); continue; }
-      if (run) { frag.appendChild(blankSpan(run.join(' '))); run = null; }
-      frag.appendChild(document.createTextNode(`${w.t} `));
+      if (w.blank) { run = run === null ? w.t : run + (w.sp ? ' ' : '') + w.t; continue; }
+      if (run !== null) { frag.appendChild(blankSpan(run)); run = null; }
+      if (w.sp) frag.appendChild(document.createTextNode(' '));
+      frag.appendChild(document.createTextNode(w.t));
     }
-    if (run) frag.appendChild(blankSpan(run.join(' ')));
+    if (run !== null) frag.appendChild(blankSpan(run));
+    // 블록을 알면 **그 서식 그대로** 담는다 — 펜으로 네모 쳐 만든 카드와 같은 모양이
+    // 되게(2026-10-14: "긁기로 만드는 건 아주 형편없음. 통일성 가지게").
+    let html = frag.innerHTML;
+    if (czCtx.block) {
+      const clone = czCtx.block.cloneNode(true);
+      const ok = placeBlanksIn(clone, answers);
+      if (ok) html = clone.outerHTML;
+    }
     const card = {
       id: `${czCtx.notePath || ''}#${czCtx.heading || ''}#m${Date.now()}`,
       notePath: czCtx.notePath || '', noteTitle: czCtx.noteTitle || '',
       heading: czCtx.heading || '',
-      topic: czCtx.heading || '',
-      contextHtml: frag.innerHTML,
+      // 맥락도 같이 — 무슨 이야기인지 모르면 맞힐 수가 없다
+      trail: czCtx.trail || [],
+      topic: [czCtx.heading, ...(czCtx.trail || [])].filter(Boolean).join('  ›  '),
+      contextHtml: html,
       answers,
       starred: false,
       kind: 'block',
@@ -6733,6 +6778,30 @@ function initClozeMaker() {
     closeCloze();
     toast(`빈칸 ${answers.length}개짜리 카드를 넣었습니다.`);
   };
+}
+
+/**
+ * 블록 사본 안에서 고른 말을 찾아 빈칸으로 바꾼다.
+ * 하나라도 못 찾으면 false — 그때는 맨 글자로 만든 본문을 쓴다(엉뚱한 자리를 가리지 않게).
+ */
+function placeBlanksIn(clone, answers) {
+  let done = 0;
+  for (const ans of answers) {
+    const want = ans.replace(/\s+/g, ' ').trim();
+    if (!want) continue;
+    const walk = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walk.nextNode())) {
+      const i = node.nodeValue.indexOf(want);
+      if (i < 0) continue;
+      const after = node.splitText(i);
+      after.splitText(want.length);
+      after.replaceWith(blankSpan(want));
+      done++;
+      break;
+    }
+  }
+  return done === answers.length;
 }
 
 /** 카드 본문에 들어갈 빈칸 — 읽기 화면의 것과 같은 모양이어야 한다. */

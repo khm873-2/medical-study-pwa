@@ -3956,7 +3956,7 @@ await run('AI 답변이 남는다', () => {
   // 떠다니던 알약은 없앴다 — **아래 바의 AI 단추**가 그 자리를 맡는다(2026-10-14).
   out.push({ name: '떠다니는 알약이 화면을 안 가린다', ok: !document.getElementById('askDock') });
   out.push({ name: '아래 바에 AI 단추가 있다', ok: !!document.getElementById('readAsk') });
-  out.push({ name: '지난 답이 있으면 점으로 알린다', ok: !!document.getElementById('readAskDot') });
+  out.push({ name: '방금 물어본 것을 옆에 보여준다', ok: !!document.getElementById('readAskLast') });
   out.push({ name: '로봇 대신 그림 아이콘', ok: !!document.querySelector('#readAsk svg') });
   out.push({ name: '**창 안에서 새로 물을 수 있다**', ok: !!document.getElementById('afInput') });
   out.push({ name: '보내는 버튼도 있다', ok: !!document.getElementById('afSend') });
@@ -5744,8 +5744,12 @@ await run('새 질문 하기', async () => {
   // 접으면 아래 바에 점이 뜬다
   document.getElementById('afClose').click();
   await new Promise((r) => setTimeout(r, 200));
-  out.push({ name: '**접으면 아래 바에 점으로 알린다**',
-    ok: !document.getElementById('readAskDot').classList.contains('hidden') });
+  const lastTag = document.getElementById('readAskLast');
+  out.push({ name: '**접으면 아래 바에 방금 물어본 말이 뜬다**',
+    ok: !lastTag.classList.contains('hidden') && lastTag.textContent.length > 0,
+    detail: lastTag.textContent });
+  out.push({ name: '길면 줄여서 보여준다(바가 안 늘어나게)',
+    ok: lastTag.textContent.length <= 14, detail: `${lastTag.textContent.length}자` });
   out.push({ name: '다시 누르면 그 답이 돌아온다',
     ok: (document.getElementById('readAsk').click(),
       await new Promise((r) => setTimeout(() => r(/압박분율은/.test(document.getElementById('afBody').textContent)), 300))) });
@@ -5775,15 +5779,15 @@ await run('퀴즈 AI · 옆 패널 버튼', async () => {
   out.push({ name: '읽기 화면과 같은 그림',
     ok: !!ask && ask.querySelector('svg').innerHTML
       === document.getElementById('readAsk').querySelector('svg').innerHTML });
-  out.push({ name: '지난 답을 알리는 점도 있다', ok: !!document.getElementById('quizAskDot') });
+  out.push({ name: '방금 물어본 것을 옆에 보여준다', ok: !!document.getElementById('quizAskLast') });
   out.push({ name: '아래 바 안에 있다(떠다니지 않는다)',
     ok: !!ask && !!ask.closest('.quiz-nav') });
 
   const d = await import('/js/db.js');
   // 앞 검사에서 물어본 것이 남아 있다 — 그러면 점이 **떠 있어야** 맞다
-  const dot = document.getElementById('quizAskDot');
+  const dot = document.getElementById('quizAskLast');
   const quizHidden = dot.classList.contains('hidden');
-  const readHidden = document.getElementById('readAskDot').classList.contains('hidden');
+  const readHidden = document.getElementById('readAskLast').classList.contains('hidden');
   out.push({ name: '두 화면의 점이 같은 상태다(질문기록을 같이 쓴다)',
     ok: quizHidden === readHidden,
     detail: `퀴즈 ${quizHidden ? '숨김' : '보임'} / 읽기 ${readHidden ? '숨김' : '보임'}` });
@@ -5814,6 +5818,34 @@ await run('퀴즈 AI · 옆 패널 버튼', async () => {
     ok: document.querySelectorAll('#docList .dd-group, #docList .dd-item').length > 0,
     detail: document.getElementById('docList').textContent.slice(0, 40) });
   document.getElementById('docClose').click();
+  return out;
+});
+
+// ══════════ 빈칸 쪼개기 · 추천 (2026-10-14 요청) ══════════
+// "괄호 여는 부분은 다른 단어로 취급해야 할 것 같음" / "15:2로에서 숫자만 체크되도록"
+// "추천대로도 아주 형편없이 동작하고 있으니 개선해봐. 보통 숫자나 목적어가 중심 아니겠어?"
+await run('빈칸 쪼개기·추천', async () => {
+  const out = [];
+  const R = await import('/js/reader.js');
+  const sw = (w) => R.splitWord(w).join(' | ');
+
+  out.push({ name: '**괄호는 따로 고른다**', ok: sw('함몰(umbilication)이') === '함몰 | (umbilication) | 이',
+    detail: sw('함몰(umbilication)이') });
+  out.push({ name: '**숫자만 고를 수 있다**', ok: sw('15:2로') === '15:2 | 로', detail: sw('15:2로') });
+  out.push({ name: '단위까지 숫자 쪽에', ok: sw('>40℃와') === '>40℃ | 와', detail: sw('>40℃와') });
+  out.push({ name: '겹단위도 한 덩어리', ok: sw('10~30회/분인지,') === '10~30회/분 | 인지,',
+    detail: sw('10~30회/분인지,') });
+  out.push({ name: '쪼갤 게 없으면 그대로', ok: sw('capillary') === 'capillary' });
+  out.push({ name: '한 낱말인 것은 안 쪼갠다', ok: sw('AST/ALT') === 'AST/ALT' && sw('2도') === '2도' });
+
+  // 추천 점수 — 숫자가 가장 높고 조사는 0
+  const sc = (w) => R.wordScore(w);
+  out.push({ name: '**숫자가 가장 먼저**', ok: sc('35℃') > sc('체온') && sc('35℃') > sc('capillary') });
+  out.push({ name: '영문 용어도 높게', ok: sc('capillary') > sc('모두') });
+  out.push({ name: '**조사는 안 고른다**', ok: sc('이') === 0 && sc('와') === 0 && sc('으로') === 0 });
+  out.push({ name: '서술 끝맺음도 안 고른다', ok: sc('한다') === 0 && sc('이다') === 0 && sc('낫는다') === 0 });
+  out.push({ name: '괄호는 혼자 안 뽑힌다(앞말에 딸린다)', ok: sc('(umbilication)') < sc('함몰') });
+  out.push({ name: '설명문은 명사가 후보', ok: sc('저체온증') > 0 });
   return out;
 });
 await browser.close();
