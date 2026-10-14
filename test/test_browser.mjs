@@ -5024,6 +5024,63 @@ await run('빈 화면 안내', async () => {
   }
   return out;
 });
+
+// ══════════ 하단 바가 중간에 뜨지 않는다 (2026-10-14 신고) ══════════
+// "쭉 내렸다가 올리니까 아래 있어야 할 바가 딸려올라와서 중간에 있음"
+// → 페이지가 통째로 스크롤되면 아이패드에서 fixed 바가 반동 중에 제자리를 잃는다.
+//    페이지를 아예 안 움직이게 하고 내용만 안에서 스크롤시킨다(읽기 화면과 같은 처방).
+await run('하단 바 고정', async () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  const q = document.getElementById('quizScreen');
+  q.classList.remove('hidden');
+  document.body.dataset.screen = 'quizScreen';
+  q.classList.add('with-side');
+  document.getElementById('wikiPanel').classList.remove('hidden');
+  document.getElementById('optsContainer').innerHTML =
+    Array.from({ length: 14 }, (_, i) => `<div class="opt-row" style="min-height:90px">선지 ${i + 1}</div>`).join('')
+    + '<div class="opt-row" id="lastOpt" style="min-height:90px">마지막 선지</div>';
+  document.getElementById('wikiBody').innerHTML = '<p>' + '노트 본문. '.repeat(600) + '</p>';
+  await new Promise((r) => setTimeout(r, 400));
+
+  const nav = document.querySelector('#quizScreen .quiz-nav');
+  const H = innerHeight;
+  const navAt = () => Math.round(nav.getBoundingClientRect().bottom);
+  const start = navAt();
+  out.push({ name: '바가 화면 바닥에 있다', ok: H - start < 40, detail: `${start}/${H}` });
+
+  // ★ 페이지 자체가 안 움직여야 한다 — 움직이면 반동이 생기고 거기서 바가 떠난다
+  out.push({ name: '**페이지가 통째로 스크롤되지 않는다**',
+    ok: document.documentElement.scrollHeight <= innerHeight + 2,
+    detail: `문서 ${document.documentElement.scrollHeight} / 화면 ${innerHeight}` });
+
+  // 대신 안에서 스크롤된다
+  const inner = [...document.querySelectorAll('#quizScreen .split, #quizScreen .main-col')]
+    .filter((e) => e.scrollHeight > e.clientHeight + 2);
+  out.push({ name: '내용은 안에서 스크롤된다', ok: inner.length > 0,
+    detail: inner.map((e) => e.className.split(' ')[0]).join(',') || '없음' });
+
+  // 쭉 내렸다가 → 다시 올린다 (신고된 그 순서)
+  const sc = inner[0];
+  if (sc) {
+    // 안쪽 스크롤 상자가 둘일 수 있다(.split / .main-col) — **전부** 끝까지 내린다
+    for (const e of inner) e.scrollTop = e.scrollHeight;
+    document.scrollingElement.scrollTop = document.scrollingElement.scrollHeight;
+    await new Promise((r) => setTimeout(r, 250));
+    out.push({ name: '**쭉 내려도 바가 바닥에 있다**', ok: Math.abs(navAt() - start) < 4,
+      detail: `${navAt()}` });
+    out.push({ name: '맨 아래 선지가 바에 안 가린다',
+      ok: Math.round(document.getElementById('lastOpt').getBoundingClientRect().bottom)
+        <= Math.round(nav.getBoundingClientRect().top) + 6 });
+    for (const e of inner) e.scrollTop = 0;
+    document.scrollingElement.scrollTop = 0;
+    await new Promise((r) => setTimeout(r, 250));
+    out.push({ name: '**다시 올려도 바가 바닥에 있다**', ok: Math.abs(navAt() - start) < 4,
+      detail: `${navAt()}` });
+  }
+  document.getElementById('wikiPanel').classList.add('hidden');
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════

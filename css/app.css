@@ -671,13 +671,25 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
     margin-top: 10px;
   }
 
-  /* 왼쪽: 문제 + 네비(항상 맨 아래에 붙어 있다) */
+  /* 왼쪽: 문제 + 네비(항상 맨 아래에 붙어 있다)
+
+     ⚠️ `min-height`만 주면 **문제가 길 때 바가 중간에 뜬다**. sticky는 자기 부모 안에서만
+     붙어 있는데, 부모(.main-col)가 내용만큼 길어지면 그 바닥이 화면 한가운데일 수 있다.
+     오른쪽 패널이 더 길면 페이지는 계속 스크롤되고, 바는 거기 멈춰 선다
+     (2026-10-14: "쭉 내렸다가 올리니까 아래 있어야 할 바가 중간에 있음").
+
+     읽기 화면과 같은 방법으로 고친다 — 칼럼에 **화면 높이를 못 박고 그 안에서 스크롤**시킨다.
+     그러면 부모 바닥 = 화면 바닥이라 sticky가 늘 제자리다. */
+  body[data-screen="quizScreen"] #app { overflow: hidden; }
+  #quizScreen .split { height: calc(100dvh - var(--quiz-head-h, 86px)); align-items: stretch; }
   #quizScreen .split > .main-col {
-    flex: 1 1 auto; min-width: 0;
+    flex: 1 1 auto; min-width: 0; height: 100%;
     display: flex; flex-direction: column;
-    min-height: calc(100vh - 86px);      /* 내용이 짧아도 네비가 위로 딸려오지 않게 */
+    overflow-y: auto; overscroll-behavior: contain;
   }
-  #quizScreen .main-col > #qcard { flex: 0 0 auto; }
+  /* 바가 sticky라 **스크롤되는 내용이 그 아래로 지나간다** — 마지막 선지가 바에 가렸다
+     (2026-10-14). 카드 아래에 바 높이만큼 자리를 비워 끝까지 읽히게 한다. */
+  #quizScreen .main-col > #qcard { flex: 0 0 auto; margin-bottom: 12px; }
   #quizScreen .main-col > .quiz-nav { margin-top: auto; }   /* ← 핵심: 항상 바닥 */
 
   /* 오른쪽: 사이드 패널들 */
@@ -703,11 +715,28 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
   #quizScreen:not(.with-side) .col-resizer { visibility: hidden; flex-basis: 0; }
 }
 
-/* 좁은 화면: 세로로 쌓고 네비는 하단 고정(기존 동작) */
+/* 좁은 화면: 세로로 쌓고 네비는 하단 고정.
+   ⚠️ `position: fixed`만 믿으면 안 된다 — 아이패드에서 **쭉 내렸다 올리면 바가 중간에
+   멈춰 선다**(2026-10-14 신고). 페이지가 통째로 스크롤되면서 생기는 고무줄 반동 중에
+   fixed 요소가 제자리를 잃는 iOS 특유의 현상이다.
+   읽기 화면과 같은 처방: **페이지를 아예 안 움직이게** 하고 내용만 안에서 스크롤시킨다.
+   스크롤되는 게 없으면 반동도 없고, 바가 떠날 자리도 없다. */
 @media (max-width: 899px) {
   #quizScreen .split { display: block; }
   #quizScreen .side-col { display: block; }
   #quizScreen .col-resizer, #quizScreen .pane-resizer { display: none; }
+  body[data-screen="quizScreen"] { overflow: hidden; }
+  body[data-screen="quizScreen"] #app {
+    height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  body[data-screen="quizScreen"] #app > .tabs { flex: 0 0 auto; }
+  #quizScreen { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+  #quizScreen > header { flex: 0 0 auto; }
+  #quizScreen .split {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+    /* 바에 가려 마지막 줄이 안 보이지 않게 */
+    padding-bottom: calc(env(safe-area-inset-bottom) + 78px);
+  }
   #quizScreen .quiz-nav {
     position: fixed; bottom: 0; left: 0; right: 0; border-radius: 0;
     border: none; border-top: 1px solid var(--border);
