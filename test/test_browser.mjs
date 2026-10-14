@@ -5499,6 +5499,114 @@ await run('카드 미리보기 · 그림', async () => {
   body.innerHTML = '';
   return out;
 });
+
+// ══════════ 빈칸을 손으로 고른다 (2026-10-14 요청) ══════════
+// "추천해서 만들어주는 기능은 유지하고, 내가 긁어서 팝업 띄우고 그 팝업에서
+//  특정 단어 범위 지정해서 빈칸 만드는 게 나을 듯"
+await run('손으로 빈칸 만들기', async () => {
+  const out = [];
+  const d = await import('/js/db.js');
+  for (const c of await d.allCards()) await d.deleteCard(c.id);
+  const { tokenize } = await import('/js/pen.js');
+
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  document.getElementById('readScreen').classList.add('toc-off');
+  document.querySelectorAll('.sheet, .ask-float, #docDrawer, #docScrim').forEach((x) => x.classList.add('hidden'));
+  const body = document.getElementById('readBody');
+  body.innerHTML = '<p id="czP"></p>';
+  tokenize(document.getElementById('czP'),
+    '우발적 저체온증은 심부체온이 비자발적으로 35℃ 미만으로 떨어진 상태다.');
+  await new Promise((r) => setTimeout(r, 200));
+
+  // 앱의 펜으로 긁는다 — 팝업이 떠야 한다.
+  // 앞 검사가 캔버스를 치웠을 수 있다 — 앱이 들고 있는 펜의 캔버스를 다시 붙인다.
+  const pen = window.__penForTest;
+  out.push({ name: '읽기 화면 펜이 있다', ok: !!pen });
+  if (!pen) return out;
+  if (!document.querySelector('#readCard .penlayer')) {
+    document.getElementById('readCard').appendChild(pen.canvas);
+    pen.resize();
+  }
+  pen.setTool('select');
+  const cv = document.querySelector('#readCard .penlayer');
+  const ev = (t, x, y) => cv.dispatchEvent(new PointerEvent(t, {
+    pointerType: 'pen', pointerId: 17, isPrimary: true,
+    buttons: t === 'pointerup' ? 0 : 1, pressure: .5,
+    clientX: x, clientY: y, bubbles: true, cancelable: true }));
+  const toks = [...document.querySelectorAll('#czP .tok')];
+  const a = toks[0].getBoundingClientRect();
+  const z = toks[toks.length - 1].getBoundingClientRect();
+  ev('pointerdown', a.left + 2, a.top + a.height / 2);
+  for (let i = 1; i <= 10; i++) {
+    ev('pointermove', a.left + 2 + (z.right - a.left) * i / 10,
+      a.top + a.height / 2 + (z.top - a.top) * i / 10);
+  }
+  ev('pointerup', z.right - 2, z.top + z.height / 2);
+  await new Promise((r) => setTimeout(r, 800));
+  out.push({ name: '긁으면 팝업이 뜬다',
+    ok: !document.getElementById('selPop').classList.contains('hidden') });
+
+  // ★ 팝업에 "빈칸 카드"가 있다
+  const btn = document.getElementById('selCloze');
+  out.push({ name: '**팝업에서 빈칸 카드로 갈 수 있다**', ok: !!btn });
+  btn.click();
+  await new Promise((r) => setTimeout(r, 500));
+  const win = document.getElementById('clozeFloat');
+  out.push({ name: '빈칸 만들기 창이 열린다', ok: !win.classList.contains('hidden') });
+
+  const chips = [...document.querySelectorAll('.cz-w')];
+  out.push({ name: '**긁은 글이 낱말 하나하나로 나온다**', ok: chips.length >= 6,
+    detail: `${chips.length}개: ${chips.slice(0, 4).map((c) => c.textContent).join(' ')}` });
+  out.push({ name: '추천이 미리 얹혀 있다(손댈 게 적게)',
+    ok: chips.some((c) => c.classList.contains('on')),
+    detail: chips.filter((c) => c.classList.contains('on')).map((c) => c.textContent).join(' ') });
+
+  // 내가 직접 고른다
+  document.getElementById('czClear').click();
+  await new Promise((r) => setTimeout(r, 80));
+  out.push({ name: '비우면 하나도 안 골라진다',
+    ok: !document.querySelectorAll('.cz-w.on').length });
+  out.push({ name: '고른 게 없으면 추가를 막는다',
+    ok: document.getElementById('czAdd').disabled });
+
+  // 이어진 두 낱말 → 한 빈칸
+  const all = [...document.querySelectorAll('.cz-w')];
+  all[3].click(); await new Promise((r) => setTimeout(r, 60));
+  const all2 = [...document.querySelectorAll('.cz-w')];
+  all2[4].click(); await new Promise((r) => setTimeout(r, 60));
+  out.push({ name: '눌러서 고를 수 있다',
+    ok: document.querySelectorAll('.cz-w.on').length === 2 });
+  out.push({ name: '**이어진 낱말은 한 빈칸으로 묶인다**',
+    ok: /빈칸 1개/.test(document.getElementById('czStatus').textContent),
+    detail: document.getElementById('czStatus').textContent });
+
+  // 떨어진 낱말을 더 고르면 빈칸이 둘
+  const all3 = [...document.querySelectorAll('.cz-w')];
+  all3[0].click(); await new Promise((r) => setTimeout(r, 60));
+  out.push({ name: '떨어진 낱말은 따로 센다',
+    ok: /빈칸 2개/.test(document.getElementById('czStatus').textContent),
+    detail: document.getElementById('czStatus').textContent });
+
+  document.getElementById('czAdd').click();
+  await new Promise((r) => setTimeout(r, 600));
+  const made = await d.allCards();
+  out.push({ name: '**카드가 실제로 들어간다**', ok: made.length === 1, detail: `${made.length}장` });
+  if (made.length) {
+    out.push({ name: '고른 것이 답이 된다', ok: made[0].answers.length === 2,
+      detail: made[0].answers.join(' / ') });
+    out.push({ name: '본문에 빈칸이 들어간다',
+      ok: (made[0].contextHtml.match(/class="cloze"/g) || []).length === 2 });
+    out.push({ name: '안 고른 말은 보인다', ok: /저체온증/.test(made[0].contextHtml) });
+    out.push({ name: '어느 노트 것인지 남는다', ok: !!made[0].heading, detail: made[0].heading });
+  }
+  out.push({ name: '넣고 나면 창이 닫힌다', ok: win.classList.contains('hidden') });
+
+  for (const c of await d.allCards()) await d.deleteCard(c.id);
+  body.innerHTML = '';
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════

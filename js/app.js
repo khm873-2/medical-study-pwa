@@ -19,6 +19,7 @@ import {
   deckTree, cardsInDeck, liveCards, isArchivedCard, deckOf, subKey, noteKey,
   isStarred, isSuspended, isLeech, LEECH_AT, retrievability, parseExamDates, nextExam,
   parseSchedule, lecturesFor, lectureDays, weekOf, dayKey, qaCards, dueToday,
+  splitAnswer,
 } from './reader.js';
 import { search, cacheSubject, storageInfo, matcher, findAll } from './search.js';
 import { JOKBO_ROOT, parseJokbo, chapterTitle } from './jokbo.js';
@@ -1475,6 +1476,18 @@ document.getElementById('selCopy').onclick = async () => {
 };
 // 긁은 글을 **모아두기**로 — 어느 화면에서든 같은 곳으로 간다(2026-10-14).
 // 전에는 퀴즈에서만 되는 "메모"였고 아이콘도 필기와 같은 ✎라 뭘 하는 건지 알 수 없었다.
+document.getElementById('selCloze').onclick = () => {
+  const t = selTerm();
+  hideSelPop();
+  if (!t) return;
+  const doc = currentDoc();
+  const sec = doc && doc.sections ? doc.sections[currentSecIdx()] : null;
+  openClozeMaker(t, {
+    notePath: (doc && doc.path) || '',
+    noteTitle: (doc && doc.title) || '',
+    heading: sec ? sec.heading : '',
+  });
+};
 document.getElementById('selNote').onclick = () => {
   const t = selTerm();
   hideSelPop();
@@ -6466,6 +6479,132 @@ function alertBox(text) {
 }
 
 
+// ═══════════ 손으로 만드는 빈칸 카드 (2026-10-14 요청) ═══════════
+//
+// 자동 추천은 그대로 둔다 — 대개 맞고, 빠르다. 다만 빗나가는 문장이 있기 마련인데
+// 그때 손볼 길이 없었다("카드 만들기가 잘 안 됨... 내가 특정 단어 범위 지정해서
+// 빈칸 만드는 게 나을 듯").
+//
+// 이제 긁은 글이 **낱말 칩**으로 뜨고, 눌러서 가릴 것을 고른다. 이어진 낱말을 고르면
+// 한 빈칸으로 묶인다 — "체온 >40℃"처럼 두 낱말이 한 답인 경우가 많다.
+
+let czWords = [];        // [{t, blank}]
+let czCtx = null;        // {notePath, noteTitle, heading}
+
+function openClozeMaker(text, ctx) {
+  czCtx = ctx;
+  czWords = String(text).replace(/\s+/g, ' ').trim().split(' ')
+    .filter(Boolean).map((t) => ({ t, blank: false }));
+  if (!czWords.length) { toast('고른 글이 없습니다.'); return; }
+  suggestCloze();                       // 처음엔 추천을 얹어둔다 — 손댈 게 적게
+  renderCloze();
+  document.getElementById('clozeFloat').classList.remove('hidden');
+  if (clozeFloat) clozeFloat.place();
+}
+function closeCloze() { document.getElementById('clozeFloat').classList.add('hidden'); }
+
+/** 추천 — 지금 쓰는 규칙(splitAnswer)이 고르는 자리를 낱말에 표시한다. */
+function suggestCloze() {
+  const whole = czWords.map((w) => w.t).join(' ');
+  const r = splitAnswer(whole);
+  const want = (r.parts || [{ t: r.answer, blank: true }])
+    .filter((p) => p.blank).map((p) => p.t.replace(/\s+/g, ' ').trim());
+  czWords.forEach((w) => { w.blank = false; });
+  // ⚠️ 글자가 딱 맞기를 바라면 안 된다 — 추천은 조사를 떼고 "저체온증"을 주는데
+  //    화면의 낱말은 "저체온증은"이다. 한쪽이 다른 쪽으로 시작하면 같은 말로 본다.
+  const same = (a, b) => a === b || a.startsWith(b) || b.startsWith(a);
+  for (const phrase of want) {
+    const ws = phrase.split(' ').filter(Boolean);
+    if (!ws.length) continue;
+    for (let i = 0; i + ws.length <= czWords.length; i++) {
+      if (ws.every((x, k) => same(czWords[i + k].t, x))) {
+        for (let k = 0; k < ws.length; k++) czWords[i + k].blank = true;
+        break;
+      }
+    }
+  }
+}
+
+function renderCloze() {
+  const box = document.getElementById('czBody');
+  box.innerHTML = '';
+  czWords.forEach((w, i) => {
+    const b = document.createElement('button');
+    b.className = `cz-w${w.blank ? ' on' : ''}`;
+    b.textContent = w.t;
+    b.onclick = () => { w.blank = !w.blank; renderCloze(); };
+    box.appendChild(b);
+    box.appendChild(document.createTextNode(' '));
+    if (i < czWords.length - 1) { /* 칩 사이 공백은 위에서 넣었다 */ }
+  });
+  const n = czGroups().length;
+  document.getElementById('czStatus').textContent = n
+    ? `빈칸 ${n}개 — 눌러서 더하거나 뺍니다`
+    : '가릴 낱말을 눌러 고르세요';
+  document.getElementById('czAdd').disabled = !n;
+}
+
+/** 이어진 낱말을 한 빈칸으로 묶는다. */
+function czGroups() {
+  const out = [];
+  let run = null;
+  for (const w of czWords) {
+    if (w.blank) { run = run || []; run.push(w.t); }
+    else if (run) { out.push(run.join(' ')); run = null; }
+  }
+  if (run) out.push(run.join(' '));
+  return out;
+}
+
+function initClozeMaker() {
+  clozeFloat = makeFloat({
+    panel: 'clozeFloat', head: 'czHead', grip: 'czResize', key: 'cloze_float_box',
+    def: { w: Math.min(560, innerWidth * 0.92), h: Math.min(420, innerHeight * 0.55) },
+  });
+  document.getElementById('czClose').onclick = closeCloze;
+  document.getElementById('czSuggest').onclick = () => { suggestCloze(); renderCloze(); };
+  document.getElementById('czClear').onclick = () => {
+    czWords.forEach((w) => { w.blank = false; }); renderCloze();
+  };
+  document.getElementById('czAdd').onclick = async () => {
+    const answers = czGroups();
+    if (!answers.length) return;
+    // 본문 — 고른 낱말만 빈칸으로, 나머지는 그대로
+    const frag = document.createElement('div');
+    let run = null;
+    for (const w of czWords) {
+      if (w.blank) { run = run || []; run.push(w.t); continue; }
+      if (run) { frag.appendChild(blankSpan(run.join(' '))); run = null; }
+      frag.appendChild(document.createTextNode(`${w.t} `));
+    }
+    if (run) frag.appendChild(blankSpan(run.join(' ')));
+    const card = {
+      id: `${czCtx.notePath || ''}#${czCtx.heading || ''}#m${Date.now()}`,
+      notePath: czCtx.notePath || '', noteTitle: czCtx.noteTitle || '',
+      heading: czCtx.heading || '',
+      topic: czCtx.heading || '',
+      contextHtml: frag.innerHTML,
+      answers,
+      starred: false,
+      kind: 'block',
+    };
+    await saveCards([card]);
+    backup.scheduleBackup();
+    closeCloze();
+    toast(`빈칸 ${answers.length}개짜리 카드를 넣었습니다.`);
+  };
+}
+
+/** 카드 본문에 들어갈 빈칸 — 읽기 화면의 것과 같은 모양이어야 한다. */
+function blankSpan(answer) {
+  const b = document.createElement('span');
+  b.className = 'cloze';
+  b.dataset.answer = answer;
+  b.textContent = ' '.repeat(Math.min(14, Math.max(4, answer.length)));
+  return b;
+}
+let clozeFloat = null;
+
 // ═══════════ 번호로 가기 ═══════════
 //
 // 40문항짜리 시험에서 12번으로 돌아가려면 화살표를 스물여덟 번 눌러야 했다
@@ -7036,6 +7175,7 @@ function hideSplash() {
   await loadWinMode();
   await loadSplitMem();
   initTimer();
+  initClozeMaker();
   paintVersionChip();
   await loadReadPos();
   initServiceWorker();
