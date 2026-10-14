@@ -573,11 +573,10 @@ export class PenLayer {
       if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, h, 3); ctx.fill(); }
       else ctx.fillRect(x, y, w, h);
     }
-    // ② 전체 범위 — 어디서 어디까지인지 한눈에
-    ctx.setLineDash([6, 4]);
-    ctx.strokeStyle = '#f59e0b';
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(b.l - 5, b.t - 5, b.r - b.l + 10, b.b - b.t + 10);
+    // ② 바깥 점선은 뺐다(2026-10-14).
+    //    줄 단위로 잡던 시절에는 "여기서 여기까지"를 알려주는 쓸모가 있었지만, 이제는
+    //    **낱말 단위**라 점선이 줄 전체를 두르면서 실제보다 많이 잡힌 것처럼 보인다.
+    //    칠한 자리가 곧 잡힌 자리다 — 그게 더 정확하고, 글에서 긁는 모습과도 같다.
     ctx.restore();
   }
 

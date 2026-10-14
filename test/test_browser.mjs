@@ -4823,7 +4823,11 @@ await run('저장 대기 띠', async () => {
   const items = await d.listOutbox();
   for (let i = 0; i < 5; i++) await d.bumpTries(items[0].id, '저장 실패 (403)');
   document.getElementById('syncNowBtn').click();
-  await new Promise((r2) => setTimeout(r2, 500));
+  // 진짜 네트워크를 타므로 몇백 ms로는 모자란다 — **끝날 때까지** 기다린다
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r2) => setTimeout(r2, 150));
+    if (!/중…/.test(document.getElementById('syncText').textContent)) break;
+  }
   out.push({ name: '**막힌 게 있을 때만 경고색**', ok: bar.classList.contains('stuck') });
   out.push({ name: '몇 건이 막혔는지 말해준다',
     ok: /막혀 있습니다/.test(document.getElementById('syncText').textContent),
@@ -5105,6 +5109,167 @@ await run('하단 바 고정', async () => {
       detail: `${navAt()}` });
   }
   document.getElementById('wikiPanel').classList.add('hidden');
+  return out;
+});
+
+// ══════════ 암기법 채택 — 같은 글이 수십 번 나와도 맞는 줄을 집는다 (2026-10-14) ══════════
+// "채택 (안 1)"이 섹션마다 똑같이 나온다. 소제목을 찾아 세던 방식은 소제목 글자가 조금만
+// 달라도 어긋나서 "그 줄을 못 찾았습니다"가 계속 났다. 이제 앞 섹션들의 상자 수를 더해
+// 전체에서 몇 번째인지로 바로 간다.
+await run('암기법 채택', async () => {
+  const out = [];
+  const a = await import('/js/auth.js');
+  await a.setToken('fake'); await a.setRepo('me/v');
+  // 실제 암기법 노트 꼴 — 섹션 셋, 섹션마다 같은 글의 상자 셋
+  const sec = (n) => `## ${n}. ${n}도 화상\n\n설명 ${n}.\n\n`
+    + `1️⃣ [숫자연상]\n- [ ] 채택 (안 1)\n\n2️⃣ [발음연상]\n- [ ] 채택 (안 2)\n\n`
+    + `3️⃣ [단어연상]\n- [ ] 채택 (안 3)\n- [ ] 전부 기각 (그냥 외움)\n`;
+  const RAW = `---\ntags: [t]\n---\n\n# 환경의학 암기법\n\n${sec(1)}\n${sec(2)}\n${sec(3)}`;
+  let put = null;
+  const realFetch = window.fetch;
+  window.fetch = async (u, i) => {
+    const url = String(u);
+    if (!url.includes('api.github.com')) return realFetch(u, i);
+    if (i && i.method === 'PUT') {
+      const body = JSON.parse(i.body);
+      if (!/채택\.md$/.test(decodeURIComponent(url))) put = body;
+      return { ok: true, status: 200, json: async () => ({ content: { path: 'x.md' } }) };
+    }
+    return { ok: true, status: 200, text: async () => RAW, json: async () => ({ sha: 'abc' }) };
+  };
+
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  document.getElementById('readScreen').classList.add('toc-off');
+  document.querySelectorAll('.sheet, .ask-float, #docDrawer, #docScrim').forEach((x) => x.classList.add('hidden'));
+  const d = await import('/js/db.js');
+  await d.kvSet('note_index_v2', [{ root: '02_Wiki', subject: '응급_중환자 · 암기법',
+    notes: [{ name: '환경의학_암기법', path: '02_Wiki/응급_중환자/암기법/환경의학_암기법.md' }] }]);
+  document.getElementById('docList').__groups = null;
+  document.getElementById('readDocs').click();
+  await new Promise((r) => setTimeout(r, 600));
+  const grp = document.querySelector('#docList .dd-group');
+  if (grp && !grp.classList.contains('open')) { grp.click(); await new Promise((r) => setTimeout(r, 120)); }
+  const it = document.querySelector('#docList .dd-item');
+  if (!it) { window.fetch = realFetch; out.push({ name: '노트를 연다', ok: false }); return out; }
+  it.click();
+  await new Promise((r) => setTimeout(r, 900));
+
+  out.push({ name: '섹션이 셋으로 나뉜다',
+    ok: /\/3$/.test(document.getElementById('readPos').textContent),
+    detail: document.getElementById('readPos').textContent });
+
+  // ★ **둘째 섹션**의 **둘째** 상자를 누른다 — 앞 섹션에 똑같은 글이 이미 있다
+  document.getElementById('readNext').click();
+  await new Promise((r) => setTimeout(r, 400));
+  const boxes = [...document.querySelectorAll('#readBody .task-box')];
+  out.push({ name: '그 섹션의 상자가 넷이다', ok: boxes.length === 4, detail: `${boxes.length}개` });
+  if (boxes.length < 2) { window.fetch = realFetch; return out; }
+
+  boxes[1].click();
+  await new Promise((r) => setTimeout(r, 800));
+  out.push({ name: '**실패하지 않는다**', ok: !!put, detail: put ? '올라감' : '못 찾음' });
+  if (put) {
+    const sent = decodeURIComponent(escape(atob(put.content)));
+    const marked = sent.split('\n').map((l, i) => [l, i]).filter(([l]) => /\[x\]/.test(l));
+    out.push({ name: '**딱 한 줄만 바뀐다**', ok: marked.length === 1, detail: `${marked.length}줄` });
+    // 둘째 섹션의 "채택 (안 2)" 여야 한다 — 전체에서 6번째 상자
+    const all = sent.split('\n').filter((l) => /^\s*[-*+]\s*\[[ xX]\]/.test(l));
+    out.push({ name: '**그 섹션의 그 줄이다**(앞 섹션 것이 아니다)',
+      ok: /\[x\] 채택 \(안 2\)/.test(all[5] || ''),
+      detail: all.map((l, i) => (/\[x\]/.test(l) ? `#${i}` : '')).filter(Boolean).join(',') || '없음' });
+    out.push({ name: '앞 섹션의 같은 글은 그대로',
+      ok: /\[ \] 채택 \(안 2\)/.test(all[1] || '') });
+  }
+  out.push({ name: '화면에서도 켜진다', ok: boxes[1].getAttribute('aria-checked') === 'true' });
+
+  // 섹션을 넘겼다 와도 켜진 채로 — 앱이 든 본문도 같이 고쳐야 한다
+  document.getElementById('readPrev').click();
+  await new Promise((r) => setTimeout(r, 250));
+  document.getElementById('readNext').click();
+  await new Promise((r) => setTimeout(r, 400));
+  const again = [...document.querySelectorAll('#readBody .task-box')];
+  out.push({ name: '섹션을 넘겼다 와도 그대로 켜져 있다',
+    ok: again[1] && again[1].getAttribute('aria-checked') === 'true',
+    detail: again.map((b) => b.getAttribute('aria-checked')).join(',') });
+
+  window.fetch = realFetch;
+  return out;
+});
+
+// ══════════ 옆에 뒀던 것을 기억한다 (2026-10-14 요청) ══════════
+// "스플릿 닫았다가 다시 열면 매번 문서에서 끌어다 넣는 건 문제가 있음."
+await run('나누기 기억', async () => {
+  const out = [];
+  const a = await import('/js/auth.js');
+  await a.setToken('fake'); await a.setRepo('me/v');
+  const realFetch = window.fetch;
+  window.fetch = async (u, i) => {
+    if (!String(u).includes('api.github.com')) return realFetch(u, i);
+    const n = decodeURIComponent(String(u).split('/contents/')[1] || '').split('/').pop().replace('.md', '');
+    return { ok: true, status: 200, json: async () => ({}),
+      text: async () => `# ${n}\n\n## ${n} 1장\n내용 가\n\n## ${n} 2장\n내용 나\n` };
+  };
+  const d = await import('/js/db.js');
+  await d.kvSet('split_mem', {});
+  await d.kvSet('note_index_v2', [{ root: '02_Wiki', subject: '응급_중환자', notes: [
+    { name: 'BLS본문', path: '02_Wiki/응급_중환자/BLS본문.md' },
+    { name: 'BLS암기법', path: '02_Wiki/응급_중환자/BLS암기법.md' }] }]);
+
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  document.querySelectorAll('.sheet, .ask-float, #docDrawer, #docScrim').forEach((x) => x.classList.add('hidden'));
+  // 앞 검사가 나눠둔 채로 올 수 있다 — 하나로 맞추고 시작한다
+  while (document.querySelectorAll('#readPanes .read-pane').length > 1) {
+    document.getElementById('readSplitBtn').click();
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  const openFromDrawer = async (name) => {
+    document.getElementById('docList').__groups = null;
+    document.getElementById('readDocs').click();
+    await new Promise((r) => setTimeout(r, 500));
+    const g = document.querySelector('#docList .dd-group');
+    if (g && !g.classList.contains('open')) { g.click(); await new Promise((r) => setTimeout(r, 120)); }
+    const el = [...document.querySelectorAll('#docList .dd-item .dd-name')].find((x) => x.textContent === name);
+    if (el) el.closest('.dd-item').click();
+    await new Promise((r) => setTimeout(r, 800));
+  };
+
+  await openFromDrawer('BLS본문');
+  out.push({ name: '본문을 열었다', ok: /BLS본문/.test(document.getElementById('readTitle').textContent),
+    detail: document.getElementById('readTitle').textContent });
+
+  // 나누고 오른쪽에 암기법을 띄운다
+  document.getElementById('readSplitBtn').click();
+  await new Promise((r) => setTimeout(r, 500));
+  out.push({ name: '창이 둘이 된다', ok: document.querySelectorAll('#readPanes .read-pane').length === 2 });
+  await openFromDrawer('BLS암기법');
+  const titles = () => [...document.querySelectorAll('#readPanes .pane-tab')].map((t) => t.textContent);
+  out.push({ name: '오른쪽에 암기법이 떴다', ok: titles().some((t) => /암기법/.test(t)),
+    detail: titles().join(' | ') });
+
+  // 닫는다
+  document.getElementById('readSplitBtn').click();
+  await new Promise((r) => setTimeout(r, 400));
+  out.push({ name: '닫으면 창이 하나', ok: document.querySelectorAll('#readPanes .read-pane').length === 1 });
+  const mem = await d.kvGet('split_mem');
+  out.push({ name: '**옆에 뒀던 것을 적어뒀다**',
+    ok: !!(mem && Object.values(mem).some((v) => v.some((p) => /암기법/.test(p)))),
+    detail: JSON.stringify(mem).slice(0, 80) });
+
+  // ★ 다시 나누면 그대로 돌아온다
+  document.getElementById('readSplitBtn').click();
+  await new Promise((r) => setTimeout(r, 800));
+  out.push({ name: '**다시 나누면 암기법이 되살아난다**(끌어다 넣지 않아도)',
+    ok: titles().some((t) => /암기법/.test(t)), detail: titles().join(' | ') });
+  out.push({ name: '같은 문서를 두 번 띄우지 않는다',
+    ok: titles().filter((t) => /본문/.test(t)).length <= 1, detail: titles().join(' | ') });
+
+  document.getElementById('readSplitBtn').click();
+  await new Promise((r) => setTimeout(r, 300));
+  window.fetch = realFetch;
   return out;
 });
 await browser.close();

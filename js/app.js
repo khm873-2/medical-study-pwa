@@ -3241,6 +3241,7 @@ function flushReadPos() {
 document.addEventListener('visibilitychange', () => { if (document.hidden && readPosTimer) flushReadPos(); });
 
 function openInPane(note, { pane = activePane, secIdx = 0, force = false } = {}) {
+  setTimeout(rememberSplit, 0);        // 옆칸 구성이 바뀌면 그때그때 적어둔다
   while (panes.length <= pane) panes.push({ tabs: [], active: 0 });
   const p = panes[pane];
   const i = force ? -1 : p.tabs.findIndex((t) => t.note.path === note.path);
@@ -3251,20 +3252,66 @@ function openInPane(note, { pane = activePane, secIdx = 0, force = false } = {})
 }
 
 /** 창을 둘로 가른다. 넘긴 노트가 없으면 지금 보던 것을 복제한다(같은 문서 비교). */
-function splitPane(note) {
+// ───────────── 옆에 뭘 뒀었는지 기억한다 (2026-10-14 요청) ─────────────
+//
+// "스플릿 닫았다가 다시 열면 매번 문서에서 끌어다 넣는 건 문제가 있음." 맞다.
+// BLS를 보면서 BLS 암기법을 옆에 두는 식으로 **짝이 거의 정해져 있는데**, 닫을 때마다
+// 그 사실을 버리고 있었다. 노트별로 "그때 옆에 뒀던 것"을 적어두고 다음에 되살린다.
+const SPLIT_MEM_KEY = 'split_mem';     // { 왼쪽노트경로: [오른쪽 노트 경로…] }
+let splitMem = {};
+async function loadSplitMem() { splitMem = (await kvGet(SPLIT_MEM_KEY)) || {}; }
+
+/** 지금 두 창에 뭐가 떠 있는지 적어둔다. */
+function rememberSplit() {
+  if (panes.length !== 2) return;
+  const left = panes[0].tabs[panes[0].active] || panes[0].tabs[0];
+  if (!left) return;
+  // 왼쪽에 이미 있는 것은 빼둔다 — 되살릴 때 같은 문서가 두 번 뜨면 쓸모가 없다
+  const here = new Set(panes[0].tabs.map((t) => t.note.path));
+  const right = panes[1].tabs.map((t) => t.note.path).filter((p2) => !here.has(p2));
+  if (!right.length) return;
+  splitMem[left.note.path] = right.slice(0, 4);
+  // 너무 쌓이지 않게 — 최근 60개 노트만
+  const keys = Object.keys(splitMem);
+  if (keys.length > 60) for (const k of keys.slice(0, keys.length - 60)) delete splitMem[k];
+  kvSet(SPLIT_MEM_KEY, splitMem).catch(() => {});
+}
+
+async function splitPane(note) {
   if (panes.length >= 2) return;
   const cur = reader;
   if (!cur && !note) return;
+
+  // 끌어다 놓은 게 아니라 **나누기 버튼**을 누른 경우라면, 지난번에 옆에 뒀던 걸 되살린다.
+  if (!note && cur) {
+    const want = splitMem[cur.note.path] || [];
+    const tabs = [];
+    for (const path of want) {
+      if (path === cur.note.path) continue;
+      try { tabs.push({ note: await loadNote(path), secIdx: 0 }); } catch { /* 지워졌으면 건너뛴다 */ }
+    }
+    if (tabs.length) {
+      panes.push({ tabs, active: 0 });
+      activePane = 1;
+      syncReader();
+      renderPanes({ animate: true });
+      toast(`지난번에 옆에 뒀던 ${tabs.length}개를 띄웠습니다`);
+      return;
+    }
+  }
+
   const n = note || cur.note;
   panes.push({ tabs: [{ note: n, secIdx: note ? 0 : cur.secIdx }], active: 0 });
   activePane = 1;
   syncReader();
   renderPanes({ animate: true });
+  rememberSplit();
 }
 
 /** 창 하나를 닫는다(합치기). */
 function closePane(idx) {
   if (panes.length < 2) return;
+  rememberSplit();              // 닫기 **전에** 적어둔다 — 다음에 그대로 되살리려고
   panes.splice(idx, 1);
   activePane = 0;
   document.documentElement.style.removeProperty('--pane-split');
@@ -3835,49 +3882,69 @@ async function toggleTask(btn) {
   if (!(doc && doc.path)) { toast('어느 노트인지 알 수 없습니다.'); return; }
   const want = btn.getAttribute('aria-checked') !== 'true';
   const label = btn.dataset.text || '';
-  const nth = Number(btn.dataset.idx);        // 이 글에서 몇 번째 상자인가
+  const nth = Number(btn.dataset.idx);        // 이 섹션에서 몇 번째 상자인가
   btn.disabled = true;
   try {
     const raw = await getTextIfExists(doc.path);
     if (raw == null) throw new Error('원본을 찾지 못했습니다.');
     const lines = raw.split('\n');
 
-    // 원본에서도 **같은 순서로** 센다 — 글만 보면 "채택 (안 1)"이 13개라 못 고른다.
-    // 다만 화면에는 섹션 하나만 떠 있으므로, 그 섹션의 시작 줄부터 센다.
-    const head = doc.sections[currentSecIdx()]?.heading || '';
-    let from = 0;
-    if (head) {
-      const h = lines.findIndex((l) => /^#{1,6}\s/.test(l)
-        && l.replace(/^#{1,6}\s*/, '').trim().normalize('NFC') === head.trim().normalize('NFC'));
-      if (h >= 0) from = h + 1;
+    // 원본에서 그 줄 번호를 구한다.
+    //
+    // ⚠️ 전에는 "소제목을 찾아 거기서부터 센다"였는데, 소제목 글자가 조금만 달라도
+    //    어긋나서 "그 줄을 못 찾았습니다"가 났다(2026-10-14에 계속 실패).
+    //    이제 **앞 섹션들의 상자 수를 더해** 전체에서 몇 번째인지로 바로 간다 —
+    //    섹션 본문은 앱이 이미 들고 있으니 셈이 어긋날 데가 없다.
+    const BOX = /^\s*[-*+]\s*\[([ xX])\]\s*(.*)$/;
+    const secIdx = currentSecIdx();
+    let before = 0;
+    for (let k = 0; k < secIdx; k++) {
+      before += (doc.sections[k].text.split('\n').filter((l) => BOX.test(l))).length;
     }
     const boxes = [];
-    for (let i = from; i < lines.length; i++) {
-      if (from && /^#{1,6}\s/.test(lines[i]) && i > from) break;   // 다음 섹션으로 넘어가면 끝
-      if (/^\s*[-*+]\s*\[[ xX]\]/.test(lines[i])) boxes.push(i);
-    }
-    const i = boxes[nth];
-    if (i === undefined) throw new Error('원본에서 그 줄을 못 찾았습니다 — 새로고침해 보세요.');
-    // 안전장치: 글자도 맞는지 본다. 어긋나면 손대지 않는다(엉뚱한 줄을 고치는 게 제일 나쁘다).
+    lines.forEach((l, k) => { if (BOX.test(l)) boxes.push(k); });
+
     const norm = (t) => String(t).replace(/\s+/g, ' ').trim().normalize('NFC');
-    const cur = lines[i].match(/^\s*[-*+]\s*\[([ xX])\]\s*(.*)$/);
-    if (!cur || norm(cur[2]) !== norm(label)) {
-      throw new Error('원본이 그사이 바뀐 것 같습니다 — 새로고침해 보세요.');
+    const labelOf = (k) => norm((lines[k].match(BOX) || [])[2] || '');
+    const stateOf = (k) => ((lines[k].match(BOX) || [])[1] || ' ') === ' ';   // true = 비어 있음
+
+    let at = boxes[before + nth];
+    // 셈이 어긋났으면(섹션 나누기가 원본과 다를 수 있다) **글자로** 찾아본다.
+    // 지금 상태가 맞는 것이 딱 하나면 그것이 분명하다.
+    if (at === undefined || labelOf(at) !== norm(label) || stateOf(at) !== want) {
+      const cands = boxes.filter((k) => labelOf(k) === norm(label) && stateOf(k) === want);
+      if (cands.length === 1) at = cands[0];
+      else if (cands.length > 1) {
+        // 여러 개면 **섹션 안에서의 순서**로 고른다 — 그 섹션 몫만큼 잘라 nth 번째
+        const inSec = doc.sections[secIdx].text.split('\n').filter((l) => BOX.test(l)).length;
+        const slice = boxes.slice(before, before + inSec)
+          .filter((k) => labelOf(k) === norm(label) && stateOf(k) === want);
+        at = slice.length ? slice[Math.min(nth, slice.length - 1)] : cands[0];
+      } else at = undefined;
     }
-    lines[i] = lines[i].replace(/\[([ xX])\]/, want ? '[x]' : '[ ]');
+    if (at === undefined) {
+      throw new Error(`"${label.slice(0, 20)}" 줄을 원본에서 못 찾았습니다 — ↻ 로 새로고침해 보세요.`);
+    }
+
+    lines[at] = lines[at].replace(/\[([ xX])\]/, want ? '[x]' : '[ ]');
     await putFile(doc.path, lines.join('\n'),
       `iPad: ${want ? '채택' : '취소'} — ${label.slice(0, 40)}`);
 
     btn.setAttribute('aria-checked', String(want));
     btn.textContent = want ? '☑' : '☐';
     btn.closest('.task')?.classList.toggle('done', want);
-
-    if (want) {
-      // ★ 체크만 하면 vault 쪽에서 "뭘 고른 건지"를 다시 읽어내야 한다. 고른 **덩어리를
-      //   통째로** 따로 적어둔다 — /lecture-integrate가 그대로 집어 위키에 녹인다
-      //   (2026-10-14: "저거 통째로 넣고 클로드가 가공을 해서 위키 안에 넣든가 해야지").
-      await recordPick(doc, i, lines, label);
+    // 앱이 들고 있는 섹션 본문도 같이 고친다 — 안 그러면 섹션을 넘겼다 오면 되돌아간다
+    const sec = doc.sections[secIdx];
+    if (sec) {
+      let seen = -1;
+      sec.text = sec.text.split('\n').map((l) => {
+        if (!BOX.test(l)) return l;
+        seen++;
+        return seen === nth ? l.replace(/\[([ xX])\]/, want ? '[x]' : '[ ]') : l;
+      }).join('\n');
     }
+
+    if (want) await recordPick(doc, at, lines, label);
     toast(want ? '✅ 채택했습니다 — 고른 내용까지 vault로' : '선택을 풀었습니다');
   } catch (e) {
     toast(`바꾸지 못했습니다: ${e.message}`);
@@ -6914,6 +6981,7 @@ function hideSplash() {
   await applyTheme();
   await loadDisplay();
   await loadWinMode();
+  await loadSplitMem();
   initTimer();
   paintVersionChip();
   await loadReadPos();
