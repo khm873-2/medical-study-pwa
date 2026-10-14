@@ -3622,6 +3622,8 @@ function ensureReaderPen() {
     onCapture: (box) => captureFromPen(readerPen, box),
   });
   window.__penForTest = readerPen;     // 미리보기 동작을 테스트가 들여다본다
+  // 카드 창도 같은 방식으로 열어볼 수 있게 둔다 — 펜 없이 화면을 세우려면 이 길이 필요하다
+  window.__openCardFloat = openCardFloat;
   readerPen.setTool(penTool);   // 창을 바꿔 펜을 새로 만들어도 하던 모드가 이어진다
 }
 
@@ -4108,6 +4110,67 @@ function renderCardFloat() {
   if (cfTab === 'new') renderCfNew(); else renderCfList();
 }
 
+/**
+ * 카드 본문의 낱말을 **눌러서** 빈칸으로 만들거나 되돌린다 (2026-10-14 요청).
+ *
+ * "추천 빈칸 및 카드 좋은데 … 내가 빈칸을 선택하고 싶다니까? 표나 문장 같은 게 나왔을 때
+ *  글자를 쭉 띄워놓고 내가 툭툭 누르는 식으로"
+ *
+ * 추천은 그대로 두고 **고칠 길만** 연다. 표도 문장과 똑같이 칸마다 낱말이 되므로
+ * 표 카드에서도 그대로 쓸 수 있다.
+ */
+function makeWordsTappable(root, card) {
+  // ① 이미 빈칸인 것 — 누르면 되돌린다
+  root.querySelectorAll('.cloze').forEach((el) => {
+    el.classList.add('pickable');
+    el.onclick = (e) => {
+      e.stopPropagation();
+      const ans = el.dataset.answer || '';
+      el.replaceWith(document.createTextNode(ans));
+      card.answers = (card.answers || []).filter((x) => x !== ans);
+      card.contextHtml = root.innerHTML.replace(/ class="cloze pickable"/g, ' class="cloze"');
+      renderCfNew();
+    };
+  });
+
+  // ② 아직 글자인 것 — 낱말마다 눌릴 수 있게 감싼다
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(n) {
+      if (!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      if (n.parentElement && n.parentElement.closest('.cloze')) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const texts = [];
+  let n;
+  while ((n = walk.nextNode())) texts.push(n);
+  for (const node of texts) {
+    const frag = document.createDocumentFragment();
+    for (const piece of node.nodeValue.split(/(\s+)/)) {
+      if (!piece) continue;
+      if (/^\s+$/.test(piece)) { frag.appendChild(document.createTextNode(piece)); continue; }
+      const w = document.createElement('span');
+      w.className = 'cf-w';
+      w.textContent = piece;
+      w.onclick = (e) => {
+        e.stopPropagation();
+        const b = document.createElement('span');
+        b.className = 'cloze';
+        b.dataset.answer = piece;
+        b.textContent = ' '.repeat(Math.min(14, Math.max(4, piece.length)));
+        w.replaceWith(b);
+        card.answers = [...(card.answers || []), piece];
+        card.contextHtml = root.innerHTML
+          .replace(/<span class="cf-w">([^<]*)<\/span>/g, '$1')
+          .replace(/ class="cloze pickable"/g, ' class="cloze"');
+        renderCfNew();
+      };
+      frag.appendChild(w);
+    }
+    node.replaceWith(frag);
+  }
+}
+
 /** 빈칸을 가리거나 드러낸다. 답은 `data-answer`에 있다(reader.js blankNode). */
 function paintCloze(root, shown) {
   root.querySelectorAll('.cloze').forEach((el) => {
@@ -4139,10 +4202,15 @@ function renderCfNew() {
     body.appendChild(t);
   }
   const q = document.createElement('div');
-  q.className = 'cf-q';
+  q.className = 'cf-q cf-pick';
   q.innerHTML = c.contextHtml || '';
+  makeWordsTappable(q, c);        // 낱말을 눌러 빈칸을 더하고 뺀다(2026-10-14 요청)
   paintCloze(q, shown);
   body.appendChild(q);
+  const hint = document.createElement('div');
+  hint.className = 'cf-hint muted';
+  hint.textContent = '낱말을 눌러 직접 가릴 수 있습니다 — 빈칸을 누르면 다시 보입니다.';
+  body.appendChild(hint);
   if (shown && (c.answers || []).length) {
     const a = document.createElement('div');
     a.className = 'cf-a';
@@ -4372,11 +4440,39 @@ document.getElementById('readAwake').onclick = async () => {
 };
 
 // 선택한 텍스트로 질문 — 올가미보다 정확해서 읽기 모드에선 이쪽을 쓴다
+/**
+ * 아래 바의 AI 단추 — **언제 눌러도 뭔가 된다**(2026-10-14 요청).
+ *   · 글을 긁어뒀으면 그 부분을 묻는다
+ *   · 지난 답이 있으면 그걸 도로 띄운다(이어서 물으면 된다)
+ *   · 둘 다 없으면 빈 질문 칸을 열어준다 — 전에는 "먼저 드래그하세요"로 막았다
+ */
 document.getElementById('readAsk').onclick = () => {
   const sel = String(window.getSelection() || '').trim();
-  if (!sel) { toast('먼저 궁금한 부분을 드래그해서 선택하세요.'); return; }
-  openAskFromReader(sel, null);
+  if (sel) { openAskFromReader(sel, null); return; }
+  if (askLog.length) { replayAsk(askLog[0]); return; }
+  openBlankAsk();
 };
+
+/** 묻을 거리 없이 창만 연다 — 질문 칸에 바로 커서를 둔다. */
+function openBlankAsk() {
+  const doc = currentDoc();
+  const sec = doc && doc.sections ? doc.sections[currentSecIdx()] : null;
+  askCtx = {
+    term: '', qnum: '—', question: null,
+    qtext: doc ? `${doc.title}${sec ? ` · ${sec.heading}` : ''}` : '',
+    noteText: sec ? sec.text : '',
+  };
+  afEl('afQ').textContent = '새 질문';
+  afEl('afQFull').textContent = '';
+  afEl('afQWrap').open = false;
+  afEl('afBody').innerHTML = '<p class="muted">아래 칸에 궁금한 것을 적어 물어보세요. '
+    + '지금 보고 있는 노트를 같이 읽고 답합니다.</p>';
+  afEl('afStatus').textContent = '';
+  afEl('askFloat').classList.remove('hidden');
+  updateAskDock();
+  restoreFloatBox();
+  setTimeout(() => afEl('afInput').focus(), 80);
+}
 
 /** 읽기 모드에서 긁었을 때 — 여기서도 바로 묻지 않고 팝업으로 고르게 한다. */
 function openAskFromReader(term, info) {
@@ -4474,7 +4570,7 @@ function openAskFloat(term) {
   afEl('afStatus').textContent = '';
   afEl('afLogList').classList.add('hidden');
   f.classList.remove('hidden');
-  afEl('askDock').classList.add('hidden');
+  updateAskDock();
   restoreFloatBox();
 }
 
@@ -4521,14 +4617,18 @@ async function rememberAsk(term, html, note) {
 
 /** 접혀 있을 때 귀퉁이에 뜨는 단추. 읽기 화면에서만 보인다. */
 function updateAskDock() {
-  const dock = afEl('askDock');
-  if (!dock) return;
+  // 떠다니는 단추를 없앴다(2026-10-14 지적: "오른쪽 아래에 접을 수도 없이 떠 있어서
+  // 화면을 가림"). 대신 **아래 바의 AI 단추**에 작은 점을 찍는다 — 거기 자리가 있고,
+  // 페이지를 넘기는 손이 이미 가 있는 자리다.
+  const dot = afEl('readAskDot');
+  if (!dot) return;
   const open = !afEl('askFloat').classList.contains('hidden');
-  const here = document.body.dataset.screen === 'readScreen';
-  dock.classList.toggle('hidden', open || !here || !askLog.length);
-  if (askLog.length) {
-    afEl('askDockText').textContent = selPreview(askLog[0].term, 16, 0).replace(/ … $/, '…');
-    dock.title = `AI 답변 다시 보기 — ${askLog[0].term}`;
+  dot.classList.toggle('hidden', open || !askLog.length);
+  const btn = afEl('readAsk');
+  if (btn) {
+    btn.title = askLog.length
+      ? `AI에게 묻기 — 지난 답: ${selPreview(askLog[0].term, 20, 0).replace(/ … $/, '…')}`
+      : 'AI에게 묻기 — 긁어뒀으면 그 부분을, 아니면 새로 묻습니다';
   }
 }
 
@@ -4546,7 +4646,7 @@ function replayAsk(item) {
     : '지난 답변';
   afEl('afLogList').classList.add('hidden');
   afEl('askFloat').classList.remove('hidden');
-  afEl('askDock').classList.add('hidden');
+  updateAskDock();
   restoreFloatBox();
   updateAfSaveLabel();
 }
@@ -4603,7 +4703,26 @@ function initAskFloat() {
 
   afEl('afClose').onclick = closeAskFloat;
   afEl('afLog').onclick = toggleAskLog;
-  afEl('askDock').onclick = () => { if (askLog.length) replayAsk(askLog[0]); };
+  // 새 질문 — 답을 보고 나면 이어서 묻고 싶어진다(2026-10-14 요청)
+  const send = () => {
+    const q = afEl('afInput').value.trim();
+    if (!q) { afEl('afInput').focus(); return; }
+    afEl('afInput').value = '';
+    const doc = currentDoc();
+    const sec = doc && doc.sections ? doc.sections[currentSecIdx()] : null;
+    askCtx = {
+      term: q, qnum: '—', question: null,
+      qtext: doc ? `${doc.title}${sec ? ` · ${sec.heading}` : ''}` : '',
+      noteText: sec ? sec.text : '',
+    };
+    askInReader(q);
+  };
+  afEl('afSend').onclick = send;
+  afEl('afInput').onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); send(); }
+    else if (e.key === 'Escape') { e.preventDefault(); afEl('afInput').blur(); }
+  };
+
   loadAskLog();
 
   // 긁는 동안 버튼 글씨를 바꿔 "지금 누르면 뭐가 저장되는지" 알려준다

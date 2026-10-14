@@ -3953,8 +3953,13 @@ await run('단축키 안내', () => {
 await run('AI 답변이 남는다', () => {
   const out = [];
   const f = document.getElementById('askFloat');
-  const dock = document.getElementById('askDock');
-  out.push({ name: '접으면 돌아갈 단추가 있다', ok: !!dock });
+  // 떠다니던 알약은 없앴다 — **아래 바의 AI 단추**가 그 자리를 맡는다(2026-10-14).
+  out.push({ name: '떠다니는 알약이 화면을 안 가린다', ok: !document.getElementById('askDock') });
+  out.push({ name: '아래 바에 AI 단추가 있다', ok: !!document.getElementById('readAsk') });
+  out.push({ name: '지난 답이 있으면 점으로 알린다', ok: !!document.getElementById('readAskDot') });
+  out.push({ name: '로봇 대신 그림 아이콘', ok: !!document.querySelector('#readAsk svg') });
+  out.push({ name: '**창 안에서 새로 물을 수 있다**', ok: !!document.getElementById('afInput') });
+  out.push({ name: '보내는 버튼도 있다', ok: !!document.getElementById('afSend') });
   out.push({ name: '지난 질문 목록을 여는 단추가 있다', ok: !!document.getElementById('afLog') });
   document.getElementById('afLog').click();
   out.push({ name: '눌러서 펼쳐진다', ok: !document.getElementById('afLogList').classList.contains('hidden') });
@@ -5605,6 +5610,149 @@ await run('손으로 빈칸 만들기', async () => {
 
   for (const c of await d.allCards()) await d.deleteCard(c.id);
   body.innerHTML = '';
+  return out;
+});
+
+// ══════════ 추천 카드에서 빈칸을 직접 고친다 (2026-10-14 요청) ══════════
+// "추천 카드 기능도 좋음... 근데 오래 암기할 때는 내가 원하는 걸 외워야 할 것 같음"
+await run('카드 빈칸 직접 고치기', async () => {
+  const out = [];
+  const { renderMarkdown } = await import('/js/markdown.js');
+  const R = await import('/js/reader.js');
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  document.querySelectorAll('.sheet, #docDrawer, #docScrim').forEach((x) => x.classList.add('hidden'));
+
+  // 표에서도 되어야 한다 — "표나 문장 같은 게 나왔을 때"
+  const body = document.getElementById('readBody');
+  body.innerHTML = renderMarkdown('| 깊이 | 소견 |\n|---|---|\n| 2도 표재 | **capillary refill 정상** |');
+  await new Promise((r) => setTimeout(r, 150));
+  const r0 = body.getBoundingClientRect();
+  const cards = R.cardsFromBox(body, { l: r0.left, t: r0.top, r: r0.right, b: r0.bottom },
+    { notePath: 'x.md', noteTitle: 'x', heading: '화상 깊이' });
+  out.push({ name: '표에서 카드가 만들어진다', ok: cards.length > 0, detail: `${cards.length}장` });
+  if (!cards.length) return out;
+
+  // 카드 창에 띄운다. 펜을 흉내 내는 대신 앱이 열어두는 통로를 쓴다(펜과 같은 방식).
+  document.getElementById('cardFloat').classList.add('hidden');
+  document.getElementById('cfBody').innerHTML = '';
+  if (typeof window.__openCardFloat !== 'function') {
+    out.push({ name: '카드 창을 열 수 있다', ok: false, detail: '통로가 없다' });
+    body.innerHTML = ''; return out;
+  }
+  window.__openCardFloat(cards);
+  await new Promise((r) => setTimeout(r, 400));
+  const q = document.querySelector('#cfBody .cf-q');
+  out.push({ name: '카드 창이 열린다', ok: !!q,
+    detail: q ? '' : `cfBody: ${(document.getElementById('cfBody') || {}).textContent || '없음'}` });
+  if (!q) { body.innerHTML = ''; return out; }
+
+  const words = [...q.querySelectorAll('.cf-w')];
+  out.push({ name: '**낱말마다 누를 수 있다**', ok: words.length >= 2,
+    detail: `${words.length}개: ${words.slice(0, 3).map((w) => w.textContent).join(' ')}` });
+  out.push({ name: '뭘 하면 되는지 적혀 있다',
+    ok: /낱말을 눌러/.test((document.querySelector('#cfBody .cf-hint') || {}).textContent || '') });
+
+  const before = (document.querySelectorAll('#cfBody .cloze') || []).length;
+  if (!words.length) { document.getElementById('cfClose').click(); body.innerHTML = ''; return out; }
+  const pick = words.find((w) => /2도|표재|깊이/.test(w.textContent)) || words[0];
+  const picked = pick.textContent;
+  pick.click();
+  await new Promise((r) => setTimeout(r, 200));
+  const after = document.querySelectorAll('#cfBody .cloze').length;
+  out.push({ name: '**누르면 빈칸이 하나 늘어난다**', ok: after === before + 1,
+    detail: `${before} → ${after}` });
+  out.push({ name: '고른 말이 답에 들어간다',
+    ok: (cards[0].answers || []).includes(picked), detail: (cards[0].answers || []).join(' / ') });
+
+  // 빈칸을 누르면 되돌아온다
+  const blank = document.querySelector('#cfBody .cloze.pickable');
+  out.push({ name: '빈칸도 누를 수 있다', ok: !!blank });
+  if (blank) {
+    const n0 = document.querySelectorAll('#cfBody .cloze').length;
+    blank.click();
+    await new Promise((r) => setTimeout(r, 200));
+    out.push({ name: '**빈칸을 누르면 다시 보인다**',
+      ok: document.querySelectorAll('#cfBody .cloze').length === n0 - 1,
+      detail: `${n0} → ${document.querySelectorAll('#cfBody .cloze').length}` });
+  }
+
+  // 추천은 그대로 남아 있다
+  out.push({ name: '추천 빈칸도 그대로 있다(추천 기능은 유지)',
+    ok: document.querySelectorAll('#cfBody .cloze').length > 0 });
+
+  document.getElementById('cfClose').click();
+  body.innerHTML = '';
+  return out;
+});
+
+// ══════════ 언제든 물을 수 있다 (2026-10-14 요청) ══════════
+// "이렇게 나오면 새로운 질문은 어디서 함? 지금 할 데가 없는데?"
+await run('새 질문 하기', async () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  document.querySelectorAll('.sheet, #docDrawer, #docScrim, #selPop').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('askFloat').classList.add('hidden');
+  window.getSelection().removeAllRanges();
+  const d = await import('/js/db.js');
+  await d.kvSet('ask_log', []);
+  await new Promise((r) => setTimeout(r, 120));
+
+  // 긁은 것도 지난 답도 없는데 눌러본다 — 전에는 "먼저 드래그하세요"로 막혔다
+  document.getElementById('readAsk').click();
+  await new Promise((r) => setTimeout(r, 300));
+  const f = document.getElementById('askFloat');
+  out.push({ name: '**아무것도 안 긁었어도 창이 열린다**', ok: !f.classList.contains('hidden') });
+  out.push({ name: '질문 칸에 바로 커서가 간다',
+    ok: document.activeElement.id === 'afInput', detail: document.activeElement.id });
+  out.push({ name: '뭘 하면 되는지 적혀 있다',
+    ok: /궁금한 것을 적어/.test(document.getElementById('afBody').textContent) });
+  out.push({ name: '어느 노트를 보고 답하는지 알려준다',
+    ok: /노트를 같이 읽고/.test(document.getElementById('afBody').textContent) });
+
+  // 빈 칸으로는 안 보낸다
+  document.getElementById('afInput').value = '   ';
+  document.getElementById('afSend').click();
+  await new Promise((r) => setTimeout(r, 150));
+  out.push({ name: '빈 칸으로는 안 보낸다',
+    ok: /궁금한 것을 적어/.test(document.getElementById('afBody').textContent) });
+
+  // 실제로 물어본다(가짜 응답)
+  const realFetch = window.fetch;
+  window.fetch = async (u, i) => {
+    if (!String(u).includes('generativelanguage')) return realFetch(u, i);
+    const body = 'data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ text: '압박분율은 60% 이상입니다.' }] } }] }) + '\n\n';
+    return { ok: true, status: 200, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(body)); c.close(); } }) };
+  };
+  const g = await import('/js/gemini.js');
+  await g.setKey('fake-key-for-ask');
+  g.resetLimiter();
+  document.getElementById('afInput').value = '압박분율 목표는?';
+  document.getElementById('afInput').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  for (let i = 0; i < 40 && !/압박분율은/.test(document.getElementById('afBody').textContent); i++) {
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  out.push({ name: '**Enter로 물어본다**', ok: /압박분율은/.test(document.getElementById('afBody').textContent),
+    detail: document.getElementById('afBody').textContent.slice(0, 40) });
+  out.push({ name: '물어본 뒤 칸이 비워진다', ok: document.getElementById('afInput').value === '' });
+  out.push({ name: '질문이 제목에 남는다', ok: /압박분율/.test(document.getElementById('afQ').textContent),
+    detail: document.getElementById('afQ').textContent });
+
+  // 접으면 아래 바에 점이 뜬다
+  document.getElementById('afClose').click();
+  await new Promise((r) => setTimeout(r, 200));
+  out.push({ name: '**접으면 아래 바에 점으로 알린다**',
+    ok: !document.getElementById('readAskDot').classList.contains('hidden') });
+  out.push({ name: '다시 누르면 그 답이 돌아온다',
+    ok: (document.getElementById('readAsk').click(),
+      await new Promise((r) => setTimeout(() => r(/압박분율은/.test(document.getElementById('afBody').textContent)), 300))) });
+
+  window.fetch = realFetch;
+  await g.setKey('');
+  document.getElementById('afClose').click();
   return out;
 });
 await browser.close();

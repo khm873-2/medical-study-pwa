@@ -230,6 +230,11 @@ export class PenLayer {
       const keepA = (this._pending && this._pending.length && this._span) ? this._span.a : a0;
       this._span = { a: keepA, z: z0 };
       this._lastSpan = this._span;
+      // ★ **손을 떼기 직전의 범위를 여기서 확정한다**(2026-10-14 신고: "뗄 때 네모가
+      //   팍 튀면서 범위가 달라진다"). 화면은 한 프레임에 한 번만 그리므로 마지막
+      //   몇 번의 움직임은 아직 반영되지 않았을 수 있고, 그 상태로 확정하면 보던 것과
+      //   다른 범위가 잡힌다. `_cur`가 **아직 살아 있는 지금** 다시 재면 정확히 맞는다.
+      if (!this.erasing && !this.writing) this._refreshPreview();
     }
     this._cur = null;
 
@@ -288,7 +293,15 @@ export class PenLayer {
    * 보이는 것과 잘리는 것이 어긋나면 안 된다.
    */
   _showCropBox() {
-    const raw = this._liveBounds();
+    // ⚠️ 글 고르기와 **다른 자를 써야 한다**.
+    //    고르기는 "시작점↔현재점"으로 재야 되돌리기가 되는데, 네모 치기는 그러면
+    //    손으로 한 바퀴 둘러 그릴 때 끝점이 시작점으로 돌아와 상자가 사그라든다.
+    //    그리고 빠르게 그으면 마지막 몇 점이 아직 안 그려진 채로 손을 떼서,
+    //    확정될 때 네모가 **팍 튀었다**(2026-10-14 신고).
+    //    여기서는 **지나온 자취 전체**를 감싼다 — 그으면 커지기만 하므로 튈 일이 없다.
+    const parts = [...(this._pending || [])];
+    if (this._cur) parts.push(this._cur);
+    const raw = boundsOf(parts) || this._liveBounds();
     this._previewKind = this.capturing ? 'crop' : 'card';
     this._previewBox = raw && (raw.r - raw.l) > 0 && (raw.b - raw.t) > 0 ? raw : null;
     this._lastLive = raw;
