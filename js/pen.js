@@ -159,6 +159,9 @@ export class PenLayer {
   }
 
   _down(e) {
+    // 일반 모드 — 펜을 손가락처럼 쓴다. 긁지도, 그리지도 않는다.
+    // 모드를 한 바퀴 돌려 "아무것도 안 하는 상태"로 가려는 길이 없었다(2026-10-14 지적).
+    if (this.tool === 'off') return;
     if (!this._isPen(e)) return;          // 손가락은 통과 → 평소대로 스크롤·탭
     // UI 위(팝업·버튼)에서는 펜도 평범한 포인터로 동작해야 한다.
     // 펜으로 네모를 그려 띄운 팝업을 손으로만 눌러야 하는 건 말이 안 된다(2026-10-09).
@@ -718,7 +721,9 @@ export class PenLayer {
   /**
    * 펜으로 무엇을 할지 — **하나만** 켜진다.
    *
-   *   select  긁으면 글이 잡힌다(기본)
+   *   off     펜이 아무것도 안 한다 — **평범한 손가락처럼**. 스크롤·버튼 누르기·
+   *           브라우저 기본 글자 선택이 그대로 된다(2026-10-14 요청).
+   *   select  긁으면 글이 잡힌다
    *   write   그리면 필기로 남는다
    *   erase   지나가면 지워진다
    *   card    네모 치면 그 범위로 카드
@@ -730,7 +735,7 @@ export class PenLayer {
    * 이제 상태가 하나다 — 끌 때 다른 게 같이 꺼질 길이 없다.
    */
   setTool(tool) {
-    this.tool = ['select', 'write', 'erase', 'card', 'shot'].includes(tool) ? tool : 'select';
+    this.tool = ['off', 'select', 'write', 'erase', 'card', 'shot'].includes(tool) ? tool : 'select';
     this.erasing = this.tool === 'erase';
     this.capturing = this.tool === 'shot';
     this.carding = this.tool === 'card';

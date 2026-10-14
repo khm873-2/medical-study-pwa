@@ -5755,6 +5755,67 @@ await run('새 질문 하기', async () => {
   document.getElementById('afClose').click();
   return out;
 });
+
+// ══════════ 퀴즈에서도 AI를 부르고, 옆 패널 버튼이 읽히는가 (2026-10-14) ══════════
+// "AI 질문한 거 볼 수 있는 거 아래 바에 띄우라고 하지 않았나? 이거 왜 없음?"
+// "오른쪽에 띄워놓은 창의 ✕ 옆 기호는 뭐임? 눌러도 동작도 안 하는데?"
+await run('퀴즈 AI · 옆 패널 버튼', async () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'quizScreen';
+  document.getElementById('quizScreen').classList.add('with-side');
+  document.getElementById('wikiPanel').classList.remove('hidden');
+  document.querySelectorAll('.sheet, .ask-float, #docDrawer, #docScrim').forEach((x) => x.classList.add('hidden'));
+  await new Promise((r) => setTimeout(r, 200));
+
+  // ① 퀴즈 아래 바에도 AI 단추
+  const ask = document.getElementById('quizAsk');
+  out.push({ name: '**퀴즈 아래 바에 AI 단추가 있다**', ok: !!ask });
+  out.push({ name: '읽기 화면과 같은 그림',
+    ok: !!ask && ask.querySelector('svg').innerHTML
+      === document.getElementById('readAsk').querySelector('svg').innerHTML });
+  out.push({ name: '지난 답을 알리는 점도 있다', ok: !!document.getElementById('quizAskDot') });
+  out.push({ name: '아래 바 안에 있다(떠다니지 않는다)',
+    ok: !!ask && !!ask.closest('.quiz-nav') });
+
+  const d = await import('/js/db.js');
+  // 앞 검사에서 물어본 것이 남아 있다 — 그러면 점이 **떠 있어야** 맞다
+  const dot = document.getElementById('quizAskDot');
+  const quizHidden = dot.classList.contains('hidden');
+  const readHidden = document.getElementById('readAskDot').classList.contains('hidden');
+  out.push({ name: '두 화면의 점이 같은 상태다(질문기록을 같이 쓴다)',
+    ok: quizHidden === readHidden,
+    detail: `퀴즈 ${quizHidden ? '숨김' : '보임'} / 읽기 ${readHidden ? '숨김' : '보임'}` });
+
+  ask.click();
+  await new Promise((r) => setTimeout(r, 400));
+  out.push({ name: '**눌러서 물을 수 있다**(막히지 않는다)',
+    ok: !document.getElementById('askFloat').classList.contains('hidden') });
+  out.push({ name: '질문 칸이 있다', ok: !!document.getElementById('afInput') });
+  document.getElementById('afClose').click();
+
+  // ② 옆 패널의 "다른 노트" — 알 수 없는 기호였다
+  const docs = document.getElementById('wikiDocs');
+  out.push({ name: '**글씨로 뭘 하는 버튼인지 보인다**', ok: !!docs && /노트/.test(docs.textContent),
+    detail: docs ? docs.textContent : '없음' });
+  out.push({ name: '아이콘이 아니라 글씨 버튼', ok: !!docs && docs.classList.contains('txt-btn') });
+
+  await d.kvSet('note_index_v2', [{ root: '02_Wiki', subject: '응급_중환자',
+    notes: [{ name: '응급중환자_환경의학', path: '02_Wiki/응급_중환자/응급중환자_환경의학.md' }] }]);
+  document.getElementById('docList').__groups = null;
+  const a = await import('/js/auth.js');
+  await a.setToken('fake'); await a.setRepo('me/v');
+  docs.click();
+  await new Promise((r) => setTimeout(r, 900));
+  out.push({ name: '**눌러서 서랍이 열린다**',
+    ok: !document.getElementById('docDrawer').classList.contains('hidden') });
+  out.push({ name: '노트가 실제로 나온다',
+    ok: document.querySelectorAll('#docList .dd-group, #docList .dd-item').length > 0,
+    detail: document.getElementById('docList').textContent.slice(0, 40) });
+  document.getElementById('docClose').click();
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════

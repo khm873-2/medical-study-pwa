@@ -1039,7 +1039,7 @@ function handlePenTap(el) {
 
 document.getElementById('toolUndo').onclick = () => pen && pen.undo();
 document.getElementById('toolClear').onclick = () => pen && pen.clear();
-document.getElementById('toolErase').onclick = () => setTool(penTool === 'erase' ? 'write' : 'erase');
+document.getElementById('toolErase').onclick = () => setTool(penTool === 'erase' ? 'off' : 'erase');
 document.getElementById('toolWiki').onclick = () => { closeOverview(); toggleWiki(); };
 // AI 해설도 위키처럼 탭으로 — 질문할 때마다 자동으로 열리기만 하던 걸 직접 열고 닫게 한다
 document.getElementById('toolAi').onclick = () => {
@@ -1780,7 +1780,7 @@ function showCapturePreview(blob) {
 }
 let lastCapture = null;
 
-document.getElementById('toolCapture').onclick = () => setTool(penTool === 'shot' ? 'select' : 'shot');
+document.getElementById('toolCapture').onclick = () => setTool(penTool === 'shot' ? 'off' : 'shot');
 
 // ---------- 문제 뜯어보기 ----------
 // 지문을 단서별로 끊어 "시험에서 이게 뭘 뜻하는지"를 붙인다.
@@ -3108,6 +3108,7 @@ const mm = (id, fn) => { document.getElementById(id).onclick = () => { closeMore
 mm('mmCards', openCardManager);
 mm('mmAwake', () => document.getElementById('readAwake').click());
 mm('mmTts', () => toggleTts());
+mm('mmClear', () => document.getElementById('toolClear').click());
 mm('mmTop', () => scrollReadTop());
 mm('mmKeys', () => showKeyHelp());
 
@@ -3630,14 +3631,14 @@ function ensureReaderPen() {
 // ---------- 읽다가 바로 카드 만들기 ----------
 // "이 부분 외웠나?" 싶을 때 펜으로 네모 → 그 안의 **굵게·기울임·하이라이트**가
 // 빈칸이 되고 나머지 문장이 문제가 된다. 되새김질용(2026-10-10 요청).
-function readerCardMode(on) { setTool(on ? 'card' : 'select'); }
+function readerCardMode(on) { setTool(on ? 'card' : 'off'); }
 
 // 카드 버튼 = **네모 치기 모드만** 켠다(2026-10-13). 팝업은 네모를 쳐서 후보가
 // 생겼을 때만 뜬다 — 누르자마자 창이 뜨면 화면만 가린다.
 // 카드를 보고 지우는 건 "카드" 메뉴(readCards)가 따로 맡는다.
-document.getElementById('readMakeCard').onclick = () => setTool(penTool === 'card' ? 'select' : 'card');
-document.getElementById('readCapture').onclick = () => setTool(penTool === 'shot' ? 'select' : 'shot');
-document.getElementById('readShot').onclick = () => setTool(penTool === 'shot' ? 'select' : 'shot');
+document.getElementById('readMakeCard').onclick = () => setTool(penTool === 'card' ? 'off' : 'card');
+document.getElementById('readCapture').onclick = () => setTool(penTool === 'shot' ? 'off' : 'shot');
+document.getElementById('readShot').onclick = () => setTool(penTool === 'shot' ? 'off' : 'shot');
 
 function makeCardsFromBox(box) {
   if (!reader) return;
@@ -4385,6 +4386,7 @@ let penTool = 'select';
 
 /** 버튼 짝: [도구, 읽기화면 버튼, 퀴즈화면 버튼] */
 const TOOL_BTNS = [
+  ['off', 'readOff', 'toolOff'],
   ['select', 'readSelect', 'toolSelect'],
   ['write', 'readPen', 'toolWrite'],
   ['erase', 'readPen', 'toolErase'],
@@ -4393,6 +4395,7 @@ const TOOL_BTNS = [
 ];
 
 const TOOL_SAY = {
+  off: '일반 — 펜이 아무것도 안 합니다',
   select: '고르기 — 긁으면 글이 잡힙니다',
   write: '필기 — 그리면 손글씨로 남습니다',
   erase: '지우개 — 손글씨 위를 지나가면 지워집니다',
@@ -4406,6 +4409,8 @@ function setTool(tool, { quiet = false } = {}) {
 
   // 버튼 표시 — 켜진 것 하나만 밝다
   const on = (id, yes) => { const el = document.getElementById(id); if (el) el.classList.toggle('active', yes); };
+  on('readOff', penTool === 'off');
+  on('toolOff', penTool === 'off');
   on('readSelect', penTool === 'select');
   on('toolSelect', penTool === 'select');
   on('readPen', penTool === 'write' || penTool === 'erase');
@@ -4425,11 +4430,18 @@ function setTool(tool, { quiet = false } = {}) {
 /** 옛 이름 — 아직 부르는 데가 있어서 남긴다. */
 function setPenMode(m) { setTool(m === 'erase' ? 'erase' : 'select', { quiet: true }); }
 
-document.getElementById('readSelect').onclick = () => setTool('select');
+// 같은 버튼을 다시 누르면 **일반으로 돌아간다** — 모드를 빠져나갈 길이 없었다(2026-10-14)
+document.getElementById('readOff').onclick = () => setTool('off');
+document.getElementById('toolOff').onclick = () => setTool('off');
+document.getElementById('readSelect').onclick = () =>
+  setTool(penTool === 'select' ? 'off' : 'select');
+// 필기 → 지우개 → 일반 → 필기. 끄는 길이 있어야 펜을 손가락처럼 쓸 수 있다.
 document.getElementById('readPen').onclick = () =>
-  setTool(penTool === 'write' ? 'erase' : 'write');   // 필기 ↔ 지우개
-document.getElementById('toolSelect').onclick = () => setTool('select');
-document.getElementById('toolWrite').onclick = () => setTool('write');
+  setTool(penTool === 'write' ? 'erase' : (penTool === 'erase' ? 'off' : 'write'));
+document.getElementById('toolSelect').onclick = () =>
+  setTool(penTool === 'select' ? 'off' : 'select');
+document.getElementById('toolWrite').onclick = () =>
+  setTool(penTool === 'write' ? 'off' : 'write');
 
 document.getElementById('readAwake').onclick = async () => {
   const btn = document.getElementById('readAwake');
@@ -4446,12 +4458,19 @@ document.getElementById('readAwake').onclick = async () => {
  *   · 지난 답이 있으면 그걸 도로 띄운다(이어서 물으면 된다)
  *   · 둘 다 없으면 빈 질문 칸을 열어준다 — 전에는 "먼저 드래그하세요"로 막았다
  */
-document.getElementById('readAsk').onclick = () => {
+const askAnywhere = () => {
   const sel = String(window.getSelection() || '').trim();
-  if (sel) { openAskFromReader(sel, null); return; }
+  if (sel) {
+    // 읽기 화면이면 그 노트를, 퀴즈면 옆에 띄운 노트를 같이 읽고 답한다
+    if (document.body.dataset.screen === 'readScreen' && reader) openAskFromReader(sel, null);
+    else handleSelect(sel, null);      // 퀴즈 화면의 선택 처리와 같은 길
+    return;
+  }
   if (askLog.length) { replayAsk(askLog[0]); return; }
   openBlankAsk();
 };
+document.getElementById('readAsk').onclick = askAnywhere;
+document.getElementById('quizAsk').onclick = askAnywhere;
 
 /** 묻을 거리 없이 창만 연다 — 질문 칸에 바로 커서를 둔다. */
 function openBlankAsk() {
@@ -4620,15 +4639,17 @@ function updateAskDock() {
   // 떠다니는 단추를 없앴다(2026-10-14 지적: "오른쪽 아래에 접을 수도 없이 떠 있어서
   // 화면을 가림"). 대신 **아래 바의 AI 단추**에 작은 점을 찍는다 — 거기 자리가 있고,
   // 페이지를 넘기는 손이 이미 가 있는 자리다.
-  const dot = afEl('readAskDot');
-  if (!dot) return;
   const open = !afEl('askFloat').classList.contains('hidden');
-  dot.classList.toggle('hidden', open || !askLog.length);
-  const btn = afEl('readAsk');
-  if (btn) {
-    btn.title = askLog.length
-      ? `AI에게 묻기 — 지난 답: ${selPreview(askLog[0].term, 20, 0).replace(/ … $/, '…')}`
-      : 'AI에게 묻기 — 긁어뒀으면 그 부분을, 아니면 새로 묻습니다';
+  const say = askLog.length
+    ? `AI에게 묻기 — 지난 답: ${selPreview(askLog[0].term, 20, 0).replace(/ … $/, '…')}`
+    : 'AI에게 묻기 — 긁어뒀으면 그 부분을, 아니면 새로 묻습니다';
+  // 읽기 화면과 퀴즈 화면 **둘 다**에 둔다 — 문제를 풀다 물어본 걸 다시 볼 데가 없었다
+  // (2026-10-14 지적). 두 화면이 같은 질문기록을 쓴다.
+  for (const [dotId, btnId] of [['readAskDot', 'readAsk'], ['quizAskDot', 'quizAsk']]) {
+    const dot = afEl(dotId);
+    if (dot) dot.classList.toggle('hidden', open || !askLog.length);
+    const btn = afEl(btnId);
+    if (btn) btn.title = say;
   }
 }
 
