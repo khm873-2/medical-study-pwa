@@ -79,6 +79,47 @@ try { S = await import(pathToFileURL(shim).href); } finally { rmSync(shim, { for
     JSON.stringify(hit.snippet).slice(0, 60));
 }
 
+// ★ 한 노트에서 **전부** 찾는다. 하나만 찾던 탓에 "다 안 나온다"가 됐다(2026-10-14).
+{
+  globalThis.__F['02_Wiki/응급_중환자/반복.md'] =
+    '화상센터 이송 기준이다. 화상센터는 특수부위를 받는다. 화상센터 전원 대상.';
+  const many = await S.search('화상센터');
+  ok('한 노트에 여러 번 나오면 여러 건으로', many.length === 3, `${many.length}건`);
+  ok('몇 번째인지 제목에 적는다', /\(1\/3\)/.test(many[0].title), many[0].title);
+  ok('자리가 서로 다르다', new Set(many.map((h) => h.at)).size === 3,
+    many.map((h) => h.at).join(','));
+  ok('건마다 그 자리를 짚는다', many.every((h) => h.snippet.match === '화상센터'),
+    many.map((h) => h.snippet.match).join(' / '));
+  delete globalThis.__F['02_Wiki/응급_중환자/반복.md'];
+}
+
+// ★★ 자소가 갈라진 글자(NFD)가 섞여 있어도 **칠하는 자리가 안 어긋난다**.
+//    "화상센터"를 찾았는데 "센터 이송"이 노랗게 칠해지던 버그(2026-10-14 신고).
+{
+  const nfd = (t) => t.normalize('NFD');
+  globalThis.__F['02_Wiki/응급_중환자/자소.md'] =
+    nfd('앞에 오는 긴 글입니다. 화상센터 이송 기준을 본다.');
+  const [h] = await S.search('화상센터');
+  ok('자소가 갈라져 있어도 찾는다', !!h, h ? 'ok' : '못 찾음');
+  ok('**칠하는 자리가 정확하다**', h && h.snippet.match.normalize('NFC') === '화상센터',
+    h ? JSON.stringify(h.snippet.match) : '');
+  ok('앞부분도 밀리지 않는다',
+    h && /기준을 본다/.test(h.snippet.after.normalize('NFC')) === false
+      ? true
+      : !!(h && h.snippet.before.normalize('NFC').endsWith('글입니다. ')),
+    h ? JSON.stringify(h.snippet.before.normalize('NFC').slice(-12)) : '');
+  delete globalThis.__F['02_Wiki/응급_중환자/자소.md'];
+}
+
+// 한 노트가 결과를 다 먹지 않는다
+{
+  globalThis.__F['02_Wiki/응급_중환자/많이.md'] = '열사병 '.repeat(40);
+  const many = await S.search('열사병', 40);
+  ok('한 노트는 최대 8건까지만', many.filter((h) => /많이/.test(h.path)).length <= 8,
+    `${many.filter((h) => /많이/.test(h.path)).length}건`);
+  delete globalThis.__F['02_Wiki/응급_중환자/많이.md'];
+}
+
 console.log(`\n통과 ${pass}건`);
 if (fail.length) { console.log(`실패 ${fail.length}건:`); fail.forEach((f) => console.log('  ✗ ' + f)); process.exit(1); }
 console.log('✅ 전부 통과');

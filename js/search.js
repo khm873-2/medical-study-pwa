@@ -59,6 +59,12 @@ export async function cacheSubject(subject, onProgress = () => {}) {
  * (obsidian-another-quick-switcher의 custom search를 본뜬 것 — 2026-10-13 요청).
  * 한글은 NFC/NFD가 섞여 들어와 "분명히 있는데 안 찾아지는" 일이 잦아서 양쪽 다 맞춘다.
  */
+/** 자소가 갈라진 글자를 모아 한 글자로. 찾기와 보여주기가 **같은 글**을 써야 자리가 안 어긋난다. */
+const norm = (t) => String(t).normalize('NFC');
+
+/** 한 파일에서 보여줄 최대 건수 — 한 노트가 결과를 다 먹지 않게. */
+const PER_FILE = 8;
+
 export function matcher(query, { regex = false, caseSensitive = false } = {}) {
   const q = String(query).normalize('NFC');
   if (regex) {
@@ -77,6 +83,10 @@ export function matcher(query, { regex = false, caseSensitive = false } = {}) {
     const i = hay.indexOf(needle);
     return i >= 0 ? { at: i, len: needle.length } : null;
   };
+  // ⚠️ 돌려주는 자리(at)는 **NFC로 고친 글** 기준이다. 원본에 자소가 갈라진 글자가
+  //    섞여 있으면 글자 수가 달라서, 원본을 그대로 잘라 보여주면 **엉뚱한 데가
+  //    노랗게 칠해진다**(2026-10-14 신고: "화상센터"를 찾았는데 "센터 이송"이 칠해짐).
+  //    그래서 잘라 보여줄 때도 반드시 norm()을 거친 글을 쓴다.
 }
 
 /** 한 글 안에서 맞는 자리를 **전부** 찾는다(이 문서 안에서 찾을 때 쓴다). */
@@ -126,7 +136,7 @@ export async function search(query, limit = 40, opt = {}) {
       try { qs = parseExamHtml(text).questions; } catch { continue; }
       const examName = prettyExamName(p.split('/').pop());
       for (const item of qs) {
-        const hay = `${item.q} ${(item.opts || []).join(' ')} ${item.explain || ''}`;
+        const hay = norm(`${item.q} ${(item.opts || []).join(' ')} ${item.explain || ''}`);
         const r = match(hay);
         if (r) {
           hits.push({
@@ -140,14 +150,20 @@ export async function search(query, limit = 40, opt = {}) {
         }
       }
     } else if (p.endsWith('.md')) {
-      const r = match(text);
-      if (r) {
+      // 한 노트에서 **하나만** 찾고 있었다 — 열 군데 나와도 1건으로 세어져서
+      // "전체를 다 찾은 것 같지 않다"가 됐다(2026-10-14 신고). 전부 찾는다.
+      const hay = norm(text);
+      const name = p.split('/').pop().replace(/\.md$/, '');
+      const spots = findAll(hay, match, PER_FILE);
+      for (const sp of spots) {
         hits.push({
           kind: 'note',
-          title: p.split('/').pop().replace(/\.md$/, ''),
-          snippet: snip(text, r.at, r.len),
+          title: spots.length > 1 ? `${name}  (${spots.indexOf(sp) + 1}/${spots.length})` : name,
+          snippet: snip(hay, sp.at, sp.len),
           path: p,
+          at: sp.at,
         });
+        if (hits.length >= limit) break;
       }
     }
   }

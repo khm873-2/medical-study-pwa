@@ -5262,7 +5262,7 @@ await run('나누기 기억', async () => {
   await new Promise((r) => setTimeout(r, 400));
   out.push({ name: '닫으면 창이 하나', ok: document.querySelectorAll('#readPanes .read-pane').length === 1 });
   const mem = await d.kvGet('split_mem');
-  const flat = mem ? Object.values(mem).flat() : [];
+  const flat = mem ? Object.values(mem).flatMap((v) => (Array.isArray(v) ? v : v.tabs || [])) : [];
   out.push({ name: '**옆에 뒀던 것을 적어뒀다**',
     ok: flat.some((x) => /암기법/.test(x && x.p ? x.p : x)),
     detail: JSON.stringify(mem).slice(0, 80) });
@@ -5278,6 +5278,33 @@ await run('나누기 기억', async () => {
   out.push({ name: '**보던 장에서 이어 본다**(1장부터가 아니라)',
     ok: /^2\//.test(document.getElementById('readPos').textContent),
     detail: document.getElementById('readPos').textContent });
+
+  // ★ 비율도 문서별로 — 표가 넓은 노트와 암기법은 맞는 비율이 다르다(2026-10-14)
+  const grip = document.querySelector('.pane-split-resizer');
+  if (grip) {
+    const host = document.getElementById('readPanes').getBoundingClientRect();
+    const g = grip.getBoundingClientRect();
+    const pe = (t, x) => grip.dispatchEvent(new PointerEvent(t,
+      { pointerId: 41, clientX: x, clientY: g.top + g.height / 2, bubbles: true, cancelable: true }));
+    pe('pointerdown', g.left + 5);
+    pe('pointermove', host.left + host.width * 0.35);
+    pe('pointerup', host.left + host.width * 0.35);
+    await new Promise((r) => setTimeout(r, 250));
+    const set = document.documentElement.style.getPropertyValue('--pane-split').trim();
+    out.push({ name: '끌어서 비율을 바꿨다', ok: /^3\d(\.\d)?%$/.test(set), detail: set });
+
+    document.getElementById('readSplitBtn').click();          // 닫고
+    await new Promise((r) => setTimeout(r, 350));
+    const mem2 = await d.kvGet('split_mem');
+    const saved = Object.values(mem2 || {}).map((v) => (Array.isArray(v) ? '' : v.ratio)).filter(Boolean);
+    out.push({ name: '**비율을 문서별로 적어둔다**', ok: saved.length > 0, detail: saved.join(',') });
+
+    document.getElementById('readSplitBtn').click();          // 다시 열면
+    await new Promise((r) => setTimeout(r, 800));
+    out.push({ name: '**그 비율로 다시 열린다**(반반으로 안 돌아간다)',
+      ok: document.documentElement.style.getPropertyValue('--pane-split').trim() === set,
+      detail: `${set} → ${document.documentElement.style.getPropertyValue('--pane-split').trim()}` });
+  }
   out.push({ name: '같은 문서를 두 번 띄우지 않는다',
     ok: titles().filter((t) => /본문/.test(t)).length <= 1, detail: titles().join(' | ') });
 

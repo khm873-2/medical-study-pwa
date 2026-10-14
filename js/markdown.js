@@ -13,6 +13,27 @@ const CALLOUT_LABEL = {
   'image-needed': '🖼️',
 };
 
+// 그림의 본디 비율을 기억해둔다 — 한 번 본 그림은 **자리를 미리 잡아준다**.
+// 이게 없으면 그림이 뜰 때마다 아래 글이 밀려 내려간다(2026-10-14: 나누기를 껐다 켤
+// 때마다 "쭉쭉 밀리면서 몇 초간 못 읽는다"). 이름만 키로 쓰므로 가볍다.
+const imgRatio = new Map();
+
+/**
+ * 임베드 그림 태그.
+ *
+ * ⚠️ 비율은 **여기서**(HTML을 만들 때) 박아야 한다. 나중에 JS로 붙이면 그 전에 이미
+ *    한 번 배치가 끝나서, 결국 글이 밀린다(2026-10-14 실측: 879px 밀림).
+ */
+function imgTag(name) {
+  const d = imgRatio.get(name);
+  const img = `<img class="embed" data-embed="${escapeHtml(name)}" alt="${escapeHtml(name)}">`;
+  if (!d) return img;
+  // ⚠️ `<img>`에 width/height를 줘도 **src가 없으면 자리를 안 비운다** — 본디 크기가
+  //    없어서다(2026-10-14 실측). 그래서 바깥에 평범한 상자를 하나 두고 거기에 비율을
+  //    건다. 상자는 src와 무관하게 바로 높이가 잡히므로 그림이 뜰 때 글이 안 밀린다.
+  return `<span class="embed-box" style="aspect-ratio:${d.w}/${d.h}">${img}</span>`;
+}
+
 export function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -207,7 +228,7 @@ function inline(s) {
 
   // 이미지 임베드 ![[파일명]] — src는 나중에 채운다(지연 로딩)
   t = t.replace(/!\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]/g, (_, f) =>
-    `<img class="embed" data-embed="${escapeHtml(f.trim())}" alt="${escapeHtml(f.trim())}">`);
+    imgTag(f.trim()));
 
   // 위키링크 [[노트]] 또는 [[노트|표시]]
   t = t.replace(/\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g, (_, n, label) =>
@@ -238,18 +259,32 @@ function inline(s) {
 }
 
 /** 렌더 결과 안의 ![[...]] 임베드를 실제 이미지로 채운다. */
+/**
+ * `![[파일]]` 자리를 실제 그림으로 채운다.
+ *
+ * 자리는 이미 renderMarkdown이 잡아뒀다(아는 그림이면). 여기서는 **한꺼번에** 받는다 —
+ * 하나씩 기다리면 장마다 한 번씩 밀린다.
+ */
 export async function hydrateEmbeds(root, resolve) {
-  const imgs = root.querySelectorAll('img.embed[data-embed]');
-  for (const im of imgs) {
+  const imgs = [...root.querySelectorAll('img.embed[data-embed]')];
+  await Promise.all(imgs.map(async (im) => {
     const name = im.dataset.embed;
+    const known = imgRatio.get(name);
     try {
       const url = await resolve(name);
-      if (url) im.src = url;
-      else im.replaceWith(note(`이미지 없음: ${name}`));
+      if (!url) { im.replaceWith(note(`이미지 없음: ${name}`)); return; }
+      if (!known) {
+        im.addEventListener('load', () => {
+          if (im.naturalWidth && im.naturalHeight) {
+            imgRatio.set(name, { w: im.naturalWidth, h: im.naturalHeight });
+          }
+        }, { once: true });
+      }
+      im.src = url;
     } catch {
       im.replaceWith(note(`이미지를 불러오지 못했습니다: ${name}`));
     }
-  }
+  }));
 }
 
 function note(text) {

@@ -3280,7 +3280,11 @@ function rememberSplit() {
     .filter((t) => !here.has(t.note.path))
     .map((t) => ({ p: t.note.path, s: t.secIdx || 0 }));
   if (!right.length) return;
-  splitMem[left.note.path] = right.slice(0, 4);
+  // 비율도 문서별로 기억한다(2026-10-14 요청). 표가 넓은 노트는 왼쪽을 넓게 쓰고
+  // 암기법은 오른쪽을 넓게 쓰는 식으로 **문서마다 맞는 비율이 다르다**.
+  const ratio = (document.documentElement.style.getPropertyValue('--pane-split')
+    || localStorage.getItem('pane_split') || '').trim();
+  splitMem[left.note.path] = { tabs: right.slice(0, 4), ratio };
   // 너무 쌓이지 않게 — 최근 60개 노트만
   const keys = Object.keys(splitMem);
   if (keys.length > 60) for (const k of keys.slice(0, keys.length - 60)) delete splitMem[k];
@@ -3294,8 +3298,11 @@ async function splitPane(note) {
 
   // 끌어다 놓은 게 아니라 **나누기 버튼**을 누른 경우라면, 지난번에 옆에 뒀던 걸 되살린다.
   if (!note && cur) {
-    // 옛 기록은 경로 문자열만 들어 있다 — 그것도 받아준다(쓰다 보면 저절로 새 꼴이 된다)
-    const want = (splitMem[cur.note.path] || []).map((x) => (typeof x === 'string' ? { p: x, s: 0 } : x));
+    // 옛 기록은 배열이거나 경로 문자열이다 — 둘 다 받아준다(쓰다 보면 저절로 새 꼴이 된다)
+    const mem = splitMem[cur.note.path];
+    const list = Array.isArray(mem) ? mem : (mem && mem.tabs) || [];
+    const want = list.map((x) => (typeof x === 'string' ? { p: x, s: 0 } : x));
+    const ratio = (mem && !Array.isArray(mem) && mem.ratio) || '';
     const tabs = [];
     for (const { p: path, s: at } of want) {
       if (path === cur.note.path) continue;
@@ -3307,10 +3314,15 @@ async function splitPane(note) {
       } catch { /* 지워졌으면 건너뛴다 */ }
     }
     if (tabs.length) {
+      // 비율을 **창을 만들기 전에** 돌려놓는다 — 반반으로 폈다가 줄어들면 한 번 더 출렁인다
+      if (ratio) document.documentElement.style.setProperty('--pane-split', ratio);
       panes.push({ tabs, active: 0 });
       activePane = 1;
       syncReader();
-      renderPanes({ animate: true });
+      // ⚠️ **움직이지 않는다.** 되살리는 것은 이미 아는 모양으로 돌아가는 일이다.
+      //    0.28초 동안 폭이 변하는데 그 사이 글이 다시 배치되고 그림까지 뜨면서
+      //    "몇 초간 못 읽는" 상태가 됐다(2026-10-14 지적). 그냥 그 자리에 둔다.
+      renderPanes();
       toast(`지난번에 옆에 뒀던 ${tabs.length}개를 띄웠습니다`);
       return;
     }
@@ -3466,7 +3478,9 @@ function buildPaneResizer() {
   const host = document.getElementById('readPanes');
   r.addEventListener('pointerdown', (e) => {
     const box = host.getBoundingClientRect();
-    r.setPointerCapture(e.pointerId);
+    // 포인터를 묶어둬야 손이 손잡이 밖으로 나가도 move가 온다. 묶을 포인터가 없으면
+    // 던지는데, 거기서 멈추면 **끌기가 아예 안 된다** — 받아 넘긴다.
+    try { r.setPointerCapture(e.pointerId); } catch {}
     markGripDragging(r, true);
     // 좁은 화면에서는 창이 위아래로 선다 — 그때는 세로로 민다
     const vertical = r.dataset.axis === 'y';
@@ -3492,6 +3506,11 @@ function buildPaneResizer() {
   r.ondblclick = () => {
     document.documentElement.style.removeProperty('--pane-split');
     localStorage.removeItem('pane_split');
+    // 이 문서에 기억해둔 비율도 같이 지운다 — 안 그러면 다시 열 때 되살아나서
+    // "반반으로 돌려놨는데 왜 또 그 비율이지"가 된다(2026-10-14)
+    const left = panes[0] && (panes[0].tabs[panes[0].active] || panes[0].tabs[0]);
+    const mem = left && splitMem[left.note.path];
+    if (mem && !Array.isArray(mem)) { mem.ratio = ''; kvSet(SPLIT_MEM_KEY, splitMem).catch(() => {}); }
     if (readerPen) readerPen.resize();
   };
   return r;
@@ -5721,10 +5740,28 @@ async function runSearch(q) {
     b.append(t, s);
     b.onclick = () => {
       closeSearch();
-      if (h.kind === 'note') openNote(h.path);
+      // 같은 노트에서 여러 건이 나오면 **그 자리**로 간다 — 열어놓고 다시 찾게 하지 않는다
+      if (h.kind === 'note') openNote(h.path).then(() => { if (h.at != null) jumpToOffset(h.at); });
       else openExamAt(h.path, h.qnum);
     };
     box.appendChild(b);
+  }
+}
+
+/**
+ * 노트를 연 뒤 **글자 위치**로 간다. 전체 검색 결과에서 넘어올 때 쓴다.
+ * 섹션이 여럿이면 그 글자가 든 섹션을 찾아 넘긴다.
+ */
+function jumpToOffset(at) {
+  if (!(reader && reader.note)) return;
+  let seen = 0;
+  for (let i = 0; i < reader.note.sections.length; i++) {
+    const len = reader.note.sections[i].text.length + 1;
+    if (at < seen + len) {
+      if (reader.secIdx !== i) { reader.secIdx = i; renderReader(); }
+      return;
+    }
+    seen += len;
   }
 }
 
