@@ -5848,6 +5848,59 @@ await run('빈칸 쪼개기·추천', async () => {
   out.push({ name: '설명문은 명사가 후보', ok: sc('저체온증') > 0 });
   return out;
 });
+
+// ══════════ 폴더와 파일이 구별된다 · 탭에 그림 (2026-10-14 요청) ══════════
+// "상위 폴더에는 색을 살짝 넣든가 해서 폴더인지 맨 아래 파일인지 구별되게" / "아이콘을 넣든가"
+await run('묶음·항목 구별', async () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('listScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'listScreen';
+  document.getElementById('todayBody').classList.add('hidden');
+  const body = document.getElementById('listBody');
+  body.classList.remove('hidden');
+  body.innerHTML = '<details class="root-group" open><summary class="root-head">'
+    + '<span class="head-row">모의고사<span class="subject-count">12</span></span></summary>'
+    + '<details class="subject-group" open><summary class="subject-head">'
+    + '<span class="head-row">응급_중환자<span class="subject-count">4</span></span></summary>'
+    + '<button class="exam-item"><span class="exam-date">10/13</span>'
+    + '<div class="exam-name">임상독성학<div class="exam-meta">30문항</div></div></button>'
+    + '</details></details>';
+  await new Promise((r) => setTimeout(r, 150));
+
+  const root = document.querySelector('#listBody .root-head');
+  const sub = document.querySelector('#listBody .subject-head');
+  const item = document.querySelector('#listBody .exam-item');
+  const bg = (el) => getComputedStyle(el).backgroundColor;
+  const bar = (el) => getComputedStyle(el).borderLeftWidth;
+
+  out.push({ name: '**묶음과 항목의 바탕색이 다르다**', ok: bg(root) !== bg(item) && bg(sub) !== bg(item),
+    detail: `묶음 ${bg(sub)} / 항목 ${bg(item)}` });
+  out.push({ name: '묶음 왼쪽에 색 띠가 있다',
+    ok: parseFloat(bar(root)) >= 3 && parseFloat(bar(sub)) >= 3,
+    detail: `${bar(root)} / ${bar(sub)}` });
+  out.push({ name: '큰 묶음과 작은 묶음도 구별된다',
+    ok: getComputedStyle(root).borderLeftColor !== getComputedStyle(sub).borderLeftColor });
+  out.push({ name: '항목은 묶음보다 안쪽으로 들어간다',
+    ok: item.getBoundingClientRect().left > sub.getBoundingClientRect().left,
+    detail: `${Math.round(item.getBoundingClientRect().left)} > ${Math.round(sub.getBoundingClientRect().left)}` });
+  out.push({ name: '제목과 설명이 줄을 나눠 선다',
+    ok: document.querySelector('#listBody .exam-meta').getBoundingClientRect().top
+      > document.querySelector('#listBody .exam-name').getBoundingClientRect().top });
+
+  // 탭 그림
+  const tabs = [...document.querySelectorAll('.tabs .tab')];
+  out.push({ name: '**탭마다 그림이 붙었다**', ok: tabs.every((t) => t.querySelector('.tab-ic svg')),
+    detail: `${tabs.filter((t) => t.querySelector('svg')).length}/${tabs.length}` });
+  out.push({ name: '글씨도 그대로 있다', ok: tabs.every((t) => (t.querySelector('.tab-t') || {}).textContent) });
+  out.push({ name: '탭마다 다른 그림',
+    ok: new Set(tabs.map((t) => t.querySelector('.tab-ic').innerHTML)).size === tabs.length });
+  out.push({ name: '한 줄에 다 들어간다',
+    ok: new Set(tabs.map((t) => Math.round(t.getBoundingClientRect().top))).size === 1 });
+
+  body.innerHTML = '';
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════

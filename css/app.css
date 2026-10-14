@@ -331,6 +331,7 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
 .tabs { display: flex; gap: 6px; margin-bottom: 14px; background: var(--badge-bg); padding: 4px; border-radius: 11px; }
 .tab {
   /* 탭이 4개가 되어(퀴즈·모의고사·노트·카드) 좁은 화면에서 글자가 눌리지 않게 */
+  display: flex; align-items: center; justify-content: center; gap: 6px;
   flex: 1; min-width: 0; padding: 11px 6px; border: none; background: none; border-radius: 8px;
   font-size: 14px; font-weight: 600; color: var(--sub); cursor: pointer; font-family: inherit;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 44px;
@@ -542,7 +543,9 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
   /* ⚠️ summary에 display:flex를 주면 브라우저가 이 details를 "접힘" 대상에서 빼서
      닫아놔도 내용이 계속 보인다(2026-10-09 실제 버그). 레이아웃은 안쪽 .head-row가 맡는다. */
   cursor: pointer; list-style: none; margin: 0 0 8px;
-  padding: 12px 14px; background: var(--card); border: 1px solid var(--border);
+  /* 묶음은 바탕을 깔고 왼쪽에 색 띠 — 맨 아래 항목(흰 바탕)과 구별된다(2026-10-14) */
+  padding: 12px 14px; background: var(--badge-bg); border: 1px solid var(--border);
+  border-left: 3px solid color-mix(in srgb, var(--accent) 45%, var(--border));
   border-radius: 11px; font-size: 14px; color: var(--text);
 }
 summary.subject-head > .head-row, summary.root-head > .head-row {
@@ -818,7 +821,10 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
 .root-group { margin-bottom: 10px; }
 .root-group > summary.root-head {
   cursor: pointer; list-style: none; margin: 0 0 8px;
-  padding: 13px 14px; background: var(--badge-bg); border: 1px solid var(--border);
+  /* 묶음임을 한눈에 — 바탕을 깔고 왼쪽에 색 띠(2026-10-14 요청) */
+  padding: 13px 14px; border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 7%, var(--badge-bg));
+  border-left: 3px solid var(--accent);
   border-radius: 11px; font-size: 14.5px; font-weight: 700; color: var(--text);
 }
 .root-group > summary.root-head::-webkit-details-marker { display: none; }
@@ -1373,7 +1379,11 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
 .root-group > summary.root-head {
   border-radius: var(--r-2);
   box-shadow: var(--sh-1);
-  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  /* ⚠️ `border-color`로 네 변을 한꺼번에 칠하면 **왼쪽 색 띠까지 덮는다**
+     (2026-10-14: 큰 묶음과 작은 묶음이 같은 색이 됐다). 왼쪽은 빼고 칠한다. */
+  border-top-color: color-mix(in srgb, var(--border) 70%, transparent);
+  border-right-color: color-mix(in srgb, var(--border) 70%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--border) 70%, transparent);
   transition: background .14s, border-color .14s;
 }
 
@@ -2618,3 +2628,22 @@ li.task.done .task-box { color: var(--accent); }
   font-size: 11.5px; color: var(--accent); font-weight: 600;
 }
 .quiz-nav .ask-last { max-width: 9ch; }
+
+/* ── 탭에 그림을 붙인다 (2026-10-14 요청) ──
+   글씨만 여섯 개가 나란하니 어디가 뭔지 눈으로 집어내기 어려웠다. */
+.tab-ic { display: inline-flex; flex: 0 0 auto; }
+.tab-ic .ic { width: 17px; height: 17px; }
+@media (max-width: 560px) { .tab-ic { display: none; } }   /* 좁으면 글씨만 — 다 안 들어간다 */
+
+/* ── 폴더인지 파일인지 (2026-10-14 요청) ──
+   과목·갈래 묶음과 맨 아래 항목이 같은 흰 상자라 어디까지가 묶음인지 안 보였다.
+   흔한 방식대로: **묶음은 바탕을 깔고 왼쪽에 색 띠**, 항목은 흰 바탕에 들여쓴다.
+   (묶음 머리 모양 자체는 위의 .root-head / .subject-head 블록에 있다.) */
+/* 묶음 안의 항목 — 왼쪽에 옅은 선을 세워 "이 묶음에 속한다"를 보여준다 */
+.subject-group > .exam-item,
+.root-group > .subject-group > .exam-item {
+  border-left: 3px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.subject-group > .exam-item:active { border-left-color: var(--accent); }
+/* 펼친 묶음은 머리를 아래 항목과 붙여 한 덩어리로 보이게 */
+.subject-group[open] > summary.subject-head { margin-bottom: 4px; }
