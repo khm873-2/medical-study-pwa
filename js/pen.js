@@ -218,6 +218,15 @@ export class PenLayer {
     if (this._isErasing) { this._isErasing = false; this.onChange(); return; }
     if (!this._cur) return;
     const stroke = this._cur;
+    // ⚠️ 낱말 범위는 시작점·끝점으로 정해진다. 미리보기(rAF)가 안 도는 환경에서는
+    //    그동안 한 번도 안 재어 둘 수 있다 — **손을 뗄 때 여기서 확실히 잡는다**.
+    if (stroke && stroke.pts.length) {
+      const a0 = stroke.pts[0];
+      const z0 = stroke.pts[stroke.pts.length - 1];
+      const keepA = (this._pending && this._pending.length && this._span) ? this._span.a : a0;
+      this._span = { a: keepA, z: z0 };
+      this._lastSpan = this._span;
+    }
     this._cur = null;
 
     clearTimeout(this._stuck);
@@ -301,6 +310,11 @@ export class PenLayer {
     if (!cur || cur.pts.length < 2) { this._retreating = false; return box; }
     const a = cur.pts[0];
     const z = cur.pts[cur.pts.length - 1];
+    // 낱말 범위를 고르려면 네모가 아니라 **시작점과 끝점**이 필요하다(2026-10-14).
+    // 끊어 그어도 "처음 짚은 낱말"이 기준이어야 하므로 첫 획의 시작점은 유지한다.
+    const keepA = (this._pending && this._pending.length && this._span) ? this._span.a : a;
+    this._span = { a: keepA, z };
+    this._lastSpan = this._span;
     // 가장 멀리 갔던 지점보다 **눈에 띄게 돌아왔으면** 되돌리는 중이다.
     // 손 떨림(몇 px)으로는 켜지지 않게 여유를 둔다.
     const far = cur.pts.reduce((m, pt) =>
@@ -360,6 +374,7 @@ export class PenLayer {
     this._tokCache = null;
     this._lastLive = null;
     this._lastRetreating = false;
+    this._span = this._lastSpan;        // 손을 뗀 뒤에도 마지막 범위로 확정한다
     if (this._liveRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this._liveRaf);
     this._liveRaf = 0;
     if (!pend.length) return;
@@ -447,65 +462,71 @@ export class PenLayer {
     return toks;
   }
 
+  /**
+   * 그은 자리에 걸린 **낱말 범위**를 가져온다 — 시작 낱말부터 끝 낱말까지.
+   *
+   * 전에는 "획이 세로로 걸친 줄은 통째로" 방식이었다. 짧게 그어도 문장이 다 잡혀 편했지만,
+   * **한 줄만 긋고 싶을 때 그게 안 됐다**(2026-10-14 지적). 줄 단위로 들고 가고 싶으면
+   * 영역 복사를 쓰면 되니, 여기서는 글자를 다루는 쪽을 택한다.
+   *
+   * 이제 글에서 마우스로 긁는 것과 같다: 시작점에 가장 가까운 낱말부터, 끝점에 가장
+   * 가까운 낱말까지 **문서 순서대로** 전부. 그래서
+   *   · 한 줄 안에서 그으면 그 줄의 그만큼만,
+   *   · 여러 줄에 걸쳐 그으면 중간 줄은 통째로 (문서 순서라 자연히 그렇게 된다),
+   *   · 끌었다 되돌리면 끝점이 앞으로 와서 범위가 줄어든다 — 따로 다룰 필요가 없다.
+   * 낱말은 공백으로 끊으므로 "평가한다." 처럼 **마침표가 함께** 온다.
+   */
   _textInBox(box) {
-    const toks = this._tokens();
-    if (!toks.length) { this._coveredLines = null; return ''; }
+    const toks = this._tokens();              // DOM 순서 = 읽는 순서
+    if (!toks.length) { this._coveredLines = null; this._coveredBox = null; return ''; }
 
-    // 아래로 밑줄 긋듯 그은 경우도 잡히도록 위쪽으로 한 줄 높이만큼 더 본다
-    const yTop = box.t - 24;
-    const yBot = box.b + 8;
-
-    // 획이 시작된 **패널 안에서만** 줄을 모은다.
-    // 그러지 않으면 문제 카드에 그었는데 오른쪽 노트 패널의 같은 높이 줄까지 딸려온다
-    // (2026-10-09 — "그 공간 안에서 끝까지 가야지"라는 지적).
+    // 획이 시작된 **패널 안에서만** 고른다. 그러지 않으면 문제 카드에 그었는데 오른쪽
+    // 노트 패널의 같은 높이 글까지 딸려온다(2026-10-09 지적).
     const pane = this._paneAt(box);
     const inPane = pane
       ? toks.filter((t) => t.l >= pane.l - 2 && t.r <= pane.r + 2)
       : toks;
     if (!inPane.length) { this._coveredBox = null; this._coveredLines = null; return ''; }
 
-    const picked = [];
-    const covered = [];                 // 실제로 잡힌 줄의 화면 범위(미리보기용)
-    // 세로로 걸친 줄들을 먼저 추린다 — 첫·끝 줄인지 알아야 "그은 만큼"을 판단한다
-    const lineList = groupLines(inPane).filter((line) => line.cy >= yTop && line.cy <= yBot
-      && line.toks.some((t) => t.r >= box.l - 6 && t.l <= box.r + 6));
-    for (const line of lineList) {
-      const touches = line.toks.some((t) => t.r >= box.l - 6 && t.l <= box.r + 6);
-      if (!touches) continue;
+    // 시작점·끝점. 그리는 중이면 지금 획에서, 손을 뗐으면 마지막으로 본 값에서.
+    const span = this._span;
+    const a = span ? span.a : { x: box.l, y: box.t };
+    const z = span ? span.z : { x: box.r, y: box.b };
 
-      // 기본은 **줄 전체**다 — 짧게 그어도 그 줄이 통째로 잡혀야 쓰기 편하다
-      // (정확히 따라 그으라고 하면 펜으로 쓸 수가 없다).
-      //
-      // 다만 **되돌아온 경우**(펜을 끌었다가 왔던 길로 돌아옴)에는 그은 만큼만 잡는다 —
-      // 그러지 않으면 되돌려도 선택이 안 풀린다(2026-10-13 지적). 되돌리는 건
-      // "줄이고 싶다"는 뜻이 분명하므로 이때만 정밀 모드로 바꾼다.
-      const toks = this._retreating
-        ? line.toks.filter((t) => t.r >= box.l - 6 && t.l <= box.r + 6)
-        : line.toks;
-      if (!toks.length) continue;
-      picked.push(toks);
-      covered.push({
-        l: Math.min(...toks.map((t) => t.l)),
-        r: Math.max(...toks.map((t) => t.r)),
-        t: Math.min(...toks.map((t) => t.t)),
-        b: Math.max(...toks.map((t) => t.b)),
-      });
+    let picked;
+    if (isLoop(a, z, box)) {
+      // **둘러싼 경우** — 네모를 치듯 돌아와 제자리에서 끝났다. 그러면 시작·끝 낱말이
+      // 같아져 한 낱말만 잡히는데, 그건 분명히 뜻한 바가 아니다. 안에 든 것을 전부 준다.
+      picked = inPane.filter((t) => t.cy >= box.t - 2 && t.cy <= box.b + 2
+        && t.r >= box.l - 6 && t.l <= box.r + 6);
+    } else {
+      const i0 = nearestTok(inPane, a);
+      const i1 = nearestTok(inPane, z);
+      if (i0 < 0 || i1 < 0) { this._coveredBox = null; this._coveredLines = null; return ''; }
+      picked = inPane.slice(Math.min(i0, i1), Math.max(i0, i1) + 1);
     }
-    this._coveredLines = covered.length ? covered : null;
-    this._coveredBox = covered.length
-      ? {
-          l: Math.min(...covered.map((c) => c.l)),
-          r: Math.max(...covered.map((c) => c.r)),
-          t: Math.min(...covered.map((c) => c.t)),
-          b: Math.max(...covered.map((c) => c.b)),
-        }
-      : null;
-    if (!picked.length) return '';
-    return picked
-      .map((line) => line.map((t) => t.el.textContent).join(' '))
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    if (!picked.length) { this._coveredBox = null; this._coveredLines = null; return ''; }
+
+    // 미리보기 — 줄마다 한 덩어리로 칠한다(한 낱말씩 칠하면 띄어쓰기가 뚫려 지저분하다)
+    const covered = [];
+    let run = null;
+    for (const t of picked) {
+      if (run && Math.abs(t.cy - run.cy) <= 6) {
+        run.l = Math.min(run.l, t.l); run.r = Math.max(run.r, t.r);
+        run.t = Math.min(run.t, t.t); run.b = Math.max(run.b, t.b);
+      } else {
+        run = { l: t.l, r: t.r, t: t.t, b: t.b, cy: t.cy };
+        covered.push(run);
+      }
+    }
+    this._coveredLines = covered;
+    this._coveredBox = {
+      l: Math.min(...covered.map((c) => c.l)),
+      r: Math.max(...covered.map((c) => c.r)),
+      t: Math.min(...covered.map((c) => c.t)),
+      b: Math.max(...covered.map((c) => c.b)),
+    };
+    return picked.map((t) => t.el.textContent).join(' ').replace(/\s+/g, ' ').trim();
   }
 
   _eraseAt(pt) {
@@ -727,6 +748,37 @@ function groupLines(toks) {
 }
 
 /** 텍스트를 단어 단위 <span class="tok">으로 감싼다(선택 hit-test 대상). */
+/**
+ * 그 점에 가장 가까운 낱말의 번호. 안에 들어 있으면 그것, 아니면 거리가 가장 짧은 것.
+ * 세로로 어긋난 것은 크게 깎는다 — 줄 끝 여백에서 멈췄을 때 아랫줄로 건너뛰지 않게.
+ */
+/**
+ * 둘러싼 획인가 — 끝이 시작 자리로 돌아왔고, 감싼 넓이가 한 줄보다 크다.
+ * 네모를 치듯 그은 경우를 "낱말 하나"로 잘못 읽지 않기 위한 것이다(2026-10-14).
+ */
+function isLoop(a, z, box) {
+  const w = box.r - box.l;
+  const h = box.b - box.t;
+  if (h < 26 || w < 26) return false;                 // 한 줄짜리 밑줄은 아니다
+  const back = Math.hypot(z.x - a.x, z.y - a.y);
+  // 제자리 근처에서 끝났다. 대충 친 ㄷ자(닫히지 않은 네모)까지 받아주려고 넉넉히 본다 —
+  // 줄을 가로지르는 **대각선 끌기**는 이동 거리가 상자 크기만큼 되므로 여기 안 걸린다.
+  return back < Math.max(w, h) * 0.45;
+}
+
+function nearestTok(toks, pt) {
+  let best = -1;
+  let bestD = Infinity;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    const dx = Math.max(t.l - pt.x, 0, pt.x - t.r);
+    const dy = Math.max(t.t - pt.y, 0, pt.y - t.b);
+    const d = dx + dy * 4;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
 export function tokenize(el, text) {
   el.innerHTML = '';
   const frag = document.createDocumentFragment();

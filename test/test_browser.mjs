@@ -3004,8 +3004,15 @@ await run('모아두기 창', async () => {
       ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
       await new Promise((r) => setTimeout(r, 200));
       document.getElementById('scSave').click();
-      await new Promise((r) => setTimeout(r, 500));
-      return { sent, status: document.getElementById('scStatus').textContent };
+      // 이제 바로 닫고 뒤에서 보낸다 — 결과 토스트가 뜰 때까지 기다렸다 읽는다(2026-10-14)
+      let note = '';
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        note = [...document.querySelectorAll('body > div')].map((x) => x.textContent)
+          .filter((t) => /모아뒀습니다|모아두지 못했습니다/.test(t)).join(' ');
+        if (note) break;
+      }
+      return { sent, status: note };
     } finally {
       window.fetch = realFetch;
       await A.clearToken();
@@ -3029,10 +3036,10 @@ await run('모아두기 창', async () => {
   results.push({ name: 'Obsidian 태그가 붙는다', ok: /tags: \[달모\/모아두기\]/.test(text) });
   // 저장 결과는 세 갈래(올라감 / 인터넷 없어 대기 / 권한 문제)를 **다르게** 말해야 한다.
   // 다 "대기열로"라고만 하면 권한 문제는 영영 안 올라간다(2026-10-13).
-  results.push({ name: '저장했다고 알려준다',
-    ok: /vault에 저장했습니다/.test(saved.status), detail: saved.status });
-  results.push({ name: '무엇이 올라갔는지 파일명까지 말해준다',
-    ok: /\.md/.test(saved.status) });
+  results.push({ name: '모아뒀다고 **짧게** 알려준다',
+    ok: /모아뒀습니다/.test(saved.status), detail: saved.status });
+  results.push({ name: '몇 건인지는 적는다(길게 늘어놓지 않고)',
+    ok: /\(\d+건\)/.test(saved.status) });
 
   // 그림 바이트가 안 깨지고 그대로 올라가는가 — UTF-8 인코딩을 타면 깨진다
   const img = saved.sent.find((x) => x.url.startsWith('attachments/'));
@@ -4502,9 +4509,19 @@ await run('vault 저장 알림', async () => {
     document.getElementById('readScrap').click();
     document.getElementById('scText').value = '저장 알림 검사';
   };
+  // 이제 **바로 닫고 뒤에서 보낸다**(2026-10-14) — 결과는 토스트나 알림창으로 온다.
+  // 그래서 누른 직후가 아니라 **끝날 때까지** 기다렸다 읽는다.
   const statusText = () => document.getElementById('scStatus').textContent;
   const toastText = () => [...document.querySelectorAll('body > div')]
-    .map((x) => x.textContent).filter((t) => /저장|대기|기기에/.test(t)).join(' | ');
+    .map((x) => x.textContent).filter((t) => /저장|대기|기기에|모아/.test(t)).join(' | ');
+  const sheetText = () => (document.getElementById('alertSheet') || {}).textContent || '';
+  const settled = async () => {
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      if (/모아뒀습니다|모아두지 못했습니다/.test(toastText() + sheetText())) return;
+    }
+  };
+  const result = () => `${toastText()} ${sheetText()}`.trim();
 
   // ① 잘 올라간 경우
   window.fetch = async (u, i) => (String(u).includes('api.github.com')
@@ -4514,9 +4531,11 @@ await run('vault 저장 알림', async () => {
   await new Promise((r) => setTimeout(r, 120));
   document.getElementById('scSave').click();
   await new Promise((r) => setTimeout(r, 400));
-  out.push({ name: '올라가면 올라갔다고 한다', ok: /저장했습니다/.test(statusText()), detail: statusText() });
-  out.push({ name: '**토스트로도 띄운다**(아래 작은 글씨는 눈에 안 들어온다)',
-    ok: /저장했습니다/.test(toastText()), detail: toastText().slice(0, 50) });
+  out.push({ name: '**누르면 창이 바로 닫힌다**(올라갈 때까지 안 붙잡는다)',
+    ok: document.getElementById('scrapFloat').classList.contains('hidden') });
+  await settled();
+  out.push({ name: '올라가면 짧게 알려준다', ok: /모아뒀습니다/.test(result()), detail: result().slice(0, 50) });
+  out.push({ name: '잘 됐을 때는 창을 안 띄운다(가로막지 않는다)', ok: !document.getElementById('alertSheet') });
 
   // ② 인터넷이 끊긴 경우 — 큐에 남고, 그 사실을 말해준다
   await new Promise((r) => setTimeout(r, 1200));
@@ -4529,10 +4548,13 @@ await run('vault 저장 알림', async () => {
   const qBefore = (await d.listOutbox()).length;
   document.getElementById('scSave').click();
   await new Promise((r) => setTimeout(r, 500));
-  out.push({ name: '**끊겨도 "인터넷이 없다"고 정확히 말한다**',
-    ok: /인터넷이 없어/.test(statusText()), detail: statusText() });
+  await settled();
+  out.push({ name: '**끊겼을 때는 창으로 붙잡는다**(토스트는 놓치기 쉽다)',
+    ok: !!document.getElementById('alertSheet'), detail: sheetText().slice(0, 50) });
+  out.push({ name: '"인터넷이 없다"고 정확히 말한다', ok: /인터넷이 없어/.test(result()), detail: result().slice(0, 60) });
   out.push({ name: '잃는 게 없다고 안심시킨다',
-    ok: /자동으로 올라갑니다|앱을 꺼도/.test(statusText()) });
+    ok: /자동으로 올라갑니다|앱을 꺼도/.test(result()) });
+  document.getElementById('alertSheet')?.remove();
   const qAfter = (await d.listOutbox()).length;
   out.push({ name: '진짜로 기기에 남는다(큐가 늘어난다)', ok: qAfter > qBefore,
     detail: `${qBefore} → ${qAfter}` });
@@ -4548,8 +4570,12 @@ await run('vault 저장 알림', async () => {
   await new Promise((r) => setTimeout(r, 120));
   document.getElementById('scSave').click();
   await new Promise((r) => setTimeout(r, 500));
+  await settled();
   out.push({ name: '**권한 문제는 인터넷 문제와 다르게 말한다**',
-    ok: /권한/.test(statusText()) && !/인터넷이 없어/.test(statusText()), detail: statusText() });
+    ok: /권한/.test(result()) && !/인터넷이 없어/.test(result()), detail: result().slice(0, 60) });
+  out.push({ name: '그때는 설정으로 갈 길을 준다',
+    ok: /설정 열기/.test(sheetText()) });
+  document.getElementById('alertSheet')?.remove();
 
   window.fetch = realFetch;
   for (const it of await d.listOutbox()) await d.dequeue(it.id);

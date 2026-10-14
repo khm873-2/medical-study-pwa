@@ -99,37 +99,49 @@ const L1 = [word('65세', 10, 50), word('남자가', 55, 50), word('쓰러졌다
 const L2 = [word('맥박이', 10, 80), word('없다', 55, 80)];
 host._query = (sel) => (sel === '.tok' ? [...L1, ...L2] : []);
 
-// 밑줄 긋듯 한 줄 아래를 지나가기
+// ★ 2026-10-14부터 **낱말 범위**다 — 시작 낱말부터 끝 낱말까지, 글에서 긁는 것과 같다.
+//   전에는 "걸친 줄은 통째로"였는데, 그러면 **한 줄만 긋고 싶을 때 그게 안 됐다**.
+//   줄 단위로 들고 가고 싶으면 영역 복사를 쓰면 된다.
 selected = null;
 draw(20, 72, 130, 73);
 await settle();
-ok('밑줄: 그 줄 전체', selected === '65세 남자가 쓰러졌다', `"${selected}"`);
+ok('한 줄을 끝까지 그으면 그 줄 전체', selected === '65세 남자가 쓰러졌다', `"${selected}"`);
 ok('선택 궤적은 획으로 안 남음', pen.strokes.length === 0, `${pen.strokes.length}`);
 
-// ★ 줄 중간까지만 그어도 **그 줄 전체**를 가져온다(2026-10-09 변경)
-//   — 줄을 중간까지만 긋는 일은 실제로 거의 없고, 잘리면 다시 그어야 해서 불편했다
+// **그은 만큼만** 잡힌다
 selected = null;
 draw(12, 72, 44, 72, 6);     // '65세'에만 닿게 짧게
 await settle();
-ok('짧게 그어도 줄 전체', selected === '65세 남자가 쓰러졌다', `"${selected}"`);
+ok('짧게 그으면 그만큼만', selected === '65세', `"${selected}"`);
 
 selected = null;
 draw(100, 72, 130, 72, 5);   // 줄 뒷부분만
 await settle();
-ok('줄 뒤쪽만 그어도 줄 전체', selected === '65세 남자가 쓰러졌다', `"${selected}"`);
+ok('뒤쪽만 그으면 뒤쪽 낱말만', selected === '쓰러졌다', `"${selected}"`);
+
+selected = null;
+draw(12, 72, 92, 72, 6);     // 첫 낱말 ~ 둘째 낱말
+await settle();
+ok('시작 낱말 ~ 끝 낱말', selected === '65세 남자가', `"${selected}"`);
 
 // 다른 줄은 안 딸려온다
 selected = null;
 draw(12, 102, 40, 102, 5);   // 둘째 줄만
 await settle();
-ok('걸린 줄만 가져옴', selected === '맥박이 없다', `"${selected}"`);
+ok('다른 줄은 안 딸려온다', selected === '맥박이', `"${selected}"`);
+
+// 여러 줄에 걸치면 중간은 통째로 — 문서 순서라 저절로 그렇게 된다
+selected = null;
+draw(100, 72, 40, 102, 8);   // 1줄 끝 낱말 → 2줄 첫 낱말
+await settle();
+ok('줄을 넘기면 사이가 다 들어온다', selected === '쓰러졌다 맥박이', `"${selected}"`);
 
 // ★ 끊어 그어도 하나로 묶인다 — 이게 이번 변경의 핵심(밑줄이 잘 끊기던 문제)
 selected = null;
 draw(12, 72, 48, 72, 4);    // 첫 조각
 draw(52, 72, 92, 73, 4);    // 끊겼다가 이어서
 await settle();
-ok('끊어 그어도 한 번의 선택으로', selected === '65세 남자가 쓰러졌다', `"${selected}"`);
+ok('끊어 그어도 한 번의 선택으로', selected === '65세 남자가', `"${selected}"`);
 
 // 네모로 두 줄 감싸기(캡처하듯)
 selected = null;

@@ -3754,15 +3754,69 @@ async function saveScrap() {
     message: `iPad 모아두기: ${ctx.title || '메모'}`,
   });
 
-  // 네트워크가 없으면 아웃박스로 — 모아둔 게 사라지면 안 된다
-  const r = await saveToVault(payloads, { statusEl: st });
-
+  // ★ **기다리지 않는다**(2026-10-14 요청: "계속 기다려야 하는 게 에너지 쓰인다").
+  //   모아두기는 거의 항상 잘 올라간다. 그런데 올라갈 때까지 창을 붙들고 서 있으니
+  //   쓸 때마다 몇 초씩 멈추는 꼴이었다.
+  //
+  //   그래서 **바로 닫고** 보내기는 뒤에서 한다. 잘 되면 짧게 한 줄, 안 되면 그때 띄운다.
+  //   실패해도 내용은 대기열에 남으므로 잃는 것이 없다 — 그래서 이렇게 할 수 있다.
   ta.value = '';
   scrapShots.forEach((sh) => URL.revokeObjectURL(sh.url));
   scrapShots = [];
   renderShots();
-  // 대기열로 간 경우엔 그 안내를 읽을 시간을 준다
-  setTimeout(closeScrap, r.queued.length ? 2600 : 1100);
+  closeScrap();
+  toast('모아두는 중…');
+
+  const r = await pushToVault(payloads);
+  const m = vaultSaveMessage(r);
+  if (r.queued.length) {
+    // 안 됐을 때만 붙잡는다 — 뭘 해야 하는지 알려줘야 하니까
+    alertSheet('모아두지 못했습니다', m.text, m.needSetup ? openSetup : null);
+  } else {
+    toast(`✓ 모아뒀습니다 (${r.saved.length}건)`);
+  }
+}
+
+/**
+ * 붙잡아야 할 때만 쓰는 알림창.
+ *
+ * 잘 되는 일은 조용히 지나가고, **안 될 때만** 멈춰 세운다(2026-10-14).
+ * 토스트는 놓치기 쉬워서, 손을 써야 하는 일에는 모자란다.
+ */
+function alertSheet(title, body, onFix) {
+  document.getElementById('alertSheet')?.remove();
+  const wrap = document.createElement('div');
+  wrap.id = 'alertSheet';
+  wrap.className = 'sheet';
+  const card = document.createElement('div');
+  card.className = 'sheet-card';
+  const h = document.createElement('div');
+  h.className = 'sheet-head';
+  const b = document.createElement('b');
+  b.textContent = title;
+  const x = document.createElement('button');
+  x.className = 'icon-btn';
+  x.textContent = '✕';
+  x.onclick = () => wrap.remove();
+  h.append(b, x);
+  const p = document.createElement('p');
+  p.className = 'muted';
+  p.style.margin = '6px 0 0';
+  p.textContent = body;
+  card.append(h, p);
+  if (onFix) {
+    const foot = document.createElement('div');
+    foot.className = 'sheet-foot';
+    const go = document.createElement('button');
+    go.className = 'btn primary';
+    go.textContent = '설정 열기';
+    go.onclick = () => { wrap.remove(); onFix(); };
+    foot.appendChild(go);
+    card.appendChild(foot);
+  }
+  wrap.appendChild(card);
+  wrap.onclick = (e) => { if (e.target === wrap) wrap.remove(); };
+  document.body.appendChild(wrap);
 }
 
 /**
@@ -5928,13 +5982,21 @@ document.getElementById('saveToVaultBtn').onclick = async (e) => {
         items: askItems,
       }));
     }
-    const r = await saveToVault(payloads, { statusEl: document.getElementById('saveMsg') });
-    // 대기열에 들어간 것도 **내용은 남아 있다** — 질문기록을 비우고 이어풀기를 접는 건
-    // 그 내용이 어딘가(서버든 기기 큐든)에 확실히 들어간 뒤여야 한다. 큐도 그 조건을 만족한다.
+    // 기다리지 않는다 — 어차피 대기열이 받쳐주므로 **잃는 것이 없다**(2026-10-14).
+    // 눌렀다는 표시만 바로 주고, 안 됐을 때만 붙잡는다.
     askItems = [];
     clearSession(currentExam.path).catch(() => {});
-    btn.textContent = r.ok ? '✅ 저장됨' : '📥 대기열에 넣음';
-    setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 2500);
+    btn.textContent = '✅ 저장됨';
+    const msg = document.getElementById('saveMsg');
+    msg.textContent = '저장 중…';
+    setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 2000);
+
+    const r = await pushToVault(payloads);
+    const m = vaultSaveMessage(r);
+    msg.textContent = m.text;
+    msg.classList.toggle('save-ok', !!m.ok);
+    msg.classList.toggle('save-warn', !m.ok);
+    if (r.queued.length) alertSheet('저장하지 못했습니다', m.text, m.needSetup ? openSetup : null);
   } catch (err) {
     btn.textContent = label;
     btn.disabled = false;

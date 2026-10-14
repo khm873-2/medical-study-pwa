@@ -120,9 +120,17 @@ ok('네비에 margin-top:auto (항상 바닥)',
 ok('main-col이 세로 플렉스',
   wideDecl('#quizScreen .split > .main-col', 'flex-direction') === 'column',
   String(wideDecl('#quizScreen .split > .main-col', 'flex-direction')));
-ok('main-col에 min-height (내용 짧아도 네비가 바닥)',
-  /calc|vh/.test(String(wideDecl('#quizScreen .split > .main-col', 'min-height'))),
-  String(wideDecl('#quizScreen .split > .main-col', 'min-height')));
+// min-height는 **모자랐다** — 내용이 길면 부모가 같이 길어져 sticky 바가 화면 한가운데
+// 멈춰 섰다(2026-10-14). 이제 화면 높이를 못 박고 그 안에서 스크롤시킨다.
+ok('main-col이 화면 높이를 넘지 않는다(바가 늘 바닥에 있게)',
+  wideDecl('#quizScreen .split > .main-col', 'height') === '100%',
+  String(wideDecl('#quizScreen .split > .main-col', 'height')));
+ok('main-col 안에서 스크롤된다(페이지가 안 움직이게)',
+  wideDecl('#quizScreen .split > .main-col', 'overflow-y') === 'auto',
+  String(wideDecl('#quizScreen .split > .main-col', 'overflow-y')));
+ok('.split이 화면 높이에 맞춰진다',
+  /calc|dvh/.test(String(wideDecl('#quizScreen .split', 'height'))),
+  String(wideDecl('#quizScreen .split', 'height')));
 
 // ── 3. 선택 팝업이 펜 입력을 받을 수 있는 구조인가 ──────────────
 const pop = document.getElementById('selPop');
