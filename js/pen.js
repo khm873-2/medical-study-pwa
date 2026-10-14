@@ -181,6 +181,7 @@ export class PenLayer {
     // 글자 위치는 획 하나 동안만 캐시한다 — 스크롤하거나 창을 바꾸면 달라지므로
     // 획을 시작할 때마다 버린다(2026-10-13).
     this._tokCache = null;
+    this._emphCache = null;
     this._cur = { color: this.color, width: this.width, pts: [pt], t0: Date.now() };
   }
 
@@ -288,11 +289,33 @@ export class PenLayer {
    */
   _showCropBox() {
     const raw = this._liveBounds();
-    this._coveredLines = null;
     this._previewKind = this.capturing ? 'crop' : 'card';
     this._previewBox = raw && (raw.r - raw.l) > 0 && (raw.b - raw.t) > 0 ? raw : null;
     this._lastLive = raw;
+    // 카드 모드에서는 **무엇이 빈칸이 될지**를 미리 보여준다(2026-10-14 요청:
+    // "어디까지 카드 범위가 되는지 팝업 띄우기 전에 보조 표시선으로").
+    // 네모만 보면 그 안의 어느 말이 가려질지 알 수가 없어서 매번 쳐보고 확인해야 했다.
+    this._coveredLines = (this.carding && this._previewBox)
+      ? this._emphasisIn(this._previewBox) : null;
     this.redraw();
+  }
+
+  /** 네모에 걸린 **강조된 말**의 자리. 획 하나 동안 캐시한다(토큰과 같은 이유). */
+  _emphasisIn(b) {
+    if (!this._emphCache) {
+      const r = this.canvas.getBoundingClientRect();
+      this._emphCache = [];
+      this.host.querySelectorAll('.ask, mark, strong, b, em, i').forEach((el) => {
+        const q = el.getBoundingClientRect();
+        if (!q.width || !q.height) return;
+        // 강조 안에 또 강조가 있으면 바깥 것만 — 같은 자리를 두 번 칠하지 않는다
+        if (el.parentElement && el.parentElement.closest('.ask, mark, strong, b, em, i')) return;
+        this._emphCache.push({ l: q.left - r.left, t: q.top - r.top,
+          r: q.right - r.left, b: q.bottom - r.top });
+      });
+    }
+    return this._emphCache.filter((q) =>
+      q.r >= b.l && q.l <= b.r && q.b >= b.t && q.t <= b.b);
   }
 
   /**
@@ -386,6 +409,7 @@ export class PenLayer {
     this._previewKind = null;
     this._coveredLines = null;
     this._tokCache = null;
+    this._emphCache = null;
     this._lastLive = null;
     this._lastRetreating = false;
     this._span = this._lastSpan;        // 손을 뗀 뒤에도 마지막 범위로 확정한다
@@ -610,6 +634,16 @@ export class PenLayer {
     // ① 안쪽을 옅게 — 어디가 잡히는지 면으로 보인다
     ctx.fillStyle = kind === 'card' ? 'rgba(167,139,250,.13)' : 'rgba(110,205,170,.20)';
     ctx.fillRect(b.l, b.t, w, h);
+    // ①-2 카드 모드 — **빈칸이 될 말**을 진하게 짚어준다. 네모만 보면 그 안의 어느
+    //     말이 가려질지 알 수가 없어서, 쳐보고 나서야 알았다(2026-10-14).
+    if (kind === 'card' && this._coveredLines && this._coveredLines.length) {
+      ctx.fillStyle = 'rgba(139,92,246,.30)';
+      for (const q of this._coveredLines) {
+        const x = q.l - 1, y = q.t - 1, qw = q.r - q.l + 2, qh = q.b - q.t + 2;
+        if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, qw, qh, 3); ctx.fill(); }
+        else ctx.fillRect(x, y, qw, qh);
+      }
+    }
     // ② 테두리 — 너무 작아 아무 일도 안 일어날 때는 점선으로 "아직 아니다"를 말한다
     ctx.strokeStyle = tooSmall ? 'rgba(120,120,130,.8)' : color;
     ctx.lineWidth = 1.5;
@@ -632,7 +666,11 @@ export class PenLayer {
       }
     }
     // ④ 크기 — 틀 위쪽에 작은 칩으로. 위가 좁으면 안쪽에 넣는다.
-    const label = tooSmall ? '조금 더 크게' : `${Math.round(w)} × ${Math.round(h)}`;
+    const n = kind === 'card' && this._coveredLines ? this._coveredLines.length : 0;
+    const label = tooSmall ? '조금 더 크게'
+      : (kind === 'card'
+        ? (n ? `빈칸 ${n}개` : '강조된 말이 없습니다')
+        : `${Math.round(w)} × ${Math.round(h)}`);
     ctx.setLineDash([]);
     ctx.font = '600 11px ui-monospace, SFMono-Regular, Menlo, monospace';
     const tw = ctx.measureText(label).width;

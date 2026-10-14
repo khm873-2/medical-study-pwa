@@ -5250,20 +5250,34 @@ await run('나누기 기억', async () => {
   out.push({ name: '오른쪽에 암기법이 떴다', ok: titles().some((t) => /암기법/.test(t)),
     detail: titles().join(' | ') });
 
+  // 오른쪽에서 2장으로 넘겨두고 닫는다 — 다시 열 때 그 장이어야 한다
+  document.getElementById('readNext').click();
+  await new Promise((r) => setTimeout(r, 300));
+  out.push({ name: '오른쪽을 2장으로 넘겼다',
+    ok: /^2\//.test(document.getElementById('readPos').textContent),
+    detail: document.getElementById('readPos').textContent });
+
   // 닫는다
   document.getElementById('readSplitBtn').click();
   await new Promise((r) => setTimeout(r, 400));
   out.push({ name: '닫으면 창이 하나', ok: document.querySelectorAll('#readPanes .read-pane').length === 1 });
   const mem = await d.kvGet('split_mem');
+  const flat = mem ? Object.values(mem).flat() : [];
   out.push({ name: '**옆에 뒀던 것을 적어뒀다**',
-    ok: !!(mem && Object.values(mem).some((v) => v.some((p) => /암기법/.test(p)))),
+    ok: flat.some((x) => /암기법/.test(x && x.p ? x.p : x)),
     detail: JSON.stringify(mem).slice(0, 80) });
+  out.push({ name: '**보던 자리(몇 장)까지 같이 적는다**',
+    ok: flat.every((x) => x && typeof x === 'object' && typeof x.s === 'number'),
+    detail: JSON.stringify(flat[0] || null) });
 
   // ★ 다시 나누면 그대로 돌아온다
   document.getElementById('readSplitBtn').click();
   await new Promise((r) => setTimeout(r, 800));
   out.push({ name: '**다시 나누면 암기법이 되살아난다**(끌어다 넣지 않아도)',
     ok: titles().some((t) => /암기법/.test(t)), detail: titles().join(' | ') });
+  out.push({ name: '**보던 장에서 이어 본다**(1장부터가 아니라)',
+    ok: /^2\//.test(document.getElementById('readPos').textContent),
+    detail: document.getElementById('readPos').textContent });
   out.push({ name: '같은 문서를 두 번 띄우지 않는다',
     ok: titles().filter((t) => /본문/.test(t)).length <= 1, detail: titles().join(' | ') });
 
@@ -5349,6 +5363,82 @@ await run('그리는 동안 끊김', async () => {
   await new Promise((rs) => setTimeout(rs, 700));
   out.push({ name: '필기는 그래도 획으로 남는다', ok: pen.strokes.length > 0,
     detail: `${pen.strokes.length}획` });
+
+  pen.destroy();
+  body.innerHTML = '';
+  return out;
+});
+
+// ══════════ 카드 — 그림은 걸친 만큼, 빈칸은 미리 보여준다 (2026-10-14) ══════════
+// "그림 설명에서 카드 만들면 꼭 그림도 따라오네" / "어디까지 카드 범위가 되는지 미리 보여줘"
+await run('카드 미리보기 · 그림', async () => {
+  const out = [];
+  const { PenLayer } = await import('/js/pen.js');
+  const R = await import('/js/reader.js');
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  document.getElementById('readScreen').classList.add('toc-off');
+  document.querySelectorAll('.sheet, .ask-float, #docDrawer, #docScrim, #selPop')
+    .forEach((x) => x.classList.add('hidden'));
+  document.querySelectorAll('#readCard .penlayer').forEach((c) => c.remove());
+
+  const body = document.getElementById('readBody');
+  // ★ 실제로 겪은 꼴 — **그림과 설명이 한 덩어리**다. 그래서 설명만 긁어도 그림이 따라왔다.
+  body.innerHTML = '<p id="cap"><img id="pic" alt="" style="width:300px;height:150px;background:#dde;display:block">'
+    + '2도 표재는 <strong>표피와 표재진피</strong>를 침범하고 '
+    + '<mark>capillary refill 정상</mark>이며 <strong>14~21일</strong>에 낫는다.</p>';
+  await new Promise((r) => setTimeout(r, 200));
+  const pen = new PenLayer(document.getElementById('readCard'), {});
+  const cv = document.querySelector('#readCard .penlayer');
+  const ev = (t, x, y) => cv.dispatchEvent(new PointerEvent(t, {
+    pointerType: 'pen', pointerId: 14, isPrimary: true,
+    buttons: t === 'pointerup' ? 0 : 1, pressure: .5,
+    clientX: x, clientY: y, bubbles: true, cancelable: true }));
+
+  // ── ① 설명만 긁는다 — 그림은 위에 있고 네모 밖이다
+  pen.setTool('card');
+  const cap = document.getElementById('cap').getBoundingClientRect();
+  const picR0 = document.getElementById('pic').getBoundingClientRect();
+  // 그림 **아래** 글줄만 긁는다 — 같은 덩어리지만 그림은 네모 밖이다
+  const y0 = picR0.bottom + 2;
+  ev('pointerdown', cap.left - 4, y0);
+  for (let i = 1; i <= 12; i++) {
+    ev('pointermove', cap.left - 4 + (cap.width + 8) * i / 12, y0 + (cap.bottom + 2 - y0) * i / 12);
+  }
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  out.push({ name: '**빈칸이 될 자리를 미리 짚어준다**',
+    ok: !!pen._coveredLines && pen._coveredLines.length === 3,
+    detail: `${(pen._coveredLines || []).length}곳` });
+  out.push({ name: '카드 모드 틀이다(캡처와 구별)', ok: pen._previewKind === 'card' });
+  const box = pen._previewBox;
+  ev('pointerup', cap.right + 4, cap.bottom + 2);
+  await new Promise((r) => setTimeout(r, 700));
+
+  // 실제로 만들어지는 카드에 그림이 안 따라오는가
+  const r0 = cv.getBoundingClientRect();
+  const vp = { l: r0.left + box.l, t: r0.top + box.t, r: r0.left + box.r, b: r0.top + box.b };
+  const made = R.cardsFromBox(body, vp, { notePath: 'x.md', noteTitle: 'x', heading: 'h' });
+  out.push({ name: '카드가 만들어진다', ok: made.length > 0, detail: `${made.length}장` });
+  out.push({ name: '**설명만 긁으면 그림은 안 따라온다**',
+    ok: made.every((c) => !/<img/i.test(c.contextHtml)),
+    detail: made.map((c) => (/<img/i.test(c.contextHtml) ? '그림있음' : '글만')).join(',') });
+
+  // ── ② 그림까지 덮으면 따라온다
+  const picR = document.getElementById('pic').getBoundingClientRect();
+  const vp2 = { l: picR.left - 4, t: picR.top + picR.height * 0.5, r: cap.right + 4, b: cap.bottom + 4 };
+  const made2 = R.cardsFromBox(body, vp2, { notePath: 'x.md', noteTitle: 'x', heading: 'h' });
+  out.push({ name: '그림을 덮으면 그림도 들어온다',
+    ok: made2.some((c) => /<img/i.test(c.contextHtml)) || made2.length === 0,
+    detail: made2.length ? made2.map((c) => (/<img/i.test(c.contextHtml) ? '그림' : '글')).join(',') : '카드 없음' });
+
+  // ── ③ 10% 규칙 자체
+  const rect = { top: 100, bottom: 200, height: 100 };
+  out.push({ name: '10%만 걸쳐도 남긴다', ok: R.imgOverlap(rect, { t: 190, b: 300 }) >= 0.1,
+    detail: R.imgOverlap(rect, { t: 190, b: 300 }).toFixed(2) });
+  out.push({ name: '살짝 스치면 뺀다', ok: R.imgOverlap(rect, { t: 196, b: 300 }) < 0.1,
+    detail: R.imgOverlap(rect, { t: 196, b: 300 }).toFixed(2) });
+  out.push({ name: '안 겹치면 0', ok: R.imgOverlap(rect, { t: 300, b: 400 }) === 0 });
 
   pen.destroy();
   body.innerHTML = '';

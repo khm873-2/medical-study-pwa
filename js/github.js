@@ -91,15 +91,58 @@ function refreshInBackground(path) {
 }
 
 /** 바이너리(이미지) 읽기 → blob URL. 캐시는 하지 않는다(용량 때문). */
+/**
+ * 그림 주소 — **한 번 받은 것은 다시 쓴다**.
+ *
+ * 전에는 부를 때마다 새로 받아 `createObjectURL`을 만들고 **아무도 풀어주지 않았다**.
+ * 노트를 넘길 때마다 blob이 쌓여서(그림 한 장이 수백 KB) 오래 보고 있으면 앱이
+ * 무거워졌다. vault의 attachments만 429MB다(2026-10-14 실측).
+ *
+ * 이제 경로별로 하나만 들고 돌려 쓴다. 넘치면 **가장 오래 안 쓴 것부터 풀어준다** —
+ * 같은 섹션을 오가도 다시 안 받으니 네트워크도 같이 아낀다.
+ */
+const BLOB_MAX = 60;                 // 그림 60장 ≈ 수십 MB. 한 과목을 넘겨 보기에 충분하다.
+const blobUrls = new Map();          // path → objectURL (들어온 순서 = 오래된 순)
+const blobWait = new Map();          // 같은 그림을 동시에 두 번 받지 않게
+
 export async function getBlobUrl(path) {
-  const repo = await getRepo();
-  const res = await fetch(`${API}/repos/${repo}/contents/${encPath(path)}`, {
-    headers: await headers({ Accept: 'application/vnd.github.raw' }),
-  });
-  if (!res.ok) throw new Error(`이미지 읽기 실패 (${res.status}) — ${path}`);
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
+  const hit = blobUrls.get(path);
+  if (hit) {                          // 쓴 것은 뒤로 — 가장 오래 안 쓴 것이 앞에 남는다
+    blobUrls.delete(path);
+    blobUrls.set(path, hit);
+    return hit;
+  }
+  if (blobWait.has(path)) return blobWait.get(path);
+
+  const task = (async () => {
+    const repo = await getRepo();
+    const res = await fetch(`${API}/repos/${repo}/contents/${encPath(path)}`, {
+      headers: await headers({ Accept: 'application/vnd.github.raw' }),
+    });
+    if (!res.ok) throw new Error(`이미지 읽기 실패 (${res.status}) — ${path}`);
+    const url = URL.createObjectURL(await res.blob());
+    blobUrls.set(path, url);
+    while (blobUrls.size > BLOB_MAX) {
+      const oldest = blobUrls.keys().next().value;
+      URL.revokeObjectURL(blobUrls.get(oldest));
+      blobUrls.delete(oldest);
+    }
+    return url;
+  })().finally(() => blobWait.delete(path));
+
+  blobWait.set(path, task);
+  return task;
 }
+
+/** 들고 있는 그림을 전부 풀어준다(설정의 "저장 공간 비우기"가 쓴다). */
+export function releaseBlobs() {
+  blobUrls.forEach((u) => URL.revokeObjectURL(u));
+  blobUrls.clear();
+  return blobUrls.size;
+}
+
+/** 지금 몇 장을 들고 있나 — 설정 화면에 보여준다. */
+export function blobCount() { return blobUrls.size; }
 
 /**
  * 새 파일 생성(append-only). 같은 경로가 이미 있으면 파일명에 -2, -3... 을 붙여 피한다

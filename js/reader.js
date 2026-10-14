@@ -668,8 +668,8 @@ export function cardsFromBox(root, box, meta = {}) {
   let n = 0;
   for (const [block, els] of split) {
     const card = block.tagName === 'TR'
-      ? tableCard(block, els, meta, n)
-      : blockCard(block, els, meta, n);
+      ? tableCard(block, els, meta, n, box)
+      : blockCard(block, els, meta, n, box);
     if (!card) continue;
     // 무슨 이야기인지 위로 거슬러 붙인다 — 이게 없으면 맞힐 수가 없다
     card.trail = contextTrail(block.tagName === 'TR' ? (block.closest('table') || block) : block, root);
@@ -836,9 +836,9 @@ function blockOf(el) {
 }
 
 /** 보통 문단·목록 — 블록 하나를 빈칸 여럿짜리 카드 한 장으로. */
-function blockCard(block, els, meta, n) {
+function blockCard(block, els, meta, n, box) {
   const answers = [];
-  const html = cloneWithBlanks(block, els, answers);
+  const html = cloneWithBlanks(block, els, answers, box);
   if (!answers.length) return null;
   const plain = block.textContent.replace(/\s+/g, ' ').trim();
   // 가린 글자가 문단의 거의 전부면 풀 수가 없다
@@ -859,9 +859,9 @@ function blockCard(block, els, meta, n) {
 }
 
 /** 표 — 표 전체를 그대로 두고 그 행의 강조만 가린다. */
-function tableCard(tr, els, meta, n) {
+function tableCard(tr, els, meta, n, box) {
   const table = tr.closest('table');
-  if (!table) return blockCard(tr, els, meta, n);
+  if (!table) return blockCard(tr, els, meta, n, box);
   const answers = [];
   const rowIdx = [...table.querySelectorAll('tr')].indexOf(tr);
   const clone = table.cloneNode(true);
@@ -891,7 +891,17 @@ function tableCard(tr, els, meta, n) {
 }
 
 /** 블록을 복제하면서 대상 강조만 빈칸으로 바꾼다. 나머지 서식은 그대로 둔다. */
-function cloneWithBlanks(block, els, answers) {
+/** 그림이 네모 안에 **얼마나** 들어왔나 (0~1). 높이 기준. */
+export function imgOverlap(rect, box) {
+  if (!box || !rect || !rect.height) return 1;
+  const top = Math.max(rect.top, box.t);
+  const bot = Math.min(rect.bottom, box.b);
+  return Math.max(0, bot - top) / rect.height;
+}
+
+const IMG_KEEP = 0.1;      // 10% — 설명만 긁었는데 그림이 통째로 따라오지 않게
+
+function cloneWithBlanks(block, els, answers, box) {
   const clone = block.cloneNode(true);
   const orig = [...block.querySelectorAll(EMPH_SEL)];
   const copy = [...clone.querySelectorAll(EMPH_SEL)];
@@ -899,6 +909,17 @@ function cloneWithBlanks(block, els, answers) {
     if (!els.includes(o) || !copy[i]) return;
     answers.push(replaceWithCloze(copy[i], o.textContent.trim()));
   });
+  // 그림은 **걸친 만큼** 따라온다(2026-10-14 요청).
+  // 그림 설명만 긁었는데 그림이 통째로 딸려오면 카드가 화면을 다 먹는다.
+  // 높이의 10%라도 네모에 들어왔으면 뜻이 있다고 보고 남긴다.
+  if (box) {
+    const oi = [...block.querySelectorAll('img')];
+    const ci = [...clone.querySelectorAll('img')];
+    oi.forEach((im, i) => {
+      if (!ci[i]) return;
+      if (imgOverlap(im.getBoundingClientRect(), box) < IMG_KEEP) ci[i].remove();
+    });
+  }
   return clone.outerHTML;
 }
 

@@ -3215,7 +3215,10 @@ async function loadReadPos() { readPos = (await kvGet(READ_POS_KEY)) || {}; }
 const READ_POS_MAX = 300;
 let readPosTimer = 0;
 function rememberReadPos() {
-  // 창이 하나일 때만 기억한다(분할 중에는 어느 쪽이 "읽던 자리"인지 정할 수 없다)
+  // 나뉘어 있을 때는 **옆칸 기억**에 자리를 적어둔다(2026-10-14) — 닫고 다시 열면
+  // 그 장부터 이어 본다.
+  if (panes.length === 2) { rememberSplit(); return; }
+  // 창이 하나일 때만 "읽던 자리"로 기억한다(분할 중에는 어느 쪽인지 정할 수 없다)
   if (panes.length !== 1 || !reader) return;
   readPos[reader.note.path] = reader.secIdx;
   readPos.__t = readPos.__t || {};
@@ -3261,14 +3264,21 @@ const SPLIT_MEM_KEY = 'split_mem';     // { 왼쪽노트경로: [오른쪽 노�
 let splitMem = {};
 async function loadSplitMem() { splitMem = (await kvGet(SPLIT_MEM_KEY)) || {}; }
 
-/** 지금 두 창에 뭐가 떠 있는지 적어둔다. */
+/**
+ * 지금 두 창에 뭐가 떠 있는지 적어둔다 — **보던 자리까지**.
+ *
+ * 경로만 적어뒀더니 되살릴 때 늘 1장부터 열렸다(2026-10-14 지적). 암기법을 8장까지
+ * 보다가 닫았으면 다시 열 때도 8장이어야 한다. 숫자 하나만 더 적으면 되는 일이다.
+ */
 function rememberSplit() {
   if (panes.length !== 2) return;
   const left = panes[0].tabs[panes[0].active] || panes[0].tabs[0];
   if (!left) return;
   // 왼쪽에 이미 있는 것은 빼둔다 — 되살릴 때 같은 문서가 두 번 뜨면 쓸모가 없다
   const here = new Set(panes[0].tabs.map((t) => t.note.path));
-  const right = panes[1].tabs.map((t) => t.note.path).filter((p2) => !here.has(p2));
+  const right = panes[1].tabs
+    .filter((t) => !here.has(t.note.path))
+    .map((t) => ({ p: t.note.path, s: t.secIdx || 0 }));
   if (!right.length) return;
   splitMem[left.note.path] = right.slice(0, 4);
   // 너무 쌓이지 않게 — 최근 60개 노트만
@@ -3284,11 +3294,17 @@ async function splitPane(note) {
 
   // 끌어다 놓은 게 아니라 **나누기 버튼**을 누른 경우라면, 지난번에 옆에 뒀던 걸 되살린다.
   if (!note && cur) {
-    const want = splitMem[cur.note.path] || [];
+    // 옛 기록은 경로 문자열만 들어 있다 — 그것도 받아준다(쓰다 보면 저절로 새 꼴이 된다)
+    const want = (splitMem[cur.note.path] || []).map((x) => (typeof x === 'string' ? { p: x, s: 0 } : x));
     const tabs = [];
-    for (const path of want) {
+    for (const { p: path, s: at } of want) {
       if (path === cur.note.path) continue;
-      try { tabs.push({ note: await loadNote(path), secIdx: 0 }); } catch { /* 지워졌으면 건너뛴다 */ }
+      try {
+        const n2 = await loadNote(path);
+        // 그사이 노트가 짧아졌을 수 있다 — 없는 장을 가리키면 처음으로
+        const sec = at > 0 && at < n2.sections.length ? at : 0;
+        tabs.push({ note: n2, secIdx: sec });
+      } catch { /* 지워졌으면 건너뛴다 */ }
     }
     if (tabs.length) {
       panes.push({ tabs, active: 0 });
