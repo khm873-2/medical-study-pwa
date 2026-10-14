@@ -5272,6 +5272,88 @@ await run('나누기 기억', async () => {
   window.fetch = realFetch;
   return out;
 });
+
+// ══════════ 그리는 동안 끊기지 않는다 (2026-10-14 신고) ══════════
+// "캡쳐 도구에서 네모가 매끄럽게 안 그려지고 툭툭 끊김"
+// → 좌표가 올 때마다 화면을 칠하고 있었다. 애플펜슬은 1초에 120번 넘게 좌표를 보내는데,
+//    거기에 rAF 한 번이 더 붙어 같은 프레임을 두 번씩 칠했다. 한 프레임에 한 번만 칠한다.
+await run('그리는 동안 끊김', async () => {
+  const out = [];
+  const { tokenize, PenLayer } = await import('/js/pen.js');
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  document.getElementById('readScreen').classList.add('toc-off');
+  document.querySelectorAll('.sheet, .ask-float, #docDrawer, #docScrim, #selPop')
+    .forEach((x) => x.classList.add('hidden'));
+  document.querySelectorAll('#readCard .penlayer').forEach((c) => c.remove());
+
+  const body = document.getElementById('readBody');
+  body.innerHTML = Array.from({ length: 24 }, (_, i) => `<p id="pp${i}"></p>`).join('');
+  for (let i = 0; i < 24; i++) {
+    tokenize(document.getElementById(`pp${i}`),
+      `${i + 1}번 문단. 화상 깊이에 따라 1도, 2도 표재, 2도 심부로 나눈다.`);
+  }
+  await new Promise((r) => setTimeout(r, 200));
+  const pen = new PenLayer(document.getElementById('readCard'), {});
+  const cv = document.querySelector('#readCard .penlayer');
+  const ev = (t, x, y) => cv.dispatchEvent(new PointerEvent(t, {
+    pointerType: 'pen', pointerId: 12, isPrimary: true,
+    buttons: t === 'pointerup' ? 0 : 1, pressure: .5,
+    clientX: x, clientY: y, bubbles: true, cancelable: true }));
+
+  const r = body.getBoundingClientRect();
+  const run1 = (tool, N) => {
+    pen.setTool(tool);
+    let paints = 0;
+    const real = pen.redraw.bind(pen);
+    pen.redraw = () => { paints++; real(); };
+    const t0 = performance.now();
+    ev('pointerdown', r.left + 20, r.top + 20);
+    for (let i = 1; i <= N; i++) ev('pointermove', r.left + 20 + i * 3, r.top + 20 + i * 2);
+    const ms = performance.now() - t0;
+    pen.redraw = real;
+    return { paints, ms, N };
+  };
+
+  // 애플펜슬 1초치 좌표를 한꺼번에 — 그 사이 화면은 한두 장뿐이다
+  const shot = run1('shot', 120);
+  out.push({ name: '**좌표마다 칠하지 않는다**(한 프레임에 한 번)',
+    ok: shot.paints <= 4, detail: `좌표 ${shot.N}개 → ${shot.paints}번 칠함` });
+  out.push({ name: '좌표 처리가 가볍다', ok: shot.ms / shot.N < 0.5,
+    detail: `${(shot.ms / shot.N).toFixed(3)}ms/좌표` });
+  ev('pointerup', r.left + 20 + 120 * 3, r.top + 20 + 120 * 2);
+  await new Promise((rs) => setTimeout(rs, 100));
+
+  // 그래도 **그려지기는 한다** — 안 그리면 가벼운 게 의미가 없다
+  await new Promise((rs) => requestAnimationFrame(() => requestAnimationFrame(rs)));
+  pen.setTool('shot');
+  ev('pointerdown', r.left + 30, r.top + 30);
+  for (let i = 1; i <= 12; i++) ev('pointermove', r.left + 30 + i * 12, r.top + 30 + i * 8);
+  await new Promise((rs) => requestAnimationFrame(() => requestAnimationFrame(rs)));
+  out.push({ name: '그리는 중에 틀이 실제로 보인다', ok: !!pen._previewBox,
+    detail: pen._previewBox ? `${Math.round(pen._previewBox.r - pen._previewBox.l)}px` : '없음' });
+  ev('pointerup', r.left + 30 + 144, r.top + 30 + 96);
+  await new Promise((rs) => setTimeout(rs, 100));
+
+  // 고르기·필기도 같은 길을 쓴다
+  const sel = run1('select', 60);
+  out.push({ name: '고르기도 한 프레임에 한 번', ok: sel.paints <= 4,
+    detail: `${sel.N}개 → ${sel.paints}번` });
+  ev('pointerup', r.left + 20 + 180, r.top + 20 + 120);
+  await new Promise((rs) => setTimeout(rs, 100));
+  const wr = run1('write', 60);
+  out.push({ name: '필기도 한 프레임에 한 번', ok: wr.paints <= 4,
+    detail: `${wr.N}개 → ${wr.paints}번` });
+  ev('pointerup', r.left + 20 + 180, r.top + 20 + 120);
+  await new Promise((rs) => setTimeout(rs, 700));
+  out.push({ name: '필기는 그래도 획으로 남는다', ok: pen.strokes.length > 0,
+    detail: `${pen.strokes.length}획` });
+
+  pen.destroy();
+  body.innerHTML = '';
+  return out;
+});
 await browser.close();
 
 // ══════════ 결과 ══════════

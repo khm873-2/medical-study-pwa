@@ -197,8 +197,11 @@ export class PenLayer {
       try { const c = e.getCoalescedEvents(); if (c && c.length) evs = c; } catch {}
     }
     for (const ev of evs) this._cur.pts.push(this._pos(ev));
-    this.redraw();
-    this._livePreview();          // 긋는 동안 잡히는 줄을 밝혀준다
+    // ⚠️ 여기서 redraw()를 바로 부르면 **한 번 움직일 때마다 화면을 두 번 그린다**
+    //    (여기서 한 번, 아래 rAF에서 또 한 번). 애플펜슬은 1초에 120번 넘게 좌표를
+    //    보내므로 그리는 내내 캔버스를 240번씩 다시 칠하게 되고, 그래서 네모가
+    //    툭툭 끊겼다(2026-10-14 신고). **화면 한 장에 한 번만** 그린다.
+    this._livePreview();
 
     // 안전장치: pointerup이 영영 안 오는 경우가 있다(펜을 화면 밖으로 빼거나 OS가 삼킴).
     // 그러면 _cur가 남아 파란 선이 지워지지 않는다 — 2026-10-09 실제 버그.
@@ -339,18 +342,29 @@ export class PenLayer {
    * 어디까지 잡히는지 알 수 없었다. 이제 잡히는 줄이 그때그때 밝아진다.
    * 한 프레임에 한 번만 다시 그린다(포인터는 그보다 훨씬 자주 온다).
    */
+  /**
+   * 그리는 동안의 화면 갱신 — **화면 한 장에 한 번만** 그린다.
+   *
+   * 포인터 좌표는 한 프레임에 여러 번 온다(애플펜슬은 120Hz 넘는다). 올 때마다 그리면
+   * 같은 프레임을 여러 번 칠하느라 오히려 밀려서 끊겨 보인다(2026-10-14 신고:
+   * "네모가 매끄럽게 안 그려지고 툭툭 끊김"). rAF로 묶어 한 번만 그린다.
+   */
   _livePreview() {
     if (this._liveRaf) return;
-    // rAF가 없는 환경(노드 테스트 하네스)에서는 그릴 화면도 없으므로 건너뛴다
-    if (typeof requestAnimationFrame !== 'function') return;
+    // rAF가 없는 환경(노드 테스트 하네스)에서는 그릴 화면도 없으므로 바로 그린다
+    if (typeof requestAnimationFrame !== 'function') { this._paintLive(); return; }
     this._liveRaf = requestAnimationFrame(() => {
       this._liveRaf = 0;
-      if (!this._cur && !this._pending) return;
-      if (this.erasing || this.writing) return;      // 필기는 궤적 그대로가 미리보기다
-      // 캡처·카드도 **어디까지 잡히는지** 보여야 한다. 다만 가져가는 것이 글이 아니라
-      // 네모난 영역이라, 줄 단위 하이라이트가 아니라 자르는 틀을 그린다(2026-10-13 요청).
-      this._refreshPreview();
+      this._paintLive();
     });
+  }
+
+  _paintLive() {
+    if (!this._cur && !this._pending) return;
+    // 필기·지우개는 그은 궤적 자체가 결과다 — 미리보기 계산 없이 그대로 그린다
+    if (this.erasing || this.writing) { this.redraw(); return; }
+    // 캡처·카드는 자르는 틀을, 고르기는 잡히는 낱말을 보여준다(각자 안에서 redraw 한다)
+    this._refreshPreview();
   }
 
   /** 지금 모드에 맞는 미리보기를 그린다 — 글은 줄 하이라이트, 캡처·카드는 자르는 틀. */
