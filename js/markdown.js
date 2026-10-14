@@ -34,6 +34,11 @@ function imgTag(name) {
   return `<span class="embed-box" style="aspect-ratio:${d.w}/${d.h}">${img}</span>`;
 }
 
+// `>` 없이 줄 맨 앞에 와도 콜아웃으로 볼 종류들. 아무 `[!xxx]`나 받으면 글 속의
+// 기호 언급까지 콜아웃이 되어버린다.
+const KNOWN_CALLOUT = new RegExp(
+  `^\\s*\\[!(${Object.keys(CALLOUT_LABEL).join('|')}|quote|summary|caution|failure|todo)\\][+-]?`, 'i');
+
 export function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -55,17 +60,30 @@ export function renderMarkdown(md, opts = {}) {
   const out = [];
   let i = 0;
 
+  // 앞머리(---로 감싼 YAML)는 화면에 보여줄 것이 아니다. 거기 적힌 메모가 본문처럼
+  // 떠서 `[!example]-` 같은 기호가 글자로 샜다(2026-10-14 발견).
+  if (lines[0] === '---') {
+    const end = lines.indexOf('---', 1);
+    if (end > 0) i = end + 1;
+  }
+
   while (i < lines.length) {
     const line = lines[i];
 
     // --- 콜아웃: > [!type]- 제목 ---
-    const co = line.match(/^>\s*\[!([\w-]+)\]([+-]?)\s*(.*)$/);
+    // 앞에 공백이 있어도 받는다 — 노트에 들여써서 적어둔 곳이 있다(2026-10-14 발견).
+    //
+    // `>` 가 없는 꼴도 받는다. 콜아웃 안에 콜아웃을 쓸 때 `> >` 대신 `>` 하나로 적어둔
+    // 곳이 많은데, 바깥 콜아웃이 `> ` 를 한 겹 벗겨내면 `[!note] …` 만 남는다.
+    // **아는 종류**일 때만 받으므로, 글 속에서 기호를 언급한 문장은 안 걸린다.
+    const co = line.match(/^\s*>\s*\[!([\w-]+)\]([+-]?)\s*(.*)$/)
+      || (KNOWN_CALLOUT.test(line) && line.match(/^\s*\[!([\w-]+)\]([+-]?)\s*(.*)$/));
     if (co) {
       const [, type, fold, title] = co;
       const body = [];
       i++;
-      while (i < lines.length && /^>/.test(lines[i])) {
-        body.push(lines[i].replace(/^>\s?/, ''));
+      while (i < lines.length && /^\s*>/.test(lines[i])) {
+        body.push(lines[i].replace(/^\s*>\s?/, ''));
         i++;
       }
       const icon = CALLOUT_LABEL[type.toLowerCase()] || '•';
@@ -113,21 +131,32 @@ export function renderMarkdown(md, opts = {}) {
     if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
       const ordered = /^\s*\d+\./.test(line);
       const items = [];
+      const extras = [];            // 항목마다 딸린 **블록**(들여쓴 콜아웃·인용)
       while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
         items.push(lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, ''));
+        extras.push([]);
         i++;
         // 이어지는 들여쓴 줄은 같은 항목에 붙인다
         while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !/^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
-          items[items.length - 1] += ' ' + lines[i].trim();
+          // ⚠️ 들여쓴 `>` 는 **그 항목 안의 콜아웃**이다(퀴즈 밑에 접어둔 정답 등).
+          //    글로 이어붙이면 `> [!success]- 정답 >` 이 그대로 글자로 샌다
+          //    (2026-10-14 신고: "이렇게 깨져서 나오는 거"). 따로 모아 블록으로 그린다.
+          if (/^\s*>/.test(lines[i])) {
+            extras[extras.length - 1].push(lines[i].replace(/^\s+/, ''));
+          } else {
+            items[items.length - 1] += ' ' + lines[i].trim();
+          }
           i++;
         }
       }
       const tag = ordered ? 'ol' : 'ul';
       // 체크 상자 — `- [ ] 채택 (안 1)`. 노트에서 **고르는 일**이 실제로 있어서
       // (암기법 후보 중 하나 채택 등) 눌러서 바꿀 수 있게 한다(2026-10-14 요청).
-      out.push(`<${tag}>` + items.map((t) => {
+      const tail = (k) => (extras[k] && extras[k].length
+        ? renderMarkdown(extras[k].join('\n'), opts) : '');
+      out.push(`<${tag}>` + items.map((t, k) => {
         const m = t.match(/^\[([ xX])\]\s*(.*)$/);
-        if (!m) return `<li>${inline(t)}</li>`;
+        if (!m) return `<li>${inline(t)}${tail(k)}</li>`;
         const on = m[1] !== ' ';
         // ⚠️ 글만으로는 어느 줄인지 못 찾는다 — "채택 (안 1)"이 한 노트에 13번 나온다
         //    (2026-10-14: "같은 줄이 13개라 어느 것인지 알 수 없습니다"). **몇 번째 상자인지**를
@@ -136,7 +165,7 @@ export function renderMarkdown(md, opts = {}) {
         return `<li class="task${on ? ' done' : ''}">`
           + `<button class="task-box" role="checkbox" aria-checked="${on}" `
           + `data-idx="${idx}" data-text="${escapeAttr(m[2])}">${on ? '☑' : '☐'}</button>`
-          + `<span class="task-t">${inline(m[2])}</span></li>`;
+          + `<span class="task-t">${inline(m[2])}</span>${tail(k)}</li>`;
       }).join('') + `</${tag}>`);
       continue;
     }

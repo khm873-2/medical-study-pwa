@@ -940,17 +940,27 @@ function blankNode(answer) {
  * 이걸 통째로 가리면 문장 하나가 사라져 맞힐 수가 없다(2026-10-10).
  * "____이 진단의 핵심 소견"이 되어야 답할 수 있다.
  *
- * 두 가지를 떼어낸다:
+ * 떼어내는 것 셋:
+ *   (0) **앞쪽 화제** — "열사병의 진단에는 …" 처럼 `에는/란/이란`으로 무엇을 묻는지
+ *       밝히는 부분. 이게 가려지면 질문 자체가 사라진다(2026-10-14 지적:
+ *       "외워야 할 대상이 체온이랑 중추신경계 기능이상인데" 정작 "진단에는"이 가려졌다).
  *   (1) 뒤쪽 서술부 — 조사 뒤에 설명이 이어지면 거기서 끊는다.
  *   (2) 앞쪽 한정어 — "AIDS 환자의 10~30%"처럼 "~의"로 한정하면 단서로 남긴다.
  *
- * @returns {{lead:string, answer:string, tail:string}}
+ * @returns {{lead:string, answer:string, tail:string, parts:Array<{t:string,blank:boolean}>}}
+ *   `parts`는 열거를 쪼갠 결과다 — "체온 >40℃**와** 중추신경계 기능이상"이면
+ *   빈칸 두 개에 가운데 "와"는 보이게 둔다. 그래야 **몇 개를 답해야 하는지** 보인다.
  */
 export function splitAnswer(text) {
   let lead = '';
   let core = String(text).trim();
   let tail = '';
-  if (core.length < 10) return { lead, answer: core, tail };
+  if (core.length < 10) return { lead, answer: core, tail, parts: [{ t: core, blank: true }] };
+
+  // (0) 앞쪽 화제 — "…에는 / …에서는 / …이란 / …란" 까지는 질문이다. 보이게 둔다.
+  //     뒤에 답이 될 만한 것이 넉넉히 남을 때만 뗀다.
+  const topic = core.match(/^(.{2,40}?(?:에는|에서는|이란|란|의 기준은|의 정의는))\s+(\S.*)$/);
+  if (topic && topic[2].trim().length >= 6) { lead = `${topic[1]} `; core = topic[2].trim(); }
 
   // (1) 뒤쪽 서술부. 괄호 안의 조사에 걸리지 않게 괄호를 가린 사본에서 위치를 찾는다.
   const masked = core.replace(/\([^)]*\)/g, (m) => ' '.repeat(m.length));
@@ -967,6 +977,9 @@ export function splitAnswer(text) {
     if (after.length < 2 || m.index < 4) continue;
     // 조사 앞 글자가 용언 어간이면 관형형이다 — 건너뛴다
     if (/^[은는]$/.test(m[1]) && ADNOM.test(core.slice(0, m.index))) continue;
+    // 열거를 잇는 "와/과"에서 끊으면 **답이 반 토막** 난다 — 여기서는 안 끊는다
+    //   "체온 >40℃와 중추신경계 기능이상이 모두 필요" → 와에서 끊으면 체온만 남는다
+    if (/^[와과]$/.test(m[1])) continue;
     cut = m.index; break;
   }
   if (cut > 0) {
@@ -976,20 +989,57 @@ export function splitAnswer(text) {
 
   // (2) 앞쪽 한정어 — "X의 Y" 꼴이면 "X의"는 단서로 남긴다
   const q = core.match(/^(.{2,}?의)\s+(\S.*)$/);
-  if (q && q[2].trim().length >= 2) { lead = q[1] + ' '; core = q[2]; }
+  if (q && q[2].trim().length >= 2) { lead += q[1] + ' '; core = q[2]; }
 
-  return { lead, answer: core.trim(), tail };
+  const answer = core.trim();
+  return { lead, answer, tail, parts: enumerate(answer) };
+}
+
+/**
+ * 열거를 쪼갠다 — "A와 B", "A·B·C", "A, B".
+ *
+ * 왜: 통째로 한 칸을 가리면 **몇 개를 답해야 하는지**가 안 보인다(2026-10-14 지적:
+ * "-와 이런 거는 좀 보여야 몇 개인지 알겠지"). 잇는 말은 보이게 두고 항목만 가린다.
+ *
+ * 괄호 안의 구분자는 건드리지 않는다 — "(Active & Passive ROM)"이 쪼개지면 안 된다.
+ */
+export function enumerate(answer) {
+  const whole = [{ t: answer, blank: true }];
+  if (answer.length < 8) return whole;
+  const masked = answer.replace(/\([^)]*\)/g, (m) => ' '.repeat(m.length));
+  // 잇는 말: "와/과"(붙여 쓰고 뒤에 띄운다) · 가운뎃점 · 쉼표 · +
+  // ⚠️ 슬래시는 **빼 둔다** — "AST/ALT", "VF/pVT", "A/B형"처럼 한 낱말인 경우가 훨씬 많다.
+  const SEP = /(와|과)\s+(?=\S)|\s*([·,]|\+)\s*/g;
+  const parts = [];
+  let last = 0;
+  let m;
+  while ((m = SEP.exec(masked))) {
+    const piece = answer.slice(last, m.index).trim();
+    const sep = answer.slice(m.index, m.index + m[0].length);
+    // 양쪽이 너무 짧으면 열거가 아니라 한 낱말이다(예: "A/B형")
+    if (piece.length < 2) { continue; }
+    parts.push({ t: piece, blank: true }, { t: sep, blank: false });
+    last = m.index + m[0].length;
+  }
+  const rest = answer.slice(last).trim();
+  if (!parts.length || rest.length < 2) return whole;
+  parts.push({ t: rest, blank: true });
+  // 조각이 하나뿐이면 쪼갠 뜻이 없다
+  return parts.filter((x) => x.blank).length >= 2 ? parts : whole;
 }
 
 /** 강조 요소를 "앞말 + 빈칸 + 뒷말"로 바꾼다. */
 function replaceWithCloze(el, fullText) {
-  const parts = splitAnswer(fullText);
+  const r = splitAnswer(fullText);
   const frag = document.createDocumentFragment();
-  if (parts.lead) frag.appendChild(document.createTextNode(parts.lead));
-  frag.appendChild(blankNode(parts.answer));
-  if (parts.tail) frag.appendChild(document.createTextNode(parts.tail));
+  if (r.lead) frag.appendChild(document.createTextNode(r.lead));
+  // 열거는 칸을 나눠 가린다 — 잇는 말("와", "·")은 보이게 둬서 몇 개인지 알게 한다
+  for (const part of (r.parts && r.parts.length ? r.parts : [{ t: r.answer, blank: true }])) {
+    frag.appendChild(part.blank ? blankNode(part.t) : document.createTextNode(part.t));
+  }
+  if (r.tail) frag.appendChild(document.createTextNode(r.tail));
   el.replaceWith(frag);
-  return parts.answer;
+  return r.answer;
 }
 
 // ───────────── 시험 일정 ─────────────

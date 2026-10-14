@@ -1273,6 +1273,34 @@ await run('카드 만들기', async () => {
     out.push({ name: '짧은 말은 그대로 둔다', ok: cut('VF/pVT') === '[VF/pVT]' });
     out.push({ name: '서술부 없는 명사구도 그대로', ok: cut('수축기혈압 90mmHg 미만') === '[수축기혈압 90mmHg 미만]' });
 
+    // ★ 2026-10-14 — "외워야 할 대상이 체온이랑 중추신경계 기능이상인데" 정작 "진단에는"이
+    //   가려졌다. 묻는 부분(화제)은 보이고, **답이 되는 것**이 가려져야 한다.
+    //   그리고 "-와" 같은 잇는 말은 보여야 몇 개를 답해야 하는지 안다.
+    const show = (t) => {
+      const r = R.splitAnswer(t);
+      const mid = r.parts.map((x) => (x.blank ? `[${x.t}]` : x.t)).join('');
+      return (r.lead || '') + mid + (r.tail || '');
+    };
+    out.push({ name: '**묻는 부분(…에는)은 보인다**',
+      ok: show('열사병(heat stroke)의 진단에는 체온 >40℃와 중추신경계 기능이상이 모두 필요')
+        === '열사병(heat stroke)의 진단에는 [체온 >40℃]와 [중추신경계 기능이상]이 모두 필요',
+      detail: show('열사병(heat stroke)의 진단에는 체온 >40℃와 중추신경계 기능이상이 모두 필요') });
+    out.push({ name: '**"와"를 보여줘 몇 개인지 알린다**',
+      ok: /\]와 \[/.test(show('열사병의 진단에는 체온 >40℃와 중추신경계 기능이상이 모두 필요')) });
+    out.push({ name: '쉼표로 늘어놓은 것도 따로따로',
+      ok: show('AST/ALT 상승, DIC, 횡문근융해증') === '[AST/ALT 상승], [DIC], [횡문근융해증]',
+      detail: show('AST/ALT 상승, DIC, 횡문근융해증') });
+    out.push({ name: '가운뎃점도 따로따로',
+      ok: show('해부학적 정복·견고한 내고정·혈류 보존·조기 안전 가동화')
+        === '[해부학적 정복]·[견고한 내고정]·[혈류 보존]·[조기 안전 가동화]' });
+    out.push({ name: '**슬래시는 안 쪼갠다**(AST/ALT는 한 낱말)',
+      ok: show('AST/ALT 상승') === '[AST/ALT 상승]', detail: show('AST/ALT 상승') });
+    out.push({ name: '괄호 안의 & 도 안 쪼갠다',
+      ok: show('능동적 및 수동적 관절가동범위(Active & Passive ROM)가 모든 방향에서 함께 제한')
+        === '[능동적 및 수동적 관절가동범위(Active & Passive ROM)]가 모든 방향에서 함께 제한' });
+    out.push({ name: '열거가 아니면 한 칸 그대로',
+      ok: show('수축기혈압 90mmHg 미만') === '[수축기혈압 90mmHg 미만]' });
+
     // 실제 카드에서도 그렇게 나오는가
     body.innerHTML = renderMarkdown('증상: 구진, **중앙부 배꼽모양 함몰(umbilication)이 진단의 핵심 소견**. 무증상이 대부분이다.');
     const cc = cardsFromBox(body, whole(), meta);
