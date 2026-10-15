@@ -12,7 +12,9 @@
 // 그대로 실행되라고 만든 내 vault의 파일이고, 비공개 저장소에서 내 토큰으로만
 // 받아오므로 새로 생기는 위험이 없다(이미 같은 신뢰 경계 안이다).
 
-const LECTURE_RE = /const LECTURE_NAME = "([^"]*)"/;
+// 어느 강의인가 — 파일이 스스로 적어둔 값. 시기마다 이름이 달라서 셋 다 받는다
+// (실측: LECTURE_NAME 97개 · LECTURE_TITLE 8개 · SUBJECT_LABEL 7개 / 전체 128개).
+const LECTURE_RE = /const (?:LECTURE_NAME|LECTURE_TITLE|SUBJECT_LABEL)\s*=\s*"([^"]*)"/;
 
 /** `const 이름 = [ ... ];` 의 배열 리터럴을 통째로 떼어낸다(괄호 짝을 세어 정확히). */
 function sliceArray(html, name) {

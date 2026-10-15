@@ -347,26 +347,56 @@ check('retryWrong: 답안 비워짐', q2.order.every((i) => q2.answers[i] === nu
     check('닮은 머리말은 그대로 쓴다',
       examTitle({ titles: ['기본소생술(BLS) 모의고사'], lectureName: '기본소생술BLS' }, '기본소생술BLS')
         === '기본소생술(BLS) 모의고사');
-    check('LECTURE_NAME이 없으면 파일 이름이 기준',
+    // 기준 둘이 서로 다른 걸 흘린다 — 하나만 보면 멀쩡한 제목이 버려진다
+    check('강의명에 과목이 붙어 있어도 제목을 지킨다',
+      examTitle({ titles: ['골관절염 퀴즈 — 채동식 교수 (2026-09-14)'], lectureName: '근골격계 골관절염' },
+        '골관절염') === '골관절염 퀴즈 — 채동식 교수 (2026-09-14)');
+    check('강의명이 없으면 파일 이름이 기준',
       examTitle({ titles: ['중이염 모의고사'] }, '두경부피부_중이염') === '중이염 모의고사');
     check('후보가 없으면 파일 이름', examTitle({ titles: [] }, '임상독성학각론') === '임상독성학각론');
     check('족보처럼 title 하나만 와도 된다',
       examTitle({ title: '중이염 모의고사' }, '중이염') === '중이염 모의고사');
 
-    // 실제 vault 파일로 끝까지 — 베껴온 <h1> 대신 제 강의 이름이 나와야 한다
-    const quizDir = `${VAULT}/05_퀴즈/응급_중환자`;
-    for (const [file, want] of [
-      ['261013_윤성현_임상독성학각론_퀴즈.html', '각론'],
-      ['261013_윤성현_임상독성학총론_퀴즈.html', '총론'],
-      ['261013_차민수_소아기본소생술PBLS및이물질기도폐쇄_퀴즈.html', '소아기본소생술'],
-    ]) {
-      let html = null;
-      try { html = readFileSync(`${quizDir}/${file}`, 'utf8'); } catch { /* vault 없는 환경 */ }
-      if (!html) continue;
-      const parsed = parseExamHtml(html);
-      const t = examTitle(parsed, prettyExamName(file));
-      check(`${want} 퀴즈 머리줄이 제 강의 — ${t}`,
-        t.includes(want) && (want === '소아기본소생술' || !t.includes('소아기본소생술')));
+    // 실제 vault 파일로 끝까지 — 128개 전부 제 머리말이 살아남아야 한다
+    const roots = [`${VAULT}/05_퀴즈`, `${VAULT}/06_모의고사`];
+    let seen = 0;
+    let dropped = 0;
+    for (const root of roots) {
+      let subs = [];
+      try { subs = readdirSync(root); } catch { continue; }     // vault 없는 환경
+      for (const sub of subs) {
+        let files = [];
+        try { files = readdirSync(`${root}/${sub}`); } catch { continue; }
+        for (const raw of files) {
+          if (!raw.endsWith('.html')) continue;
+          const file = raw.normalize('NFC');
+          let parsed;
+          try { parsed = parseExamHtml(readFileSync(`${root}/${sub}/${raw}`, 'utf8')); } catch { continue; }
+          seen++;
+          const t = examTitle(parsed, prettyExamName(file));
+          if (t !== (parsed.titles[0] || prettyExamName(file))) {
+            dropped++;
+            check(`제 머리말이 버려졌다: ${file}`, false, t);
+          }
+          // 베껴온 PBLS 머리말이 되살아나면 바로 잡는다
+          if (/소아기본소생술/.test(t)) {
+            check(`PBLS 머리말이 남의 파일에: ${file}`, /소아기본소생술/.test(parsed.lectureName || file));
+          }
+        }
+      }
+    }
+    if (seen) check(`vault 시험 ${seen}개 모두 제 제목을 쓴다`, dropped === 0, `${dropped}개 버려짐`);
+
+    // 머리말을 다시 베껴 넣으면 걸러내는지 — 고친 파일이 또 틀어졌을 때의 안전망
+    const 각론 = `${VAULT}/05_퀴즈/응급_중환자/261013_윤성현_임상독성학각론_퀴즈.html`;
+    let html = null;
+    try { html = readFileSync(각론, 'utf8'); } catch { /* vault 없는 환경 */ }
+    if (html) {
+      const t = examTitle(parseExamHtml(html), prettyExamName('261013_윤성현_임상독성학각론_퀴즈.html'));
+      check(`각론 퀴즈 머리줄 — ${t}`, t.includes('각론') && !t.includes('소아기본소생술'));
+      const broken = html.replace(/<h1>[^<]*<\/h1>/, `<h1>${pbls}</h1>`);
+      const t2 = examTitle(parseExamHtml(broken), prettyExamName('261013_윤성현_임상독성학각론_퀴즈.html'));
+      check(`머리말을 다시 베껴 넣어도 걸러낸다 — ${t2}`, !t2.includes('소아기본소생술'));
     }
   }
 }

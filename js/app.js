@@ -1024,17 +1024,20 @@ function showJokboIntro(intro, subject) {
  * 윤성현 교수")과 `LECTURE_NAME`은 멀쩡했다. 손으로 베끼는 건 머리말이고, 나머지 둘은
  * 만드는 쪽에서 박아 넣는 값이라 그렇다.
  *
- * 그래서 **기준을 LECTURE_NAME**으로 두고(없으면 파일 이름) 후보를 h1 → title →
- * LECTURE_NAME 순으로 훑어 기준과 말이 되는 첫 번째를 쓴다. 128개를 다 재보니 베껴온
- * 머리말은 기준과 0.00~0.19였고 멀쩡한 머리말은 0.38 위였다 — 그 사이인 0.3에서 끊는다.
+ * 그래서 **파일이 스스로 적어둔 강의명**(LECTURE_NAME 따위)과 **파일 이름**, 둘을
+ * 기준으로 두고 후보를 h1 → title → 강의명 순으로 훑어 **어느 한쪽과 말이 되는 첫 번째**를
+ * 쓴다. 둘 다 봐야 하는 건 서로 다른 걸 흘리기 때문이다 — 강의명은 "근골격계 골관절염"처럼
+ * 과목이 앞에 붙어 제목과의 점수가 깎이고, 파일 이름은 "두경부피부_사시"처럼 눌려 있다.
+ * 반대로 베껴온 머리말은 **양쪽 모두와** 0.00~0.19다. 128개를 다 재보고 0.3에서 끊었다.
  */
 const TITLE_FIT = 0.3;
 function examTitle(parsed, fromFile) {
   const cands = (parsed.titles || [parsed.title])
     .map((t) => String(t || '').trim()).filter(Boolean);
-  const anchor = String(parsed.lectureName || '').trim() || fromFile;
-  if (!anchor) return cands[0] || '';
-  return cands.find((t) => nameSimilarity(t, anchor) >= TITLE_FIT) || fromFile || anchor;
+  const anchors = [String(parsed.lectureName || '').trim(), fromFile].filter(Boolean);
+  if (!anchors.length) return cands[0] || '';
+  const fits = (t) => anchors.some((a) => nameSimilarity(t, a) >= TITLE_FIT);
+  return cands.find(fits) || fromFile || anchors[0];
 }
 
 async function openExam(subject, ex) {
