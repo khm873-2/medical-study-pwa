@@ -233,6 +233,7 @@ export class PenLayer {
       const keepA = (this._pending && this._pending.length && this._span) ? this._span.a : a0;
       this._span = { a: keepA, z: z0 };
       this._lastSpan = this._span;
+      this._pathPts = this._allPts();
       // ★ **손을 떼기 직전의 범위를 여기서 확정한다**(2026-10-14 신고: "뗄 때 네모가
       //   팍 튀면서 범위가 달라진다"). 화면은 한 프레임에 한 번만 그리므로 마지막
       //   몇 번의 움직임은 아직 반영되지 않았을 수 있고, 그 상태로 확정하면 보던 것과
@@ -357,13 +358,18 @@ export class PenLayer {
     const keepA = (this._pending && this._pending.length && this._span) ? this._span.a : a;
     this._span = { a: keepA, z };
     this._lastSpan = this._span;
+    this._pathPts = this._allPts();
     // 가장 멀리 갔던 지점보다 **눈에 띄게 돌아왔으면** 되돌리는 중이다.
     // 손 떨림(몇 px)으로는 켜지지 않게 여유를 둔다.
     const far = cur.pts.reduce((m, pt) =>
       Math.abs(pt.x - a.x) > Math.abs(m.x - a.x) ? pt : m, a);
     this._retreating = Math.abs(far.x - a.x) - Math.abs(z.x - a.x) > 24;
     this._lastRetreating = this._retreating;        // 손을 뗀 뒤 _commit이 쓴다
-    const live = {
+    // 보통은 **시작점↔현재점**만 본다(되돌리기가 되려면 그래야 한다).
+    // 다만 **네모를 치듯 둘러싼 획**은 끝이 시작으로 돌아오므로 이 자가 0에 가까워져
+    // "너무 작다 → 필기"로 빠져버렸다 — 둘러싼 게 확실하면 획 전체를 범위로 쓴다.
+    const curBox = boundsOf([cur]);
+    const live = (curBox && isLoop(a, z, curBox, cur.pts)) ? curBox : {
       l: Math.min(a.x, z.x), r: Math.max(a.x, z.x),
       t: Math.min(a.y, z.y), b: Math.max(a.y, z.y),
     };
@@ -429,6 +435,7 @@ export class PenLayer {
     this._lastLive = null;
     this._lastRetreating = false;
     this._span = this._lastSpan;        // 손을 뗀 뒤에도 마지막 범위로 확정한다
+    this._pathPts = this._lastPath;
     if (this._liveRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this._liveRaf);
     this._liveRaf = 0;
     if (!pend.length) return;
@@ -547,18 +554,30 @@ export class PenLayer {
     const a = span ? span.a : { x: box.l, y: box.t };
     const z = span ? span.z : { x: box.r, y: box.b };
 
-    let picked;
-    if (isLoop(a, z, box)) {
-      // **둘러싼 경우** — 네모를 치듯 돌아와 제자리에서 끝났다. 그러면 시작·끝 낱말이
-      // 같아져 한 낱말만 잡히는데, 그건 분명히 뜻한 바가 아니다. 안에 든 것을 전부 준다.
-      picked = inPane.filter((t) => t.cy >= box.t - 2 && t.cy <= box.b + 2
-        && t.r >= box.l - 6 && t.l <= box.r + 6);
+    // ★ 무슨 수를 쓰든 결과는 **이어진 한 덩어리**여야 한다.
+    //   전에는 둘러싼 경우에 상자 안에 든 것만 걸러냈는데(filter), 걸러내기는 중간을
+    //   건너뛰므로 **군데군데 끊긴 하이라이트**가 나왔다(2026-10-15 신고 스크린샷:
+    //   한 줄의 오른쪽 토막 + 다음 줄의 왼쪽 토막만 칠해짐). 글을 긁는 건 언제나
+    //   "여기서부터 저기까지"이므로, 어느 길로 오든 **첫 낱말과 끝 낱말만** 정하고
+    //   그 사이를 통째로 가져온다.
+    let i0;
+    let i1;
+    if (isLoop(a, z, box, this._pathPts)) {
+      // **둘러싼 경우** — 네모를 치듯 돌아와 제자리에서 끝났다. 시작·끝 낱말이 같아져
+      // 한 낱말만 잡히는데 그건 뜻한 바가 아니다. 상자에 걸린 것의 처음~끝을 쓴다.
+      const inside = [];
+      inPane.forEach((t, i) => {
+        if (t.cy >= box.t - 2 && t.cy <= box.b + 2 && t.r >= box.l - 6 && t.l <= box.r + 6) inside.push(i);
+      });
+      if (!inside.length) { this._coveredBox = null; this._coveredLines = null; return ''; }
+      i0 = inside[0];
+      i1 = inside[inside.length - 1];
     } else {
-      const i0 = nearestTok(inPane, a);
-      const i1 = nearestTok(inPane, z);
-      if (i0 < 0 || i1 < 0) { this._coveredBox = null; this._coveredLines = null; return ''; }
-      picked = inPane.slice(Math.min(i0, i1), Math.max(i0, i1) + 1);
+      i0 = nearestTok(inPane, a);
+      i1 = nearestTok(inPane, z);
     }
+    if (i0 < 0 || i1 < 0) { this._coveredBox = null; this._coveredLines = null; return ''; }
+    const picked = inPane.slice(Math.min(i0, i1), Math.max(i0, i1) + 1);
     if (!picked.length) { this._coveredBox = null; this._coveredLines = null; return ''; }
 
     // 미리보기 — 줄마다 한 덩어리로 칠한다(한 낱말씩 칠하면 띄어쓰기가 뚫려 지저분하다)
@@ -581,6 +600,21 @@ export class PenLayer {
       b: Math.max(...covered.map((c) => c.b)),
     };
     return picked.map((t) => t.el.textContent).join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * 지금까지 그은 점들. 둘러싼 획인지 가리는 데 쓴다 — 양끝만 보면 **위아래로
+   * 오락가락한 획**이 "제자리로 돌아온 네모"로 읽힌다(2026-10-15).
+   * 점이 수백 개라 전부 보지 않고 성기게 훑는다.
+   */
+  _allPts() {
+    const all = [];
+    for (const s of [...(this._pending || []), ...(this._cur ? [this._cur] : [])]) {
+      const step = Math.max(1, Math.floor(s.pts.length / 40));
+      for (let i = 0; i < s.pts.length; i += step) all.push(s.pts[i]);
+    }
+    this._lastPath = all;
+    return all;
   }
 
   _eraseAt(pt) {
@@ -825,14 +859,23 @@ function groupLines(toks) {
  * 둘러싼 획인가 — 끝이 시작 자리로 돌아왔고, 감싼 넓이가 한 줄보다 크다.
  * 네모를 치듯 그은 경우를 "낱말 하나"로 잘못 읽지 않기 위한 것이다(2026-10-14).
  */
-function isLoop(a, z, box) {
+function isLoop(a, z, box, pts) {
   const w = box.r - box.l;
   const h = box.b - box.t;
   if (h < 26 || w < 26) return false;                 // 한 줄짜리 밑줄은 아니다
   const back = Math.hypot(z.x - a.x, z.y - a.y);
   // 제자리 근처에서 끝났다. 대충 친 ㄷ자(닫히지 않은 네모)까지 받아주려고 넉넉히 본다 —
   // 줄을 가로지르는 **대각선 끌기**는 이동 거리가 상자 크기만큼 되므로 여기 안 걸린다.
-  return back < Math.max(w, h) * 0.45;
+  if (back >= Math.max(w, h) * 0.45) return false;
+  // ⚠️ 이것만으로는 **위아래로 오락가락한 획**까지 "네모"로 읽힌다(2026-10-15 신고:
+  //    "쭉 긋지 않고 위아래로 움직였을 때 하이라이트가 이상하게 된다"). 지그재그는
+  //    제자리로 돌아오면서도 **한 번도 멀리 가지 않는다** — 진짜로 둘러쌌다면 도중에
+  //    시작점에서 대각선만큼 멀어진 적이 있어야 한다.
+  if (!pts || pts.length < 3) return false;
+  const diag = Math.hypot(w, h);
+  let far = 0;
+  for (const q of pts) far = Math.max(far, Math.hypot(q.x - a.x, q.y - a.y));
+  return far > diag * 0.45;
 }
 
 function nearestTok(toks, pt) {

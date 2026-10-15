@@ -237,10 +237,75 @@ pen.clear();
   pen.clear();
 }
 
+// ---- 위아래로 오락가락한 획 (2026-10-15 신고) ----
+//
+// "쭉 긋지 않고 위아래로 움직였을 때 하이라이트가 이상하게 된다" — 스크린샷에서
+// **한 줄의 오른쪽 토막 + 다음 줄의 왼쪽 토막**만 군데군데 칠해져 있었다.
+// 원인 둘: ①지그재그가 "제자리로 돌아온 네모"로 읽혀 둘러싸기 분기를 탔고
+//          ②그 분기가 상자에 걸린 것만 **걸러내서**(filter) 중간이 뚫렸다.
+{
+  // 3줄짜리 문단으로 바꿔 끼운다
+  const P1 = [word('가나', 10, 50), word('다라', 55, 50), word('마바', 100, 50), word('사아', 145, 50)];
+  const P2 = [word('자차', 10, 80), word('카타', 55, 80), word('파하', 100, 80), word('거너', 145, 80)];
+  const P3 = [word('더러', 10, 110), word('머버', 55, 110), word('서어', 100, 110)];
+  const ALL = [...P1, ...P2, ...P3];
+  host._query = (sel) => (sel === '.tok' ? ALL : []);
+
+  /** 위아래로 흔들면서 가로로 긋는다 */
+  function zigzag(x1, x2, y, amp, n = 24) {
+    const pts = Array.from({ length: n }, (_, i) => ({
+      x: x1 + (x2 - x1) * i / (n - 1),
+      y: y + (i % 2 ? amp : -amp),
+      p: 0.5,
+    }));
+    pen._down(ev(pts[0].x, pts[0].y));
+    pts.slice(1).forEach((q) => pen._move(ev(q.x, q.y)));
+    pen._up(ev(pts[pts.length - 1].x, pts[pts.length - 1].y));
+  }
+
+  selected = null;
+  zigzag(60, 170, 72, 14);        // 1줄 아래를 흔들며 가로지름(세로 28px 폭)
+  await settle();
+  ok('**지그재그로 그어도 끊기지 않는다**',
+    !!selected && !/\s{2}/.test(selected) && selected.split(' ').length >= 2, `"${selected}"`);
+  // 이어진 한 덩어리인지 — 고른 낱말이 원문에서 연속이어야 한다
+  const flat = ALL.map((e) => e.textContent);
+  const gotOK = (s) => {
+    const got = String(s || '').split(' ').filter(Boolean);
+    const i = flat.indexOf(got[0]);
+    return i >= 0 && got.every((w, k) => flat[i + k] === w);
+  };
+  ok('고른 낱말이 **원문에서 연속**이다', gotOK(selected), `"${selected}"`);
+
+  // 두 줄에 걸친 지그재그 — 중간이 뚫리면 안 된다
+  selected = null;
+  zigzag(60, 170, 86, 26);
+  await settle();
+  ok('두 줄에 걸쳐도 중간이 안 뚫린다', gotOK(selected), `"${selected}"`);
+
+  // 진짜로 둘러싼 네모는 여전히 안쪽을 다 잡는다
+  selected = null;
+  const corners = [[8, 45], [170, 45], [170, 105], [8, 105], [10, 48]];
+  const path = [];
+  for (let i = 1; i < corners.length; i++) {
+    path.push(...line(corners[i - 1][0], corners[i - 1][1], corners[i][0], corners[i][1], 7).slice(i === 1 ? 0 : 1));
+  }
+  pen._down(ev(path[0].x, path[0].y));
+  path.slice(1).forEach((q) => pen._move(ev(q.x, q.y)));
+  pen._up(ev(path[path.length - 1].x, path[path.length - 1].y));
+  await settle();
+  ok('**네모로 둘러싸면 안쪽을 다 잡는다**',
+    gotOK(selected) && (selected || '').split(' ').length >= 8,
+    `"${selected}" / span=${JSON.stringify(pen._span)} / path=${(pen._pathPts||[]).length}`);
+
+  host._query = () => [];        // 앞 블록이 비워둔 상태로 되돌린다
+  pen.clear();
+}
+
 // ---- 지우개 ----
 draw(100, 200, 140, 200, 5);
 await settle();
-ok('지우개 전 1획', pen.strokes.length === 1);
+ok('지우개 전 1획', pen.strokes.length === 1, `${pen.strokes.length}획`);
 pen.setErasing(true);
 pen._down(ev(110, 200)); pen._up(ev(110, 200));
 ok('지우개로 삭제', pen.strokes.length === 0);

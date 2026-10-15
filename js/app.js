@@ -5021,12 +5021,17 @@ function initAfPick() {
     catch { toast('복사하지 못했습니다 — 길게 눌러 복사해 주세요.'); }
   };
   // 고른 대목을 그대로 꼬리질문으로 — 가장 자주 하는 "이게 무슨 말이야?"
+  //
+  // ★ **바로 보낸다**(2026-10-15 요청). 질문 칸을 채워만 두면 "물어보기"를 또 눌러야 해서
+  //   두 번 손이 간다. 손볼 데가 있으면 어차피 복사해서 새로 쓰게 된다.
   afEl('afPickAsk').onclick = () => {
     const s = afPick.text();
     if (!s) return;
     afPick.clear();
-    afEl('afInput').value = s.length > 90 ? `"${s.slice(0, 90)}…" 이 부분을 더 풀어서 설명해줘` : `"${s}" 이게 무슨 말이야?`;
-    afEl('afInput').focus();
+    afEl('afInput').value = s.length > 90
+      ? `"${s.slice(0, 90)}…" 이 부분을 더 풀어서 설명해줘`
+      : `"${s}" 이게 무슨 말이야?`;
+    afEl('afSend').click();
   };
   afEl('afPickSave').onclick = () => afEl('afSave').click();
   afEl('afPickClear').onclick = () => afPick.clear();

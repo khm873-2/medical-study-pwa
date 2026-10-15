@@ -4911,7 +4911,10 @@ await run('AI 설명 — 고르면 할 일이 뜬다', async () => {
   out.push({ name: '평소엔 숨어 있다', ok: bar.classList.contains('hidden') });
   out.push({ name: '고른 글을 클립보드로 복사한다', ok: /afPickCopy'\)\.onclick[\s\S]{0,200}clipboard\.writeText/.test(app) });
   out.push({ name: '고른 대목을 그대로 이어 묻는다',
-    ok: /afPickAsk'\)\.onclick[\s\S]{0,320}afEl\('afInput'\)\.value =/.test(app) });
+    ok: /afPickAsk'\)\.onclick[\s\S]{0,420}afEl\('afInput'\)\.value =/.test(app) });
+  // "물어보기"를 또 누르게 하지 않는다(2026-10-15 요청) — 손볼 게 있으면 복사해서 새로 쓴다
+  out.push({ name: '**누르면 바로 물어본다**(한 번 더 안 누른다)',
+    ok: /afPickAsk'\)\.onclick[\s\S]{0,520}afEl\('afSend'\)\.click\(\)/.test(app) });
   out.push({ name: '고른 자리 **위**에 붙고, 위가 좁으면 아래로 넘긴다',
     ok: /above > 6 \? above :/.test(app) });
   return out;
