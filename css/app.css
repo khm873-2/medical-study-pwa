@@ -609,6 +609,12 @@ summary.root-head > .head-row > .subject-count { margin-left: auto; }
 .resize-grip[data-axis="y"].near::after,
 .resize-grip[data-axis="y"].dragging::after { inset: -9px 0; }
 
+/* 네모를 치는 동안(영역 복사·카드)에는 손잡이가 포인터를 받지 않는다.
+   잡히는 범위가 보이는 선보다 넓어서, 패널 경계 근처에서 네모를 시작하면
+   그림 대신 칸 폭이 끌렸다(2026-10-15 지적). 숨기지는 않는다 — 영역 복사는
+   보이는 그대로를 뜨는 일이라 손잡이도 그림에 그대로 들어가는 게 맞다. */
+body.boxing .resize-grip { pointer-events: none; }
+
 /* 본문 ↔ 사이드 폭 조절 */
 .col-resizer { display: none; }
 @media (min-width: 900px) {

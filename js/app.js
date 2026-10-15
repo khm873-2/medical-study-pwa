@@ -2203,6 +2203,9 @@ function distToRect(x, y, r) {
 
 let gripRaf = 0;
 function wakeGrips(x, y) {
+  // 네모를 치는 중에는 깨우지 않는다 — 손잡이가 굵어지며 그리던 네모를 먹었다
+  // (2026-10-15: "영역 복사로 네모 칠 때 split 조절 탭이 활성화된다").
+  if (document.body.classList.contains('boxing')) return;
   if (gripRaf) return;
   gripRaf = requestAnimationFrame(() => {
     gripRaf = 0;
@@ -4529,6 +4532,15 @@ function setTool(tool, { quiet = false } = {}) {
   on('readShot', penTool === 'shot');
   on('readCapture', penTool === 'shot');
   on('toolCapture', penTool === 'shot');
+  // 네모를 치는 도구(영역 복사·카드)에서는 **칸 크기 손잡이를 재운다**.
+  // 네모를 그리다 패널 경계를 지나면 손잡이가 깨어나 굵어지고, 거기서 손을 대면
+  // 네모 대신 칸 폭이 끌렸다(2026-10-15 지적). 영역 복사는 보이는 그대로를 뜨는
+  // 일이므로 **그동안은 아무것도 끼어들지 않아야** 한다 — 손잡이는 그려진 모습
+  // 그대로 그림에 들어가면 된다. (pointer-events는 아래 CSS가 끈다.)
+  const boxing = penTool === 'shot' || penTool === 'card';
+  document.body.classList.toggle('boxing', boxing);
+  if (boxing) document.querySelectorAll('.resize-grip.near').forEach((g) => g.classList.remove('near'));
+
   // 펜 버튼은 지금 지우개인지 아이콘으로 보여준다
   document.getElementById('readPen')?.classList.toggle('erasing', penTool === 'erase');
   const rp = document.getElementById('readPen');
@@ -7085,22 +7097,88 @@ function renderCloze() {
     box.appendChild(b);
   });
   const n = czGroups().length;
-  document.getElementById('czStatus').textContent = n
-    ? `빈칸 ${n}개 — 눌러서 더하거나 뺍니다`
-    : '가릴 낱말을 눌러 고르세요';
-  document.getElementById('czAdd').disabled = !n;
+  document.getElementById('czStatus').textContent = n > 1
+    ? `빈칸 ${n}개 — 하나씩 ${n}장으로 나눠 담습니다`
+    : n ? '빈칸 1개 — 눌러서 더하거나 뺍니다'
+      : '가릴 낱말을 눌러 고르세요';
+  // 빈칸이 둘 이상이면 **나눠 담기가 기본**이다 — 한 장에 다 가리면 물음이 사라진다
+  const add = document.getElementById('czAdd');
+  add.disabled = !n;
+  add.textContent = n > 1 ? `＋ 하나씩 ${n}장` : '＋ 카드 추가';
+  document.getElementById('czAll').classList.toggle('hidden', n < 2);
 }
 
-/** 이어진 낱말을 한 빈칸으로 묶는다. */
+/**
+ * 이어진 낱말을 한 빈칸으로 묶는다 → `[{t, i0, i1}]`.
+ *
+ * 조각 번호(i0~i1)까지 들고 있는 이유: 빈칸이 여럿일 때 **하나씩 따로 가린 카드**를
+ * 만들려면 "이 묶음만 가리고 나머지는 보이게"를 할 수 있어야 한다(아래 addClozeCards).
+ */
 function czGroups() {
   const out = [];
   let run = null;
-  for (const w of czWords) {
-    if (w.blank) { run = run === null ? w.t : run + (w.sp ? ' ' : '') + w.t; }
-    else if (run !== null) { out.push(run); run = null; }
-  }
+  czWords.forEach((w, i) => {
+    if (w.blank) {
+      if (run === null) run = { t: w.t, i0: i, i1: i };
+      else { run.t += (w.sp ? ' ' : '') + w.t; run.i1 = i; }
+    } else if (run !== null) { out.push(run); run = null; }
+  });
   if (run !== null) out.push(run);
   return out;
+}
+
+/** 고른 묶음만 가린 본문 HTML — 나머지 빈칸은 **단서로 보이게** 둔다. */
+function czBodyHtml(groups, pick) {
+  const on = new Set();
+  pick.forEach((gi) => { for (let i = groups[gi].i0; i <= groups[gi].i1; i++) on.add(i); });
+  const frag = document.createElement('div');
+  let run = null;
+  czWords.forEach((w, i) => {
+    if (on.has(i)) { run = run === null ? w.t : run + (w.sp ? ' ' : '') + w.t; return; }
+    if (run !== null) { frag.appendChild(blankSpan(run)); run = null; }
+    if (w.sp) frag.appendChild(document.createTextNode(' '));
+    frag.appendChild(document.createTextNode(w.t));
+  });
+  if (run !== null) frag.appendChild(blankSpan(run));
+  return frag.innerHTML;
+}
+
+/**
+ * 고른 빈칸으로 카드를 만든다.
+ *
+ * `split`이면 **빈칸 하나짜리 여러 장**으로 나눈다 (2026-10-15 지적:
+ * "4시간에 200을 기준으로 이거 만들라니까 둘 다 가려져서 뭔지 모르겠네").
+ * 숫자가 둘이면 둘 다 가려버리니 `___에 ___을 기준으로`가 되어 물음이 사라진다.
+ * 나눠 담으면 `___에 200을 기준으로` · `4시간에 ___을 기준으로` 두 장이 되고,
+ * 서로가 서로의 단서가 된다 — 한 번에 하나만 묻는다는 원칙(최소 정보)과도 맞는다.
+ */
+function buildClozeCards(split) {
+  const groups = czGroups();
+  if (!groups.length) return [];
+  const sets = split ? groups.map((_, i) => [i]) : [groups.map((_, i) => i)];
+  const stamp = Date.now();
+  return sets.map((pick, n) => {
+    const answers = pick.map((i) => groups[i].t);
+    let html = czBodyHtml(groups, pick);
+    // 블록을 알면 **그 서식 그대로** 담는다 — 펜으로 네모 쳐 만든 카드와 같은 모양이
+    // 되게(2026-10-14: "긁기로 만드는 건 아주 형편없음. 통일성 가지게").
+    if (czCtx.block) {
+      const clone = czCtx.block.cloneNode(true);
+      if (placeBlanksIn(clone, answers)) html = clone.outerHTML;
+    }
+    return {
+      id: `${czCtx.notePath || ''}#${czCtx.heading || ''}#m${stamp}${sets.length > 1 ? `-${n}` : ''}`,
+      notePath: czCtx.notePath || '', noteTitle: czCtx.noteTitle || '',
+      heading: czCtx.heading || '',
+      // 맥락도 같이 — 무슨 이야기인지 모르면 맞힐 수가 없다
+      trail: czCtx.trail || [],
+      topic: [czCtx.heading, ...(czCtx.trail || [])].filter(Boolean).join('  ›  '),
+      contextHtml: html,
+      answers,
+      starred: false,
+      kind: 'block',
+    };
+  });
 }
 
 function initClozeMaker() {
@@ -7113,44 +7191,18 @@ function initClozeMaker() {
   document.getElementById('czClear').onclick = () => {
     czWords.forEach((w) => { w.blank = false; }); renderCloze();
   };
-  document.getElementById('czAdd').onclick = async () => {
-    const answers = czGroups();
-    if (!answers.length) return;
-    // 본문 — 고른 낱말만 빈칸으로, 나머지는 그대로
-    const frag = document.createElement('div');
-    let run = null;
-    for (const w of czWords) {
-      if (w.blank) { run = run === null ? w.t : run + (w.sp ? ' ' : '') + w.t; continue; }
-      if (run !== null) { frag.appendChild(blankSpan(run)); run = null; }
-      if (w.sp) frag.appendChild(document.createTextNode(' '));
-      frag.appendChild(document.createTextNode(w.t));
-    }
-    if (run !== null) frag.appendChild(blankSpan(run));
-    // 블록을 알면 **그 서식 그대로** 담는다 — 펜으로 네모 쳐 만든 카드와 같은 모양이
-    // 되게(2026-10-14: "긁기로 만드는 건 아주 형편없음. 통일성 가지게").
-    let html = frag.innerHTML;
-    if (czCtx.block) {
-      const clone = czCtx.block.cloneNode(true);
-      const ok = placeBlanksIn(clone, answers);
-      if (ok) html = clone.outerHTML;
-    }
-    const card = {
-      id: `${czCtx.notePath || ''}#${czCtx.heading || ''}#m${Date.now()}`,
-      notePath: czCtx.notePath || '', noteTitle: czCtx.noteTitle || '',
-      heading: czCtx.heading || '',
-      // 맥락도 같이 — 무슨 이야기인지 모르면 맞힐 수가 없다
-      trail: czCtx.trail || [],
-      topic: [czCtx.heading, ...(czCtx.trail || [])].filter(Boolean).join('  ›  '),
-      contextHtml: html,
-      answers,
-      starred: false,
-      kind: 'block',
-    };
-    await saveCards([card]);
+  const add = async (split) => {
+    const cards = buildClozeCards(split);
+    if (!cards.length) return;
+    await saveCards(cards);
     backup.scheduleBackup();
     closeCloze();
-    toast(`빈칸 ${answers.length}개짜리 카드를 넣었습니다.`);
+    toast(cards.length > 1
+      ? `빈칸 하나짜리로 ${cards.length}장을 넣었습니다.`
+      : `빈칸 ${cards[0].answers.length}개짜리 카드를 넣었습니다.`);
   };
+  document.getElementById('czAdd').onclick = () => add(czGroups().length >= 2);
+  document.getElementById('czAll').onclick = () => add(false);
 }
 
 /**
@@ -7160,21 +7212,56 @@ function initClozeMaker() {
 function placeBlanksIn(clone, answers) {
   let done = 0;
   for (const ans of answers) {
-    const want = ans.replace(/\s+/g, ' ').trim();
+    const want = String(ans).replace(/\s+/g, ' ').trim();
     if (!want) continue;
-    const walk = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walk.nextNode())) {
-      const i = node.nodeValue.indexOf(want);
-      if (i < 0) continue;
-      const after = node.splitText(i);
-      after.splitText(want.length);
-      after.replaceWith(blankSpan(want));
-      done++;
-      break;
-    }
+    if (placeOneBlank(clone, want)) done++;
   }
   return done === answers.length;
+}
+
+const RE_ESC = /[.*+?^${}()|[\]\\]/g;
+
+/**
+ * 그 말이 있는 자리를 빈칸으로 바꾼다 — **여러 텍스트 노드에 걸쳐 있어도**.
+ *
+ * 전에는 노드 하나 안에서만 찾았다. 그런데 읽기 화면의 글은 낱말마다 `.tok`으로
+ * 쪼개져 있고 굵게·괄호에서 또 갈린다. 그래서 "체온 >40℃"처럼 **두 조각에 걸친 답**은
+ * 영영 못 찾았고, 그때마다 블록 서식을 통째로 포기하고 맨 글자 본문으로 떨어졌다
+ * (2026-10-15). 노드를 이어 붙인 한 줄에서 자리를 찾고, 걸친 노드들을 함께 들어낸다.
+ * 사이 공백은 몇 칸이든 한 칸으로 본다 — 원문 줄바꿈이 공백으로 들어오기 때문이다.
+ */
+function placeOneBlank(root, want) {
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  let flat = '';
+  let node;
+  while ((node = walk.nextNode())) {
+    nodes.push({ node, at: flat.length, len: node.nodeValue.length });
+    flat += node.nodeValue;
+  }
+  if (!flat) return false;
+  const re = new RegExp(want.split(/\s+/).map((w) => w.replace(RE_ESC, '\\$&')).join('\\s+'));
+  const m = re.exec(flat);
+  if (!m) return false;
+  const s = m.index;
+  const e = s + m[0].length;
+  const hit = nodes.filter((n) => n.at < e && n.at + n.len > s);
+  if (!hit.length) return false;
+  const blank = blankSpan(m[0].replace(/\s+/g, ' '));
+  const first = hit[0];
+  const last = hit[hit.length - 1];
+  if (first === last) {                       // 한 노드 안 — 쪼개서 가운데만 바꾼다
+    const after = first.node.splitText(s - first.at);
+    after.splitText(e - s);
+    after.replaceWith(blank);
+    return true;
+  }
+  // 여러 노드에 걸친 경우 — 첫 노드 뒤에 빈칸을 넣고 걸린 부분을 덜어낸다
+  last.node.nodeValue = last.node.nodeValue.slice(e - last.at);
+  for (let i = 1; i < hit.length - 1; i++) hit[i].node.remove();
+  first.node.nodeValue = first.node.nodeValue.slice(0, s - first.at);
+  first.node.parentNode.insertBefore(blank, first.node.nextSibling);
+  return true;
 }
 
 /** 카드 본문에 들어갈 빈칸 — 읽기 화면의 것과 같은 모양이어야 한다. */

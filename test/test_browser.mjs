@@ -4253,8 +4253,139 @@ await run('크기 조절 손잡이', async () => {
   col.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
   out.push({ name: '두 번 누르면 기본값으로', ok: !localStorage.getItem('side_w') });
 
+  // ★ 네모를 치는 도구에서는 손잡이가 끼어들지 않는다 (2026-10-15)
+  // "영역 복사로 네모 칠 때 split 사이즈 조절 탭이 활성화돼서 불편하다".
+  document.getElementById('toolCapture').click();
+  out.push({ name: '영역 복사를 켜면 body에 boxing이 붙는다',
+    ok: document.body.classList.contains('boxing') });
+  out.push({ name: '**네모 치는 동안 손잡이는 포인터를 안 받는다**',
+    ok: getComputedStyle(col).pointerEvents === 'none',
+    detail: getComputedStyle(col).pointerEvents });
+  document.dispatchEvent(new PointerEvent('pointermove',
+    { clientX: cx + 10, clientY: cy, bubbles: true }));
+  await new Promise((rs) => requestAnimationFrame(() => requestAnimationFrame(rs)));
+  out.push({ name: '바로 옆을 지나도 안 깨어난다', ok: !col.classList.contains('near') });
+  out.push({ name: '**그 자리의 포인터는 손잡이를 뚫고 간다**(네모가 그려지게)',
+    ok: !document.elementsFromPoint(cx, cy).some((el) => el.classList?.contains('resize-grip')),
+    detail: String(document.elementsFromPoint(cx, cy)[0]?.className || '') });
+  // 숨기지는 않는다 — 영역 복사는 보이는 그대로를 뜨는 일이라 그림에 들어가야 한다
+  out.push({ name: '손잡이가 사라지지는 않는다(그림에 그대로 들어가게)',
+    ok: col.getBoundingClientRect().width > 0 && getComputedStyle(col).display !== 'none' });
+
+  // 카드 만들기도 같은 네모 손짓이다
+  document.getElementById('readMakeCard').click();
+  out.push({ name: '카드 만들기에서도 재운다', ok: document.body.classList.contains('boxing') });
+
+  // 고르기로 돌아오면 다시 깨어날 수 있다
+  document.getElementById('toolSelect').click();
+  out.push({ name: '고르기로 돌아오면 다시 쓸 수 있다',
+    ok: !document.body.classList.contains('boxing')
+      && getComputedStyle(col).pointerEvents !== 'none' });
+
   document.getElementById('wikiPanel').classList.add('hidden');
   document.getElementById('quizScreen').classList.remove('with-side');
+  return out;
+});
+
+// ══════════ 빈칸 카드 — 숫자는 따로, 띄어쓰기는 원문 그대로 (2026-10-15) ══════════
+// "4시간에 200을 기준으로 이거 만들라니까 둘 다 가려져서 뭔지 모르겠네."
+// "그리고 이렇게 다 띄어쓰기가 되어서 나와야 될 까닭은 뭐임."
+await run('빈칸 카드', async () => {
+  const out = [];
+  const md = await import('/js/markdown.js');
+  const pen = await import('/js/pen.js');
+  const rd = await import('/js/reader.js');
+  const src = await fetch('/js/app.js').then((r) => r.text());
+  const grab = (re) => { const m = src.match(re); return m ? m[0] : ''; };
+  const parts = [
+    grab(/\/\*\* 카드 본문에 들어갈 빈칸[\s\S]*?\n}\n/),
+    grab(/const RE_ESC[\s\S]*?\nfunction placeOneBlank[\s\S]*?\n}\n/),
+    grab(/function placeBlanksIn[\s\S]*?\n}\n/),
+    grab(/function czGroups\(\) \{[\s\S]*?\n}\n/),
+    grab(/function czBodyHtml[\s\S]*?\n}\n/),
+    grab(/function buildClozeCards[\s\S]*?\n}\n/),
+    grab(/function suggestCloze\(\) \{[\s\S]*?\n}\n/),
+  ];
+  out.push({ name: '빈칸 카드 함수들이 app.js에 있다', ok: parts.every(Boolean),
+    detail: `${parts.filter(Boolean).length}/7` });
+  if (!parts.every(Boolean)) return out;
+  // eslint-disable-next-line no-new-func
+  const api = new Function('wordScore', `
+    let czWords = [], czCtx = {};
+    ${parts.join('\n')}
+    return { czGroups, buildClozeCards, suggestCloze, placeBlanksIn,
+      set(w) { czWords = w; }, setCtx(c) { czCtx = c; } };
+  `)(rd.wordScore);
+
+  const note = '- 👨🏼‍🏫 [전사문] 🗣️ "**제일 중요한 것은 4시간에 200을 기준**으로 합니다. 노모그램의 **아래쪽은\n  toxicity가 없고 위쪽은 toxicity가 있어서**, 시간에 따른 혈중 농도를 찍어보고 범위에 들면\n  치료하고 안 들면 치료하지 않습니다."';
+  const holder = document.createElement('div');
+  holder.className = 'read-body';
+  holder.innerHTML = md.renderMarkdown(note);
+  document.body.appendChild(holder);
+  pen.tokenizeTree(holder);
+  const block = holder.querySelector('li');
+
+  // ── ① 긁은 글에 **원문에 없던 공백이 끼지 않는다** ──
+  // .tok은 굵게·괄호 경계에서도 갈린다. 예전엔 ' '로 이어 붙여 `" 제일`이 됐다.
+  const toks = [...block.querySelectorAll('.tok')];
+  const r = document.createRange();
+  r.setStartBefore(toks[3]);                    // `"` 조각부터
+  r.setEndAfter(toks[toks.length - 1]);
+  const grabbed = r.toString().replace(/\s+/g, ' ').trim();
+  out.push({ name: '**긁은 글에 없던 띄어쓰기가 안 생긴다**',
+    ok: grabbed.includes('"제일') && grabbed.includes('기준으로') && grabbed.includes('있어서,'),
+    detail: grabbed.slice(0, 60) });
+  out.push({ name: 'pen.js가 낱말을 \' \'로 잇지 않는다',
+    ok: !/picked\.map\(\(t\) => t\.el\.textContent\)\.join\(' '\)\.replace/
+      .test(await fetch('/js/pen.js').then((x) => x.text())) });
+
+  // ── ② 숫자 둘이면 한 장에 둘 다 가리지 않고 **나눠 담는다** ──
+  const words = [];
+  '4시간에 200을 기준으로'.split(' ').forEach((w, wi) => {
+    rd.splitWord(w).forEach((t, pi) => words.push({ t, blank: false, sp: wi > 0 && pi === 0 }));
+  });
+  api.set(words);
+  api.setCtx({ notePath: 'n', noteTitle: 't', heading: 'h', block, trail: [] });
+  out.push({ name: '숫자와 조사를 따로 쪼갠다',
+    ok: words.map((w) => w.t).join('|') === '4시간|에|200|을|기준으로',
+    detail: words.map((w) => w.t).join('|') });
+  api.suggestCloze();
+  const groups = api.czGroups();
+  out.push({ name: '숫자 둘을 빈칸 둘로 잡는다', ok: groups.map((g) => g.t).join(',') === '4시간,200',
+    detail: groups.map((g) => g.t).join(',') });
+
+  const show = (h) => { const d = document.createElement('div'); d.innerHTML = h;
+    d.querySelectorAll('.cloze').forEach((c) => { c.textContent = `[${c.dataset.answer}]`; });
+    return d.textContent.replace(/\s+/g, ' ').trim(); };
+  const split = api.buildClozeCards(true);
+  out.push({ name: '**빈칸 하나짜리 두 장으로 나뉜다**', ok: split.length === 2,
+    detail: `${split.length}장` });
+  if (split.length === 2) {
+    const a = show(split[0].contextHtml);
+    const b = show(split[1].contextHtml);
+    out.push({ name: '첫 장은 4시간만 가린다(200은 단서로 보인다)',
+      ok: a.includes('[4시간]에 200을'), detail: a.slice(20, 60) });
+    out.push({ name: '둘째 장은 200만 가린다(4시간은 보인다)',
+      ok: b.includes('4시간에 [200]을'), detail: b.slice(20, 60) });
+    out.push({ name: '두 장의 id가 다르다', ok: split[0].id !== split[1].id });
+    out.push({ name: '카드 본문도 원문 띄어쓰기 그대로',
+      ok: a.includes('"제일') && a.includes('기준으로 합니다') && a.includes('있어서,'),
+      detail: a.slice(0, 50) });
+  }
+  const one = api.buildClozeCards(false);
+  out.push({ name: '"한 장에 모두"는 한 장에 둘 다', ok: one.length === 1 && one[0].answers.length === 2,
+    detail: one.map((c) => c.answers.join('+')).join('') });
+
+  // ── ③ 여러 조각에 걸친 답도 블록 서식 안에서 찾는다 ──
+  // "제일 중요한"은 .tok 두 개에 걸쳐 있다 — 예전엔 못 찾아 맨 글자 본문으로 떨어졌다
+  const clone = block.cloneNode(true);
+  const spanned = api.placeBlanksIn(clone, ['제일 중요한']);
+  out.push({ name: '**두 조각에 걸친 답도 제자리에 꽂힌다**',
+    ok: spanned && clone.querySelector('.cloze')
+      && clone.querySelector('.cloze').dataset.answer === '제일 중요한',
+    detail: show(clone.outerHTML).slice(0, 50) });
+
+  holder.remove();
   return out;
 });
 
@@ -5774,17 +5905,31 @@ await run('손으로 빈칸 만들기', async () => {
     ok: /빈칸 2개/.test(document.getElementById('czStatus').textContent),
     detail: document.getElementById('czStatus').textContent });
 
+  // 빈칸이 둘이면 **나눠 담기가 기본**이다 (2026-10-15: "둘 다 가려져서 뭔지 모르겠네")
+  out.push({ name: '빈칸이 둘이면 단추가 "하나씩"으로 바뀐다',
+    ok: /하나씩 2장/.test(document.getElementById('czAdd').textContent),
+    detail: document.getElementById('czAdd').textContent });
+  out.push({ name: '"한 장에 모두"도 고를 수 있다',
+    ok: !document.getElementById('czAll').classList.contains('hidden') });
+
   document.getElementById('czAdd').click();
   await new Promise((r) => setTimeout(r, 600));
   const made = await d.allCards();
-  out.push({ name: '**카드가 실제로 들어간다**', ok: made.length === 1, detail: `${made.length}장` });
-  if (made.length) {
-    out.push({ name: '고른 것이 답이 된다', ok: made[0].answers.length === 2,
-      detail: made[0].answers.join(' / ') });
-    out.push({ name: '본문에 빈칸이 들어간다',
-      ok: (made[0].contextHtml.match(/class="cloze"/g) || []).length === 2 });
-    out.push({ name: '안 고른 말은 보인다', ok: /저체온증/.test(made[0].contextHtml) });
-    out.push({ name: '어느 노트 것인지 남는다', ok: !!made[0].heading, detail: made[0].heading });
+  out.push({ name: '**빈칸 둘은 두 장으로 나뉘어 들어간다**', ok: made.length === 2,
+    detail: `${made.length}장` });
+  if (made.length === 2) {
+    out.push({ name: '장마다 빈칸은 하나뿐',
+      ok: made.every((c) => c.answers.length === 1
+        && (c.contextHtml.match(/class="cloze"/g) || []).length === 1),
+      detail: made.map((c) => c.answers.join('+')).join(' / ') });
+    out.push({ name: '서로 다른 것을 묻는다',
+      ok: made[0].answers[0] !== made[1].answers[0],
+      detail: made.map((c) => c.answers[0]).join(' / ') });
+    out.push({ name: '한 장에서 가린 말이 다른 장에서는 단서로 보인다',
+      ok: made.some((c) => c.contextHtml.includes(made.find((o) => o !== c).answers[0])) });
+    out.push({ name: '안 고른 말은 보인다', ok: made.every((c) => /저체온증/.test(c.contextHtml)) });
+    out.push({ name: '어느 노트 것인지 남는다', ok: made.every((c) => !!c.heading),
+      detail: made[0].heading });
   }
   out.push({ name: '넣고 나면 창이 닫힌다', ok: win.classList.contains('hidden') });
 

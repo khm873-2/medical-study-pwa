@@ -599,7 +599,7 @@ export class PenLayer {
       t: Math.min(...covered.map((c) => c.t)),
       b: Math.max(...covered.map((c) => c.b)),
     };
-    return picked.map((t) => t.el.textContent).join(' ').replace(/\s+/g, ' ').trim();
+    return pickedText(picked);
   }
 
   /**
@@ -806,6 +806,33 @@ export class PenLayer {
 }
 
 /** 펜이 건드리면 안 되는 UI 요소인가? */
+/**
+ * 고른 낱말들을 **원문 그대로** 떠온다.
+ *
+ * 전에는 `picked.map(t => t.el.textContent).join(' ')` 였다. 그런데 낱말 조각(.tok)은
+ * **굵게·괄호 같은 서식 경계에서도 갈라진다** — `"**제일** …`은 `"` 와 `제일`이 다른
+ * 조각이고, `…기준**으로`는 `기준`과 `으로`가 다른 조각이다. 거기에 ' '를 끼우면
+ * 원문에 없던 틈이 생긴다(2026-10-15 지적: "다 띄어쓰기가 되어서 나와야 될 까닭은 뭐임" —
+ * `" 제일`, `기준 으로`, `있어서 ,`). 그 글이 그대로 카드 본문이 되니 더 티가 났다.
+ *
+ * 첫 조각 앞부터 끝 조각 뒤까지를 Range로 떠오면 **사이의 공백도 원문 그대로**다.
+ */
+function pickedText(picked) {
+  const join = () => picked.map((t) => t.el.textContent).join(' ');
+  let raw;
+  if (typeof document.createRange === 'function') {
+    try {
+      const r = document.createRange();
+      r.setStartBefore(picked[0].el);
+      r.setEndAfter(picked[picked.length - 1].el);
+      raw = r.toString();
+    } catch { raw = join(); }
+  } else {
+    raw = join();                     // Range가 없는 환경(테스트 하네스)
+  }
+  return String(raw || '').replace(/\s+/g, ' ').trim();
+}
+
 function isUiTarget(el) {
   if (!el || !el.closest) return false;
   return !!el.closest(
