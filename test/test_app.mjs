@@ -408,6 +408,30 @@ check('retryWrong: 답안 비워짐', q2.order.every((i) => q2.answers[i] === nu
   }
 }
 
+// ---------- 새로 올라온 노트도 열린다 (2026-10-15) ----------
+// "오늘치 실강노트 안들어가지는데" — 오늘 탭은 화면을 그릴 때 받아둔 노트 목록을
+// 칩마다 물려준다. 그 목록이 **맥에서 실강노트를 올리기 전**에 캐시됐으면,
+// 목록을 쥐여줬다는 이유로 재조회를 건너뛰어 영영 안 열렸다.
+{
+  const src = readFileSync(`${PWA}/js/app.js`, 'utf8');
+  const fn = src.match(/async function openNoteByName[\s\S]*?\n}\n/);
+  check('app.js에 openNoteByName이 있다', !!fn);
+  if (fn) {
+    const body = fn[0];
+    check('못 찾으면 목록을 새로 받아 다시 본다', /noteList\(true\)/.test(body));
+    check('**목록을 쥐여줘도 재조회를 건너뛰지 않는다**',
+      !/if \(!hit && !given/.test(body),
+      (body.match(/if \(!hit[^)]*\)/) || [''])[0]);
+    check('재조회 조건은 "못 찾았고 아직 강제 조회 전"뿐',
+      /if \(!hit && !force\)/.test(body));
+    check('새로 받은 목록을 오늘 탭 것과 바꿔둔다(다음 칩도 열리게)',
+      /given\.push\(\.\.\.groups\)/.test(body));
+  }
+  // 오늘 탭이 실제로 목록을 물려주는지 — 이게 사라지면 위 보호장치가 의미를 잃는다
+  check('오늘 탭의 실강노트 칩이 openNoteByName을 쓴다',
+    /chip\('📗 실강노트', \(\) => openNoteByName\(l\.wiki/.test(src));
+}
+
 // ---------- 결과 ----------
 console.log(`\n통과 ${pass}건`);
 if (fail.length) {

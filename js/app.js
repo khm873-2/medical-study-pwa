@@ -2605,16 +2605,28 @@ function muted(text) {
  * 캐시에 없는 게 당연하고, 그때마다 사용자가 다른 탭에 가서 ↻ 를 따로 누를 이유가
  * 없다(2026-10-12: "노트를 찾지 못했습니다"가 뜬 원인).
  */
+/**
+ * 이름으로 노트를 연다.
+ *
+ * ⚠️ 못 찾으면 **반드시 목록을 새로 받아 한 번 더** 본다. 전에는 부르는 쪽이 목록을
+ *    쥐여주면(`groups`) 그 길을 건너뛰었다. 그런데 오늘 탭이 바로 그렇게 부른다 —
+ *    화면을 그릴 때 받아둔 목록을 칩마다 물려준다. 그래서 **오늘 수업이 끝나고 맥에서
+ *    막 올린 실강노트**는, 목록이 그보다 먼저 캐시됐으면 영영 안 열렸다
+ *    (2026-10-15 신고: "오늘치 실강노트 안들어가지는데"). 새로 만든 노트를 여는 건
+ *    드문 일이 아니라 **매일 있는 일**이므로, 한 번의 재시도를 아끼면 안 된다.
+ */
 async function openNoteByName(name, { groups: given, force = false } = {}) {
   try {
     let groups = given || (await noteList(force));
     let hit = findNoteInGroups(groups, name);
-    if (!hit && !given && !force) {
-      groups = await noteList(true);
+    if (!hit && !force) {
+      groups = await noteList(true);          // 목록을 새로 받아 한 번 더
       hit = findNoteInGroups(groups, name);
+      // 받아온 목록을 오늘 탭이 쥐고 있던 것과 바꿔둔다 — 다음 칩도 바로 열리게
+      if (given && Array.isArray(given)) { given.length = 0; given.push(...groups); }
     }
     if (hit) return openNote(hit.path);
-    toast(`노트를 찾지 못했습니다: ${name}`);
+    toast(`노트를 찾지 못했습니다: ${name} — 아직 vault에 없는 것 같습니다.`);
   } catch (e) {
     toast(`노트를 열지 못했습니다: ${e.message}`);
   }
