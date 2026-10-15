@@ -890,3 +890,151 @@ export function tokenizeTree(root) {
     node.parentNode.replaceChild(frag, node);
   }
 }
+
+/**
+ * 낱말 단위로 긁는 선택 — **직접 칠해서** 어디까지 잡혔는지 보여준다.
+ *
+ * 왜 따로 만들었나(2026-10-15 신고: "AI 설명에서 글을 긁으려고 하니까 어디까지
+ * 선택된 게 안 나옴"): 떠다니는 창 안에서는 브라우저 기본 선택의 파란 칠이
+ * 제대로 안 보인다. 게다가 기본 선택은 글자 단위라 손가락으로는 낱말 경계를
+ * 맞추기가 거의 불가능하다. 노트 쪽 펜 "긁기"는 이미 낱말 단위인데 창 안에서는
+ * 펜이 없어서, 그 느낌을 그대로 옮겨 온다.
+ *
+ * 손가락과 마우스를 다르게 받는다:
+ *   · 손가락·펜 — **꾹 누르면**(LONG) 시작한다. 바로 시작하면 창을 스크롤할 수가 없다.
+ *   · 마우스 — 누르는 순간 시작한다(스크롤은 휠로 하니까).
+ * 긁는 중에는 스크롤을 막고, 떼면 고른 채로 남는다. 아무 데나 톡 치면 풀린다.
+ *
+ * @param {HTMLElement} host  `.tok`이 들어 있는 상자(tokenizeTree를 먼저 돌려둘 것)
+ * @param {Function} onChange 고른 글이 바뀔 때마다 (글, {from,to}) 로 불린다
+ * @returns {{text:()=>string, clear:()=>void, destroy:()=>void}}
+ */
+const PICK_LONG = 260;    // 꾹 누름으로 치는 시간(ms)
+const PICK_SLOP = 10;     // 이만큼 움직이면 "스크롤하려는 것"으로 본다(px)
+
+export function wordPick(host, onChange = () => {}) {
+  let toks = [];
+  let from = -1;
+  let to = -1;
+  let anchor = -1;
+  let timer = null;
+  let active = false;
+  let down = null;
+
+  const measure = () => {
+    toks = [];
+    host.querySelectorAll('.tok').forEach((el) => {
+      const b = el.getBoundingClientRect();
+      if (b.width && b.height) toks.push({ el, l: b.left, t: b.top, r: b.right, b: b.bottom });
+    });
+  };
+
+  /** 그 점에 걸린 낱말. 낱말 사이 빈 곳이면 가장 가까운 것 — 줄이 건너뛰지 않게 세로를 크게 깎는다. */
+  const at = (x, y) => {
+    const hit = document.elementFromPoint(x, y);
+    const tk = hit && hit.closest ? hit.closest('.tok') : null;
+    if (tk) {
+      for (let i = 0; i < toks.length; i++) if (toks[i].el === tk) return i;
+    }
+    let best = -1;
+    let bd = Infinity;
+    for (let i = 0; i < toks.length; i++) {
+      const t = toks[i];
+      const dx = Math.max(t.l - x, 0, x - t.r);
+      const dy = Math.max(t.t - y, 0, y - t.b);
+      const d = dx + dy * 4;
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+  };
+
+  /** 고른 글. 낱말을 이어 붙이지 않고 **원래 사이 간격 그대로** 떠온다. */
+  const text = () => {
+    if (from < 0 || !toks[from] || !toks[to]) return '';
+    const r = document.createRange();
+    r.setStartBefore(toks[from].el);
+    r.setEndAfter(toks[to].el);
+    return r.toString().replace(/\s+/g, ' ').trim();
+  };
+
+  const paint = () => {
+    for (let i = 0; i < toks.length; i++) {
+      toks[i].el.classList.toggle('tok-pick', from >= 0 && i >= from && i <= to);
+    }
+    onChange(text(), { from, to });
+  };
+
+  const clear = () => {
+    const had = from >= 0;
+    host.querySelectorAll('.tok-pick').forEach((el) => el.classList.remove('tok-pick'));
+    from = -1; to = -1; anchor = -1;
+    if (had) onChange('', { from: -1, to: -1 });
+  };
+
+  const stopTimer = () => { if (timer) { clearTimeout(timer); timer = null; } };
+
+  const start = (i, ev) => {
+    active = true;
+    anchor = i; from = i; to = i;
+    host.classList.add('picking');
+    try { host.setPointerCapture(ev.pointerId); } catch { /* 캡처가 안 되는 기기도 있다 */ }
+    paint();
+  };
+
+  const onDown = (e) => {
+    if (e.button > 0) return;
+    measure();
+    if (!toks.length) return;
+    down = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    const i = at(e.clientX, e.clientY);
+    if (i < 0) return;
+    if (e.pointerType === 'mouse') { clear(); start(i, e); e.preventDefault(); }
+    else { timer = setTimeout(() => { timer = null; clear(); start(i, e); }, PICK_LONG); }
+  };
+
+  const onMove = (e) => {
+    if (!down || e.pointerId !== down.id) return;
+    if (!active) {
+      // 아직 꾹 누름이 안 찼는데 움직였다 = 스크롤하려는 것. 선택은 포기한다.
+      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > PICK_SLOP) stopTimer();
+      return;
+    }
+    const i = at(e.clientX, e.clientY);
+    if (i < 0) return;
+    from = Math.min(anchor, i); to = Math.max(anchor, i);
+    e.preventDefault();          // 긁는 동안은 창이 따라 움직이지 않게
+    paint();
+  };
+
+  const onUp = (e) => {
+    stopTimer();
+    const wasActive = active;
+    const moved = down ? Math.hypot(e.clientX - down.x, e.clientY - down.y) : 0;
+    active = false;
+    host.classList.remove('picking');
+    try { host.releasePointerCapture(e.pointerId); } catch { /* 이미 풀렸을 수 있다 */ }
+    down = null;
+    // 긁지 않고 톡 친 것 — 고른 게 있으면 푼다(어디를 쳤든 "그만"이라는 뜻이다)
+    if (!wasActive && moved <= PICK_SLOP && from >= 0) clear();
+  };
+
+  host.addEventListener('pointerdown', onDown);
+  host.addEventListener('pointermove', onMove, { passive: false });
+  host.addEventListener('pointerup', onUp);
+  host.addEventListener('pointercancel', onUp);
+
+  return {
+    text,
+    clear,
+    /** 글이 통째로 바뀌었을 때(새 답변) — 칠을 지우고 위치를 다시 잰다. */
+    reset() { clear(); measure(); },
+    destroy() {
+      stopTimer();
+      host.removeEventListener('pointerdown', onDown);
+      host.removeEventListener('pointermove', onMove);
+      host.removeEventListener('pointerup', onUp);
+      host.removeEventListener('pointercancel', onUp);
+      clear();
+    },
+  };
+}

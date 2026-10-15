@@ -692,6 +692,13 @@
     <div class="af-q-full" id="afQFull"></div>
   </details>
   <div class="af-body wiki-body" id="afBody"></div>
+  <!-- 고른 자리 옆에 붙는 막대 — 고르고 나서 할 일이 "저 아래 저장" 하나뿐이었다(2026-10-15) -->
+  <div class="pick-bar hidden" id="afPickBar">
+    <button class="btn" id="afPickCopy" title="고른 글을 복사">복사</button>
+    <button class="btn" id="afPickAsk" title="고른 대목을 이어서 묻기">이어 묻기</button>
+    <button class="btn primary" id="afPickSave" title="고른 부분만 기록">저장</button>
+    <button class="icon-btn" id="afPickClear" title="선택 풀기">✕</button>
+  </div>
   <!-- 새 질문 — 답을 보고 나면 이어서 묻고 싶어진다. 전에는 물을 데가 없어서
        창을 닫고 글을 다시 긁어야 했다(2026-10-14 지적). -->
   <div class="af-ask">

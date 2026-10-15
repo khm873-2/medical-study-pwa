@@ -4,7 +4,7 @@ import { hasToken, setToken, clearToken, verifyToken, getRepo, setRepo } from '.
 import { listDir, getText, getBlobUrl, createFile, putFile, getTextIfExists } from './github.js';
 import { parseExamHtml, prettyExamName, examDate, examSortKey, teacherName } from './parser.js';
 import { Quiz, isAns } from './quiz.js';
-import { PenLayer, tokenizeTree } from './pen.js';
+import { PenLayer, tokenizeTree, wordPick } from './pen.js';
 import * as gem from './gemini.js';
 import { wikiFor, fitLabel } from './wiki.js';
 import * as backup from './backup.js';
@@ -26,7 +26,7 @@ import { search, cacheSubject, storageInfo, matcher, findAll } from './search.js
 import { JOKBO_ROOT, parseJokbo, chapterTitle } from './jokbo.js';
 import { nameSimilarity } from './wiki.js';
 import {
-  kvGet, kvSet, cacheClear, enqueue, listOutbox, dequeue, bumpTries,
+  kvGet, kvSet, kvDel, cacheClear, enqueue, listOutbox, dequeue, bumpTries,
   saveCards, allCards, deleteCard,
   allSessions, clearSession, allAttempts,
 } from './db.js';
@@ -4517,7 +4517,7 @@ const askAnywhere = () => {
     else handleSelect(sel, null);      // 퀴즈 화면의 선택 처리와 같은 길
     return;
   }
-  if (askLog.length) { replayAsk(askLog[0]); return; }
+  if (askThreads.length) { openThread(askThreads[0].id); return; }
   openBlankAsk();
 };
 document.getElementById('readAsk').onclick = askAnywhere;
@@ -4532,11 +4532,13 @@ function openBlankAsk() {
     qtext: doc ? `${doc.title}${sec ? ` · ${sec.heading}` : ''}` : '',
     noteText: sec ? sec.text : '',
   };
+  newThread('새 질문', doc ? doc.title : '');
+  askThread.turns = [];
   afEl('afQ').textContent = '새 질문';
   afEl('afQFull').textContent = '';
   afEl('afQWrap').open = false;
-  afEl('afBody').innerHTML = '<p class="muted">아래 칸에 궁금한 것을 적어 물어보세요. '
-    + '지금 보고 있는 노트를 같이 읽고 답합니다.</p>';
+  paintThread();
+  afEl('afPickBar').classList.add('hidden');
   afEl('afStatus').textContent = '';
   afEl('askFloat').classList.remove('hidden');
   updateAskDock();
@@ -4631,14 +4633,30 @@ function makeFloat({ panel, head, grip, key, def = {} }) {
   return { place, save };
 }
 
-function openAskFloat(term) {
+function openAskFloat(term, { followUp = false } = {}) {
   const f = afEl('askFloat');
-  afEl('afQ').textContent = term;
-  afEl('afQFull').textContent = term;
+  const title = askThread ? askThread.title : term;
+  afEl('afQ').textContent = title;
+  afEl('afQFull').textContent = title;
   afEl('afQWrap').open = false;
-  afEl('afBody').innerHTML = '<p class="muted">묻는 중…</p>';
+  // 꼬리질문이면 **앞 내용을 그대로 두고** 아래에 이번 턴만 덧댄다
+  afEl('afQWrap').classList.add('hidden');
+  if (followUp) paintThread(); else afEl('afBody').innerHTML = '';
+  const live = document.createElement('div');
+  live.className = 'af-turn af-live';
+  const q = document.createElement('div');
+  q.className = 'af-tq';
+  q.textContent = term;
+  const a = document.createElement('div');
+  a.className = 'af-ta';
+  a.id = 'afLive';
+  a.innerHTML = '<p class="muted">묻는 중…</p>';
+  live.append(q, a);
+  afEl('afBody').appendChild(live);
+  afEl('afBody').scrollTop = afEl('afBody').scrollHeight;
   afEl('afStatus').textContent = '';
   afEl('afLogList').classList.add('hidden');
+  afEl('afPickBar').classList.add('hidden');
   f.classList.remove('hidden');
   updateAskDock();
   restoreFloatBox();
@@ -4657,32 +4675,94 @@ function closeAskFloat() {
   updateAskDock();
 }
 
-// ── 지난 질문 ──────────────────────────────────────────────
-// 메모리에만 두면 새로고침 한 번에 날아간다. 아이패드는 앱을 잠깐 떠나도
-// 통째로 다시 뜨는 일이 잦아서, 기기에 적어둬야 "계속 떠 있는" 느낌이 된다.
-let askLog = [];              // [{id, ts, term, html, note}]  최신이 앞
-const ASK_LOG_MAX = 30;
+// ── 지난 질문: 한 주제 = 한 "실" ────────────────────────────
+//
+// 전에는 질문 하나하나가 평평한 목록이었다. 그래서 꼬리질문("그럼 반대는?")을 하면
+// 앞뒤가 끊긴 별개 항목이 하나 더 생겼고, 목록은 금세 비슷한 토막으로 가득 찼다
+// (2026-10-15 지적: "이전 질문이 관리가 안 되는 게 나쁘네… 꼬리질문이 계속 나올 수도
+// 있잖아"). 채팅 앱들이 하는 대로 **주제 하나를 실 하나로 묶는다** — 첫 질문이 제목이고,
+// 이어 물은 것은 그 실 안에 턴으로 쌓인다.
+//
+// 무거워지지 않게 **목록과 본문을 갈라 둔다**:
+//   · `ask_threads` — 제목·시각·턴 수만. 목록을 열 때 이것만 읽는다(실 40개에 수 KB).
+//   · `ask_t_{id}`  — 그 실의 주고받은 내용. **그 실을 열 때만** 읽고, 쓸 때도 그 실만 쓴다.
+// 전에는 답변 HTML까지 한 덩어리라 **물어볼 때마다 128KB를 통째로 다시 썼다**.
+//
+// 안 쓰는 실은 알아서 사라진다 — 꽂아둔(📌) 것만 남는다.
+let askThreads = [];          // [{id, ts, title, n, note, pin}]  최신이 앞
+let askThread = null;         // 지금 열려 있는 실 {id, title, note, turns:[{q, html, ts}]}
+const ASK_THREAD_MAX = 40;    // 실 개수 상한
+const ASK_TURN_MAX = 12;      // 한 실에 담는 턴 수 — 더 길어지면 앞부분을 접는다
+const ASK_KEEP_DAYS = 30;     // 꽂아두지 않은 실이 남아 있는 기간
+const ASK_HTML_MAX = 12000;   // 답변 하나당 — 이보다 길면 뒤를 접는다
+
+const threadKey = (id) => `ask_t_${id}`;
 
 async function loadAskLog() {
-  askLog = (await kvGet('ask_log')) || [];
+  askThreads = (await kvGet('ask_threads')) || [];
+  if (!askThreads.length) await migrateAskLog();
+  await pruneThreads();
   updateAskDock();
 }
-const ASK_HTML_MAX = 12000;      // 답변 하나당 — 이보다 길면 뒤를 접는다
 
-async function rememberAsk(term, html, note) {
-  const id = `${Date.now()}`;
-  // 답변 HTML을 통으로 들고 있으면 30개에 128KB가 되고, **물어볼 때마다** 그걸 통째로
-  // 다시 쓴다(2026-10-14 실측). 아주 긴 답은 뒤를 접어 담는다 — 되살릴 때 쓸 만큼은 남는다.
+/** 옛 평평한 목록을 실 하나짜리로 옮긴다(한 번만 돈다). */
+async function migrateAskLog() {
+  const old = (await kvGet('ask_log')) || [];
+  if (!old.length) return;
+  for (const x of old) {
+    await kvSet(threadKey(x.id), { turns: [{ q: x.term, html: x.html, ts: x.ts }] });
+    askThreads.push({ id: x.id, ts: x.ts, title: x.term, n: 1, note: x.note || '', pin: false });
+  }
+  await kvSet('ask_threads', askThreads);
+  await kvSet('ask_log', []);     // 같은 걸 두 벌 들고 있지 않는다
+}
+
+/** 오래됐거나 넘치는 실을 치운다 — 꽂아둔 것은 건드리지 않는다. */
+async function pruneThreads() {
+  const cut = Date.now() - ASK_KEEP_DAYS * 864e5;
+  const keep = [];
+  const drop = [];
+  for (const x of askThreads) {
+    const old = !x.pin && x.ts < cut;
+    const over = !x.pin && keep.filter((k) => !k.pin).length >= ASK_THREAD_MAX;
+    (old || over ? drop : keep).push(x);
+  }
+  if (!drop.length) return;
+  for (const x of drop) await kvDel(threadKey(x.id));
+  askThreads = keep;
+  await kvSet('ask_threads', askThreads);
+}
+
+async function readThread(id) {
+  return (await kvGet(threadKey(id))) || { turns: [] };
+}
+
+/** 지금 실에 턴 하나를 더 쌓는다. 실이 없으면 새로 판다. */
+async function rememberTurn(q, html, note) {
   let keep = String(html || '');
   if (keep.length > ASK_HTML_MAX) {
     keep = keep.slice(0, ASK_HTML_MAX)
       + '<p class="muted">… (너무 길어 뒤는 접었습니다 — ↻ 로 다시 물으면 전문이 나옵니다)</p>';
   }
-  askLog = [{ id, ts: Date.now(), term, html: keep, note: note || '' },
-    ...askLog.filter((x) => x.term !== term)].slice(0, ASK_LOG_MAX);
-  await kvSet('ask_log', askLog);
+  if (!askThread) askThread = { id: `${Date.now()}`, title: q, note: note || '', turns: [] };
+  // 빈 창에서 시작한 실은 제목이 "새 질문"이다 — 첫 물음이 들어오면 그걸 제목으로 쓴다
+  if (!askThread.turns.length) askThread.title = q;
+  askThread.turns.push({ q, html: keep, ts: Date.now() });
+  if (askThread.turns.length > ASK_TURN_MAX) askThread.turns = askThread.turns.slice(-ASK_TURN_MAX);
+  if (note) askThread.note = note;
+  await kvSet(threadKey(askThread.id), { turns: askThread.turns });
+  const meta = { id: askThread.id, ts: Date.now(), title: askThread.title,
+    n: askThread.turns.length, note: askThread.note || '',
+    pin: (askThreads.find((x) => x.id === askThread.id) || {}).pin || false };
+  askThreads = [meta, ...askThreads.filter((x) => x.id !== meta.id)];
+  await kvSet('ask_threads', askThreads);
   updateAskDock();
-  return id;
+  return askThread.id;
+}
+
+/** 새 주제를 시작한다 — 꼬리질문이 아니라 완전히 다른 것을 물을 때. */
+function newThread(title, note) {
+  askThread = { id: `${Date.now()}`, title: title || '새 질문', note: note || '', turns: [] };
 }
 
 /** 접혀 있을 때 귀퉁이에 뜨는 단추. 읽기 화면에서만 보인다. */
@@ -4691,14 +4771,14 @@ function updateAskDock() {
   // 화면을 가림"). 대신 **아래 바의 AI 단추**에 작은 점을 찍는다 — 거기 자리가 있고,
   // 페이지를 넘기는 손이 이미 가 있는 자리다.
   const open = !afEl('askFloat').classList.contains('hidden');
-  const say = askLog.length
-    ? `AI에게 묻기 — 지난 답: ${selPreview(askLog[0].term, 20, 0).replace(/ … $/, '…')}`
+  const say = askThreads.length
+    ? `AI에게 묻기 — 지난 답: ${selPreview(askThreads[0].title, 20, 0).replace(/ … $/, '…')}`
     : 'AI에게 묻기 — 긁어뒀으면 그 부분을, 아니면 새로 묻습니다';
   // 읽기 화면과 퀴즈 화면 **둘 다**에 둔다 — 문제를 풀다 물어본 걸 다시 볼 데가 없었다
   // (2026-10-14 지적). 두 화면이 같은 질문기록을 쓴다.
   // 점만 찍으니 "뭘 물었더라"를 알 수 없었다 — **방금 물어본 말**을 짧게 붙인다
   // (2026-10-14: "예전 버전 나쁘지 않았음. 좀 예쁘게 넣어봐").
-  const last = askLog.length ? selPreview(askLog[0].term, 12, 0).replace(/ … $/, '…') : '';
+  const last = askThreads.length ? selPreview(askThreads[0].title, 12, 0).replace(/ … $/, '…') : '';
   for (const [tagId, btnId] of [['readAskLast', 'readAsk'], ['quizAskLast', 'quizAsk']]) {
     const tag = afEl(tagId);
     if (tag) {
@@ -4710,18 +4790,59 @@ function updateAskDock() {
   }
 }
 
-/** 지난 질문 하나를 그대로 되살린다(다시 묻지 않는다 — 한도도 아끼고 빠르다). */
-function replayAsk(item) {
-  askCtx = { ...(askCtx || {}), term: item.term, answer: null, qtext: item.note || '' };
-  afEl('afQ').textContent = item.term;
-  afEl('afQFull').textContent = item.term;
+/**
+ * 실 하나를 통째로 그린다 — 주고받은 순서대로, 마지막 답이 아래에 오게.
+ *
+ * 전에는 **마지막 답 하나만** 띄웠다. 그래서 꼬리질문을 하면 앞에 뭘 물었는지가
+ * 화면에서 사라져, 이어 묻는다는 느낌 자체가 없었다(2026-10-15).
+ */
+function paintThread() {
+  const body = afEl('afBody');
+  body.innerHTML = '';
+  if (!askThread || !askThread.turns.length) {
+    afEl('afQWrap').classList.remove('hidden');
+    body.innerHTML = '<p class="muted">아래 칸에 궁금한 것을 적어 물어보세요. '
+      + '지금 보고 있는 노트를 같이 읽고 답합니다.</p>';
+    return;
+  }
+  // 주고받은 것이 본문에 다 보이므로 머리글의 "질문" 접기는 숨긴다 — 첫 질문이 두 번 나왔다
+  afEl('afQWrap').classList.toggle('hidden', askThread.turns.length > 0);
+  askThread.turns.forEach((tn, i) => {
+    const w = document.createElement('div');
+    w.className = 'af-turn';
+    const q = document.createElement('div');
+    q.className = 'af-tq';
+    q.textContent = tn.q;
+    // 첫 질문은 긁어온 대목이라 길다 — 접어두고 누르면 펴지게 한다
+    if (i === 0 && tn.q.length > 120) { q.classList.add('clip'); q.onclick = () => q.classList.toggle('clip'); }
+    const a = document.createElement('div');
+    a.className = 'af-ta';
+    a.innerHTML = tn.html;
+    w.append(q, a);
+    body.appendChild(w);
+  });
+  tokenizeTree(body);
+  if (afPick) afPick.reset();
+  // 글이 자리를 잡기 전에 내리면 안 내려간다 — 다음 프레임에 한 번 더 민다
+  body.scrollTop = body.scrollHeight;
+  requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
+}
+
+/** 지난 실을 그대로 되살린다(다시 묻지 않는다 — 한도도 아끼고 빠르다). */
+async function openThread(id) {
+  const meta = askThreads.find((x) => x.id === id);
+  if (!meta) return;
+  const { turns } = await readThread(id);
+  askThread = { id, title: meta.title, note: meta.note, turns };
+  const last = turns[turns.length - 1] || {};
+  askCtx = { ...(askCtx || {}), term: meta.title, answer: null, qtext: meta.note || '' };
+  afEl('afQ').textContent = meta.title;
+  afEl('afQFull').textContent = meta.title;
   afEl('afQWrap').open = false;
-  afEl('afBody').innerHTML = item.html;
-  tokenizeTree(afEl('afBody'));
-  askCtx.answer = afEl('afBody').textContent;
-  afEl('afStatus').textContent = item.note
-    ? `${item.note} · ${new Date(item.ts).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
-    : '지난 답변';
+  paintThread();
+  askCtx.answer = stripHtml(last.html || '');
+  afEl('afStatus').textContent = `${meta.note ? `${meta.note} · ` : ''}${turns.length}번 주고받음 · `
+    + new Date(meta.ts).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   afEl('afLogList').classList.add('hidden');
   afEl('askFloat').classList.remove('hidden');
   updateAskDock();
@@ -4729,32 +4850,121 @@ function replayAsk(item) {
   updateAfSaveLabel();
 }
 
-function toggleAskLog() {
+/** HTML에서 글자만. 저장할 때 태그가 섞여 들어가지 않게. */
+function stripHtml(html) {
+  const d = document.createElement('div');
+  d.innerHTML = String(html || '');
+  return d.textContent.trim();
+}
+
+/** 같은 날이면 시:분만, 아니면 날짜만 — 목록 한 줄에 들어가야 한다. */
+function shortWhen(ts) {
+  const d = new Date(ts);
+  const today = new Date().toDateString() === d.toDateString();
+  return d.toLocaleString('ko-KR', today ? { hour: '2-digit', minute: '2-digit' }
+    : { month: 'numeric', day: 'numeric' });
+}
+
+function renderAskLog(filter = '') {
   const box = afEl('afLogList');
-  if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
   box.innerHTML = '';
-  if (!askLog.length) {
-    box.innerHTML = '<p class="muted" style="padding:10px 12px">아직 물어본 게 없습니다.</p>';
-  } else {
-    for (const item of askLog) {
-      const b = document.createElement('button');
-      b.className = 'af-log-item';
-      const t = document.createElement('span');
-      t.className = 'al-t';
-      t.textContent = selPreview(item.term, 40, 0).replace(/ … $/, '…');
-      const d = document.createElement('span');
-      d.className = 'al-d';
-      d.textContent = new Date(item.ts).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-      b.append(t, d);
-      b.onclick = () => replayAsk(item);
-      box.appendChild(b);
-    }
+  const bar = document.createElement('div');
+  bar.className = 'al-bar';
+  const q = document.createElement('input');
+  q.type = 'search';
+  q.placeholder = '지난 질문 찾기';
+  q.value = filter;
+  q.oninput = () => renderAskLog(q.value);
+  const nw = document.createElement('button');
+  nw.className = 'btn';
+  nw.textContent = '＋ 새 주제';
+  nw.onclick = () => { afEl('afLogList').classList.add('hidden'); openBlankAsk(); };
+  bar.append(q, nw);
+  box.appendChild(bar);
+
+  const key = filter.trim().toLowerCase();
+  const list = askThreads.filter((x) => !key || x.title.toLowerCase().includes(key)
+    || (x.note || '').toLowerCase().includes(key));
+  if (!list.length) {
+    const m = document.createElement('p');
+    m.className = 'muted';
+    m.style.padding = '10px 12px';
+    m.textContent = askThreads.length ? '찾는 질문이 없습니다.' : '아직 물어본 게 없습니다.';
+    box.appendChild(m);
+  }
+  // 꽂아둔 것이 위로
+  for (const item of [...list].sort((a, b) => (b.pin ? 1 : 0) - (a.pin ? 1 : 0))) {
+    const row = document.createElement('div');
+    row.className = 'af-log-item' + (item.pin ? ' pinned' : '');
+    const b = document.createElement('button');
+    b.className = 'al-main';
+    const tt = document.createElement('span');
+    tt.className = 'al-t';
+    tt.textContent = selPreview(item.title, 40, 0).replace(/ … $/, '…');
+    const meta = document.createElement('span');
+    meta.className = 'al-d';
+    // 꼬리질문이 몇 번 오갔는지 — 한 줄짜리 실과 길게 이어간 실을 눈으로 가른다
+    meta.textContent = `${item.n > 1 ? `꼬리 ${item.n - 1} · ` : ''}${shortWhen(item.ts)}`;
+    b.append(tt, meta);
+    b.onclick = () => openThread(item.id);
+
+    const pin = document.createElement('button');
+    pin.className = 'icon-btn al-pin';
+    pin.textContent = '📌';
+    pin.title = item.pin ? '꽂아둔 것 풀기' : '꽂아두기 — 오래돼도 안 지워집니다';
+    pin.setAttribute('aria-pressed', String(!!item.pin));
+    pin.onclick = async (e) => {
+      e.stopPropagation();
+      item.pin = !item.pin;
+      await kvSet('ask_threads', askThreads);
+      renderAskLog(filter);
+    };
+
+    const del = document.createElement('button');
+    del.className = 'icon-btn al-del';
+    del.textContent = '✕';
+    del.title = '지우기';
+    del.onclick = async (e) => {
+      e.stopPropagation();
+      const gone = item;
+      askThreads = askThreads.filter((x) => x.id !== item.id);
+      await kvSet('ask_threads', askThreads);
+      renderAskLog(filter);
+      updateAskDock();
+      // 되돌릴 틈을 준다 — 본문은 되돌리기가 끝난 뒤에 지운다
+      toastUndo(`"${selPreview(gone.title, 16, 0).replace(/ … $/, '…')}" 지웠습니다`, async () => {
+        askThreads = [gone, ...askThreads].sort((a, b) => b.ts - a.ts);
+        await kvSet('ask_threads', askThreads);
+        renderAskLog(filter);
+        updateAskDock();
+      }, { onExpire: () => kvDel(threadKey(gone.id)) });
+    };
+
+    row.append(b, pin, del);
+    box.appendChild(row);
   }
   box.classList.remove('hidden');
 }
 
-/** 이 요소 안에서 긁어둔 글. 없으면 빈 문자열. */
+function toggleAskLog() {
+  const box = afEl('afLogList');
+  if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+  renderAskLog('');
+}
+
+/**
+ * AI 설명에서 긁은 글.
+ *
+ * 브라우저 기본 선택을 쓰다가 **어디까지 잡혔는지 안 보인다**는 신고를 받고
+ * 낱말 단위 직접 칠하기로 바꿨다(2026-10-15). 그래도 마우스로 기본 선택을 한
+ * 경우를 아예 버리지는 않는다 — 둘 중 잡힌 쪽을 쓴다.
+ */
+let afPick = null;
 function selectedInside(root) {
+  if (afPick) {
+    const picked = afPick.text();
+    if (picked) return picked;
+  }
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || !sel.rangeCount) return '';
   const r = sel.getRangeAt(0);
@@ -4771,6 +4981,57 @@ function updateAfSaveLabel() {
   btn.classList.toggle('partial', !!n);
 }
 
+/**
+ * 고르면 그 자리에 뜨는 작은 막대 — 복사 · 이어 묻기 · 저장.
+ *
+ * 왜(2026-10-15 요청: "선택하면 복사하기나 뭐 추가질문 이런 식으로"): 고르고 나서
+ * 할 수 있는 일이 저 아래 "답변 저장" 하나뿐이었다. 고른 자리 바로 옆에 두면
+ * 손이 움직일 거리가 없다.
+ */
+function placePickBar(sel) {
+  const bar = afEl('afPickBar');
+  if (!bar) return;
+  if (!sel) { bar.classList.add('hidden'); return; }
+  const marks = afEl('afBody').querySelectorAll('.tok-pick');
+  if (!marks.length) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  const host = afEl('askFloat').getBoundingClientRect();
+  const first = marks[0].getBoundingClientRect();
+  const last = marks[marks.length - 1].getBoundingClientRect();
+  const bw = bar.offsetWidth || 240;
+  const bh = bar.offsetHeight || 40;
+  // 고른 데 **위**에 붙인다. 위가 좁으면 아래로 넘긴다 — 손가락이 가린 자리를 피한다.
+  // ⚠️ 높이를 짐작하면 막대가 고른 글을 덮는다(실측으로 확인) — 잰 값에 틈 8px을 더한다.
+  const above = first.top - host.top - bh - 8;
+  const y = above > 6 ? above : (last.bottom - host.top + 8);
+  const x = Math.max(8, Math.min((first.left + last.right) / 2 - host.left - bw / 2,
+    host.width - bw - 8));
+  bar.style.left = `${x}px`;
+  bar.style.top = `${Math.max(6, Math.min(y, host.height - 50))}px`;
+}
+
+function initAfPick() {
+  const body = afEl('afBody');
+  if (!body || afPick) return;
+  afPick = wordPick(body, (txt) => { updateAfSaveLabel(); placePickBar(txt); });
+  afEl('afPickCopy').onclick = async () => {
+    const s = afPick.text();
+    if (!s) return;
+    try { await navigator.clipboard.writeText(s); toast('복사했습니다.'); }
+    catch { toast('복사하지 못했습니다 — 길게 눌러 복사해 주세요.'); }
+  };
+  // 고른 대목을 그대로 꼬리질문으로 — 가장 자주 하는 "이게 무슨 말이야?"
+  afEl('afPickAsk').onclick = () => {
+    const s = afPick.text();
+    if (!s) return;
+    afPick.clear();
+    afEl('afInput').value = s.length > 90 ? `"${s.slice(0, 90)}…" 이 부분을 더 풀어서 설명해줘` : `"${s}" 이게 무슨 말이야?`;
+    afEl('afInput').focus();
+  };
+  afEl('afPickSave').onclick = () => afEl('afSave').click();
+  afEl('afPickClear').onclick = () => afPick.clear();
+}
+
 let askFloat = null;
 function restoreFloatBox() { if (askFloat) askFloat.place(); }
 
@@ -4781,7 +5042,8 @@ function initAskFloat() {
 
   afEl('afClose').onclick = closeAskFloat;
   afEl('afLog').onclick = toggleAskLog;
-  // 새 질문 — 답을 보고 나면 이어서 묻고 싶어진다(2026-10-14 요청)
+  // 이어 묻기 — **같은 실의 다음 턴**으로 쌓인다(2026-10-15). 전에는 매번 새 항목이
+  // 생겨서 앞뒤가 끊겼고, 목록이 비슷한 토막으로 금세 찼다.
   const send = () => {
     const q = afEl('afInput').value.trim();
     if (!q) { afEl('afInput').focus(); return; }
@@ -4793,7 +5055,7 @@ function initAskFloat() {
       qtext: doc ? `${doc.title}${sec ? ` · ${sec.heading}` : ''}` : '',
       noteText: sec ? sec.text : '',
     };
-    askInReader(q);
+    askInReader(q, { followUp: true });
   };
   afEl('afSend').onclick = send;
   afEl('afInput').onkeydown = (e) => {
@@ -4802,6 +5064,10 @@ function initAskFloat() {
   };
 
   loadAskLog();
+  initAfPick();
+  // 실을 펜 없이 열어볼 수 있게 — 테스트가 화면을 세우는 통로(카드 창과 같은 방식).
+  // 기기에 심어둔 것을 다시 읽는 길도 같이 연다 — 안 그러면 메모리에 있는 옛 목록을 본다.
+  window.__askForTest = { open: openThread, reload: loadAskLog };
 
   // 긁는 동안 버튼 글씨를 바꿔 "지금 누르면 뭐가 저장되는지" 알려준다
   document.addEventListener('selectionchange', () => {
@@ -4819,31 +5085,43 @@ function initAskFloat() {
       ? `고른 부분만 기록했습니다 (${askItems.length}건)`
       : `전체를 기록했습니다 (${askItems.length}건) — 일부만 저장하려면 긁은 뒤 누르세요.`);
     window.getSelection().removeAllRanges();
+    if (afPick) afPick.clear();
     updateAfSaveLabel();
   };
 }
 
 /** 읽기 모드에서 "여기서 질문"을 고른 경우 — 움직이는 창에 답을 흘려 보여준다. */
-async function askInReader(term) {
+async function askInReader(term, { followUp = false } = {}) {
   if (!(await gem.hasKey())) { fillAskSheet(term); return; }
-  openAskFloat(term);
+  if (!followUp || !askThread) newThread(term, reader ? reader.note.title : '');
+  openAskFloat(term, { followUp });
   const body = afEl('afBody');
   const status = afEl('afStatus');
   status.textContent = '묻는 중…';
+  // 꼬리질문이면 앞서 주고받은 것을 같이 넘긴다 — 없으면 "그럼 반대는?"이 말이 안 된다
+  const prior = followUp
+    ? askThread.turns.map((x) => ({ q: x.q, a: stripHtml(x.html) }))
+    : [];
   try {
     const answer = await gem.ask({
-      term, question: null, noteText: askCtx.noteText || '',
+      term, question: null, noteText: askCtx.noteText || '', prior,
       subject: reader ? reader.note.title : '', lecture: askCtx.qtext || '',
       // 노트를 읽다 묻는 것이라 "핵심/감별/시험 포인트" 틀을 강요하지 않는다 —
       // 문단을 통째로 긁으면 개념이 여럿이라 그 틀에 안 맞는다(2026-10-12 지적).
       mode: 'read',
-      onProgress: (full) => { body.innerHTML = renderMarkdown(full); },
+      onProgress: (full) => {
+        afEl('afLive').innerHTML = renderMarkdown(full);
+        body.scrollTop = body.scrollHeight;
+      },
     });
     askCtx.answer = answer;
-    body.innerHTML = renderMarkdown(answer);
-    tokenizeTree(body);                 // 답변에서도 긁어서 다시 물을 수 있게
-    rememberAsk(term, body.innerHTML, reader ? reader.note.title : '');
-    status.textContent = '쓸 만한 부분만 긁어서 저장할 수 있습니다';
+    await rememberTurn(term, renderMarkdown(answer), reader ? reader.note.title : '');
+    afEl('afQ').textContent = askThread.title;
+    afEl('afQFull').textContent = askThread.title;
+    paintThread();                      // 답변에서도 긁어서 다시 물을 수 있게
+    status.textContent = askThread.turns.length > 1
+      ? `${askThread.turns.length}번 주고받음 — 꾹 눌러 긁으면 그 부분만 다룹니다`
+      : '쓸 만한 부분만 꾹 눌러 긁어서 저장할 수 있습니다';
     updateAfSaveLabel();
   } catch (e) {
     const w = /^RATE_WAIT:(\d+)$/.exec(e.message);
@@ -6628,7 +6906,7 @@ function toast(text) {
  * 묻고 또 묻는 것보다, 일단 하고 되돌릴 수 있게 하는 쪽이 손이 덜 간다 — 상용 앱이
  * 다 그렇게 한다. 되돌리기를 누르지 않고 지나가면 그대로 지워진 채 남는다.
  */
-function toastUndo(text, undo, { ms = 6000 } = {}) {
+function toastUndo(text, undo, { ms = 6000, onExpire = null } = {}) {
   document.getElementById('undoToast')?.remove();
   const el = document.createElement('div');
   el.id = 'undoToast';
@@ -6638,7 +6916,8 @@ function toastUndo(text, undo, { ms = 6000 } = {}) {
   const b = document.createElement('button');
   b.textContent = '되돌리기';
   let done = false;
-  const close = () => { if (!done) { done = true; el.remove(); } };
+  // 되돌릴 틈이 지나면 그때서야 진짜로 치운다 — 무거운 뒷정리(본문 삭제 등)를 여기 건다
+  const close = () => { if (!done) { done = true; el.remove(); if (onExpire) Promise.resolve(onExpire()).catch(() => {}); } };
   b.onclick = async () => {
     if (done) return;
     done = true;

@@ -241,8 +241,45 @@ function slidePages(raw) {
   return list.length ? `p${list.join(',')}` : null;
 }
 
+/**
+ * AI가 끼워 넣는 TeX 토막을 보통 글자로 바꾼다.
+ *
+ * 왜(2026-10-15 신고, 스크린샷): 답변에 `$\\rightarrow$`가 **글자 그대로** 떠 있었다.
+ * 이 앱은 수식을 그릴 생각이 없고(KaTeX를 넣으면 오프라인 PWA가 수백 KB 무거워진다),
+ * 의대 노트에 실제로 필요한 건 화살표·부등호·그리스 문자 정도다. 그 몇 개만 바꾼다.
+ * 프롬프트로도 "쓰지 말라"고 일러두지만, **이미 저장된 답**은 이쪽에서 걷어내야 한다.
+ */
+const TEX = {
+  rightarrow: '→', to: '→', Rightarrow: '⇒', longrightarrow: '⟶',
+  leftarrow: '←', gets: '←', Leftarrow: '⇐', leftrightarrow: '↔',
+  uparrow: '↑', downarrow: '↓', mapsto: '↦',
+  times: '×', div: '÷', pm: '±', mp: '∓', cdot: '·', ast: '*',
+  le: '≤', leq: '≤', ge: '≥', geq: '≥', ne: '≠', neq: '≠',
+  approx: '≈', sim: '~', equiv: '≡', propto: '∝', infty: '∞',
+  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', Delta: 'Δ', epsilon: 'ε',
+  kappa: 'κ', lambda: 'λ', mu: 'μ', pi: 'π', rho: 'ρ', sigma: 'σ', Sigma: 'Σ',
+  tau: 'τ', phi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω', Omega: 'Ω', theta: 'θ',
+  degree: '°', circ: '°', percent: '%', quad: ' ', qquad: '  ', ',': ' ', ';': ' ',
+};
+export function deTex(src) {
+  let x = String(src);
+  if (!/[\\$]/.test(x)) return x;                    // TeX 흔적이 없으면 손대지 않는다
+  // ① 껍데기부터 벗긴다. 안쪽을 바꾸고 나면 "수식이었다"는 표가 사라져 못 알아본다.
+  x = x.replace(/\\[()[\]]/g, '');
+  // ⚠️ `$`는 **달러 기호이기도 하다**. "$5 달러고 $10도"가 통째로 수식으로 읽혀
+  //    기호가 지워졌다 — 안쪽에 수식 티(역슬래시·위첨자·아래첨자·중괄호)가 있을 때만 벗긴다.
+  x = x.replace(/\$\$?([^$\n]{1,200}?)\$\$?/g, (m, inner) => (/[\\^_{]/.test(inner) ? inner : m));
+  // ② 그다음 알맹이를 보통 글자로
+  x = x.replace(/\\(?:text|mathrm|mathbf|textbf|mathit|operatorname)\s*\{([^{}]*)\}/g, '$1');
+  x = x.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '$1/$2');
+  x = x.replace(/\^\s*\\circ/g, '°').replace(/\^\{?°\}?/g, '°');
+  x = x.replace(/\\([%_&#$])/g, '$1');               // 글자로 쓰려고 막아둔 것은 막음표만 뗀다
+  x = x.replace(/\\([A-Za-z]+|,|;)/g, (m, k) => (k in TEX ? TEX[k] : m));
+  return x.replace(/[ \t]{2,}/g, ' ');
+}
+
 function inline(s) {
-  let t = escapeHtml(s);
+  let t = escapeHtml(deTex(s));
 
   // [슬라이드 p.12] → 링크. 지금은 **꺼져 있다**(아래 SLIDE_LINKS 주석 참고).
   if (SLIDE_LINKS) {

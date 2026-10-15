@@ -286,7 +286,9 @@ const SYSTEM = `당신은 의대생의 시험 공부를 돕는 튜터다. 한국
 **감별**: 헷갈리는 개념과의 차이 1~2줄
 **시험 포인트**: 출제될 만한 한 줄
 
-의학 용어는 한글(영문) 병기. 확실하지 않으면 "확실하지 않다"고 말한다.`;
+의학 용어는 한글(영문) 병기. 확실하지 않으면 "확실하지 않다"고 말한다.
+수식 표기(LaTeX)는 쓰지 않는다 — 이 앱은 수식을 그리지 않아서 "\$\\rightarrow\$" 같은 게
+글자 그대로 보인다. 화살표는 →, 부등호는 ≤ ≥, 곱은 × 처럼 **기호를 직접** 쓴다.`;
 
 /**
  * 노트를 읽다가 물을 때 쓰는 지시.
@@ -306,7 +308,9 @@ const READ_SYSTEM = `당신은 의대생이 강의 노트를 읽다가 막힌 �
 
 형식은 내용에 맞게 고른다 — 정해진 틀에 욱여넣지 않는다. 길면 소제목(**굵게**)으로
 끊어주고, 나열이면 불릿을 쓴다. 의학 용어는 한글(영문) 병기.
-확실하지 않으면 "확실하지 않다"고 말한다.`;
+확실하지 않으면 "확실하지 않다"고 말한다.
+수식 표기(LaTeX)는 쓰지 않는다 — 이 앱은 수식을 그리지 않아서 "\$\\rightarrow\$" 같은 게
+글자 그대로 보인다. 화살표는 →, 부등호는 ≤ ≥, 곱은 × 처럼 **기호를 직접** 쓴다.`;
 
 /**
  * 질문한다.
@@ -318,14 +322,16 @@ const READ_SYSTEM = `당신은 의대생이 강의 노트를 읽다가 막힌 �
  * @param {string} [p.lecture]
  * @returns {Promise<string>} 답변 텍스트
  */
-export async function ask({ term, question, noteText, subject, lecture, onProgress, mode = 'exam' },
-  retried = false) {
+export async function ask({ term, question, noteText, subject, lecture, onProgress,
+  mode = 'exam', prior = [] }, retried = false) {
   if (!(await hasKey())) throw new Error('NO_KEY');
   const model = await modelFor();          // 실측이 느리면 알아서 가벼운 쪽으로
   const reading = mode === 'read';
 
-  // 같은 걸 또 물으면 보내지 않는다(한도 절약)
-  const cacheKey = `${mode}|${term}|${question ? question.num : ''}`;
+  // 같은 걸 또 물으면 보내지 않는다(한도 절약).
+  // ⚠️ 꼬리질문은 **앞 대화가 다르면 답도 달라야** 하므로 열쇠에 그 길이를 섞는다 —
+  //    안 그러면 "그럼 반대는?"을 두 번째 실에서 물었을 때 첫 실의 답이 나온다(2026-10-15).
+  const cacheKey = `${mode}|${term}|${question ? question.num : ''}|${prior.length}|${(prior[prior.length - 1] || {}).q || ''}`;
   if (!retried && answerCache.has(cacheKey)) return answerCache.get(cacheKey);
 
   const parts = [];
@@ -338,6 +344,13 @@ export async function ask({ term, question, noteText, subject, lecture, onProgre
       ? question.opts.map((o, i) => `${['①','②','③','④','⑤'][i] || i + 1} ${o}`).join(' ')
       : '';
     parts.push(`[이 문제를 푸는 중이다]\n${question.q}\n${opts}`);
+  }
+  // 앞서 주고받은 것 — 꼬리질문("그럼 반대는?")은 이게 없으면 말이 안 된다.
+  // 길어지면 한도를 잡아먹으므로 **마지막 3턴**만, 답은 앞부분만 넘긴다.
+  if (prior.length) {
+    const tail = prior.slice(-3).map((x, i) =>
+      `Q${i + 1}. ${x.q}\nA${i + 1}. ${String(x.a || '').slice(0, 700)}`).join('\n\n');
+    parts.push(`[앞서 주고받은 것 — 이어지는 질문이다]\n${tail}`);
   }
   if (noteText) {
     parts.push(reading
@@ -364,7 +377,7 @@ export async function ask({ term, question, noteText, subject, lecture, onProgre
         if (e.message === 'MODEL_BUSY') markBusy(model); else markDead(model);
         if (!retried) {
           const next = await modelFor();
-          if (next !== model) return ask({ term, question, noteText, subject, lecture, onProgress, mode }, true);
+          if (next !== model) return ask({ term, question, noteText, subject, lecture, onProgress, mode, prior }, true);
         }
         throw new Error(friendlyModelError(e.message, model));
       }

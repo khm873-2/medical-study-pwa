@@ -2319,7 +2319,7 @@ body.dragging-doc .doc-drawer { opacity: .55; }
   border-radius: var(--r-2); box-shadow: var(--sh-3); padding: 4px;
 }
 .af-log-item {
-  display: flex; width: 100%; gap: 8px; align-items: baseline;
+  display: flex; width: 100%; gap: 8px; align-items: center;
   padding: 8px 10px; border: 0; border-radius: var(--r-1);
   background: none; color: inherit; text-align: left; cursor: pointer;
 }
@@ -2327,6 +2327,52 @@ body.dragging-doc .doc-drawer { opacity: .55; }
 .af-log-item .al-t { flex: 1 1 auto; min-width: 0; font-size: 13px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .af-log-item .al-d { flex: 0 0 auto; font-size: 11px; color: var(--sub); }
+
+/* ── AI 설명: 낱말 긁기 · 고른 뒤 할 일 · 실(thread) (2026-10-15) ── */
+
+/* 고른 범위를 **직접 칠한다**. 브라우저 기본 선택은 떠 있는 창에서 잘 안 보였다. */
+.tok-pick { background: rgba(52,160,122,.28); box-shadow: 0 0 0 1px rgba(52,160,122,.45); border-radius: 3px; }
+.af-body.picking { cursor: text; touch-action: none; }
+.af-body.picking .tok { cursor: text; }
+
+/* 고른 자리 옆에 뜨는 막대 */
+.pick-bar {
+  position: absolute; z-index: 4; display: flex; gap: 4px; align-items: center;
+  padding: 4px; border-radius: 999px;
+  background: var(--card); border: 1px solid var(--border); box-shadow: var(--sh-3);
+}
+.pick-bar .btn { padding: 5px 11px; font-size: 12.5px; border-radius: 999px; }
+.pick-bar .icon-btn { width: 28px; height: 28px; }
+
+/* 주고받은 것 — 질문과 답을 한 덩어리로 */
+.af-turn { padding: 10px 0; border-top: 1px solid var(--border); }
+.af-turn:first-child { border-top: 0; padding-top: 2px; }
+.af-tq {
+  font-size: 12.5px; color: var(--sub); margin-bottom: 6px; white-space: pre-wrap;
+  padding-left: 10px; border-left: 3px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+/* 첫 질문은 긁어온 대목이라 길다 — 접어두고 누르면 펴진다 */
+.af-tq.clip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; cursor: pointer; }
+.af-live .af-ta { opacity: .92; }
+
+/* 지난 질문 목록: 찾기 한 줄 + 꽂기·지우기 */
+.al-bar { display: flex; gap: 6px; padding: 6px 6px 8px; }
+.al-bar input {
+  flex: 1 1 auto; min-width: 0; padding: 6px 10px; font-size: 13px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: inherit;
+}
+.al-bar .btn { flex: 0 0 auto; padding: 6px 10px; font-size: 12.5px; border-radius: 999px; }
+.af-log-item .al-main {
+  display: flex; flex: 1 1 auto; min-width: 0; gap: 8px; align-items: baseline;
+  border: 0; background: none; color: inherit; text-align: left; cursor: pointer; padding: 0;
+}
+.af-log-item .al-pin, .af-log-item .al-del {
+  flex: 0 0 auto; width: 26px; height: 26px; font-size: 12px; opacity: .35;
+}
+.af-log-item:hover .al-pin, .af-log-item:hover .al-del { opacity: .8; }
+.af-log-item .al-pin[aria-pressed="true"] { opacity: 1; }
+.af-log-item.pinned { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 
 
 /* ── 찾기: 범위 고르기 · 정규식(2026-10-13) ── */

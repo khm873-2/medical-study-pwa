@@ -2706,10 +2706,13 @@ await run('읽기 모드 프롬프트', async () => {
   const out = [];
   const app = await fetch('/js/app.js').then((r) => r.text());
   out.push({ name: '읽기에서 물으면 mode:read 로 보낸다', ok: /mode: 'read'/.test(app) });
+  // 흘려 보여주는 자리가 **이번 턴 칸**으로 바뀌었다 — 앞서 주고받은 것을 지우지 않으려고(2026-10-15)
   out.push({ name: '답이 오는 대로 흘려 보여준다(다 기다리지 않는다)',
-    ok: /onProgress: \(full\) => \{ body\.innerHTML = renderMarkdown\(full\)/.test(app) });
+    ok: /afEl\('afLive'\)\.innerHTML = renderMarkdown\(full\)/.test(app) });
   out.push({ name: '답을 날 텍스트가 아니라 마크다운으로 그린다',
-    ok: /body\.innerHTML = renderMarkdown\(answer\)/.test(app) });
+    ok: /rememberTurn\(term, renderMarkdown\(answer\)/.test(app) });
+  out.push({ name: '꼬리질문이면 앞 대화를 같이 보낸다',
+    ok: /prior = followUp[\s\S]{0,160}askThread\.turns\.map/.test(app) });
 
   const G = await import('/js/gemini.js');
   const realFetch = window.fetch;
@@ -4832,6 +4835,180 @@ await run('고른 것이 vault로', async () => {
 
 // ══════════ 저장 대기 띠 · 버전 칩 (2026-10-14) ══════════
 // "맨 밑에는 왜 주황색으로 해놓은 거임? 왜 계속 화면을 가리고 있는 거임 저만큼이나?"
+// ══════════ AI 설명: 낱말 긁기 · 고른 뒤 할 일 · 실(thread) (2026-10-15) ══════════
+// "글을 긁으려고 하니까 어디까지 선택된 게 안 나옴" / "선택하면 복사하기나 추가질문" /
+// "이전 질문이 관리가 안 되는 게 나쁘네… 꼬리질문이 계속 나올 수도 있잖아"
+await run('AI 설명 — 낱말 긁기', async () => {
+  const out = [];
+  const P = await import('/js/pen.js');
+  const f = document.getElementById('askFloat');
+  f.classList.remove('hidden');
+  const body = document.getElementById('afBody');
+  body.innerHTML = '<p>가슴압박 깊이는 성인에서 약 5cm이고 소아는 전후직경의 3분의 1이다. 영아는 약 4cm이다.</p>';
+  P.tokenizeTree(body);
+  const toks = [...body.querySelectorAll('.tok')];
+  out.push({ name: '낱말로 쪼개진다', ok: toks.length >= 8, detail: `${toks.length}개` });
+  if (toks.length < 8) { f.classList.add('hidden'); return out; }
+
+  let last = null;
+  const pick = P.wordPick(body, (txt) => { last = txt; });
+  const pt = (el, dx = 0.5) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width * dx, y: r.top + r.height / 2 };
+  };
+  const send = (type, el, id = 7) => {
+    const { x, y } = pt(el);
+    el.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: y,
+      pointerId: id, pointerType: 'mouse', button: 0 }));
+  };
+  // 마우스는 누르는 순간 시작한다(스크롤은 휠로 하니까)
+  send('pointerdown', toks[1]);
+  out.push({ name: '누르면 그 낱말이 칠해진다',
+    ok: toks[1].classList.contains('tok-pick') });
+  // 세 낱말까지 끌기
+  const to = pt(toks[3]);
+  body.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: to.x, clientY: to.y,
+    pointerId: 7, pointerType: 'mouse' }));
+  const painted = [...body.querySelectorAll('.tok-pick')];
+  out.push({ name: '끌면 **낱말 단위로** 범위가 늘어난다', ok: painted.length === 3,
+    detail: `${painted.length}개` });
+  out.push({ name: '칠한 것이 눈에 보인다(배경색이 들어간다)',
+    ok: getComputedStyle(toks[1]).backgroundColor !== 'rgba(0, 0, 0, 0)',
+    detail: getComputedStyle(toks[1]).backgroundColor });
+  send('pointerup', toks[3]);
+  out.push({ name: '떼어도 고른 채로 남는다', ok: body.querySelectorAll('.tok-pick').length === 3 });
+  out.push({ name: '글자 사이 띄어쓰기가 살아 있다', ok: /\s/.test(pick.text()) && !!pick.text(),
+    detail: JSON.stringify(pick.text()) });
+  out.push({ name: '바뀔 때마다 알려준다', ok: typeof last === 'string' && last.length > 0 });
+
+  // 톡 치면 풀린다
+  send('pointerdown', toks[6], 8);
+  send('pointerup', toks[6], 8);
+  // (마우스는 누르는 순간 새로 잡으므로 한 낱말이 남는다 — 비우려면 clear)
+  pick.clear();
+  out.push({ name: 'clear로 깨끗이 풀린다', ok: body.querySelectorAll('.tok-pick').length === 0 && pick.text() === '' });
+
+  pick.destroy();
+  body.innerHTML = '';
+  // ⚠️ 이 상자에는 **앱이 붙여둔 긁기도** 같이 달려 있다. 내 흉내 사건에 그쪽도 반응해
+  //    막대가 떠 있게 되므로 같이 치운다(안 그러면 뒤 테스트가 "평소엔 숨어 있다"에서 깨진다).
+  document.getElementById('afPickBar').classList.add('hidden');
+  f.classList.add('hidden');
+  return out;
+});
+
+await run('AI 설명 — 고르면 할 일이 뜬다', async () => {
+  const out = [];
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  const bar = document.getElementById('afPickBar');
+  out.push({ name: '막대가 있다', ok: !!bar });
+  if (!bar) return out;
+  for (const [id, label] of [['afPickCopy', '복사'], ['afPickAsk', '이어 묻기'],
+    ['afPickSave', '저장'], ['afPickClear', '풀기']]) {
+    const el = document.getElementById(id);
+    out.push({ name: `${label} 단추가 있다`, ok: !!el });
+  }
+  out.push({ name: '평소엔 숨어 있다', ok: bar.classList.contains('hidden') });
+  out.push({ name: '고른 글을 클립보드로 복사한다', ok: /afPickCopy'\)\.onclick[\s\S]{0,200}clipboard\.writeText/.test(app) });
+  out.push({ name: '고른 대목을 그대로 이어 묻는다',
+    ok: /afPickAsk'\)\.onclick[\s\S]{0,320}afEl\('afInput'\)\.value =/.test(app) });
+  out.push({ name: '고른 자리 **위**에 붙고, 위가 좁으면 아래로 넘긴다',
+    ok: /above > 6 \? above :/.test(app) });
+  return out;
+});
+
+await run('AI 설명 — 지난 질문을 실로 묶는다', async () => {
+  const out = [];
+  const d = await import('/js/db.js');
+  const app = await fetch('/js/app.js').then((r) => r.text());
+
+  out.push({ name: '목록과 본문을 갈라 둔다(목록엔 답변을 넣지 않는다)',
+    ok: /ask_threads/.test(app) && /const threadKey = \(id\) => `ask_t_/.test(app) });
+  out.push({ name: '옛 평평한 기록을 실로 옮긴다', ok: /async function migrateAskLog/.test(app) });
+  out.push({ name: '안 쓰는 실은 알아서 사라진다', ok: /ASK_KEEP_DAYS/.test(app) && /async function pruneThreads/.test(app) });
+  out.push({ name: '꽂아둔 실은 안 지운다', ok: /const old = !x\.pin && x\.ts < cut/.test(app) });
+  out.push({ name: '한 실에 담는 턴 수에도 상한이 있다', ok: /ASK_TURN_MAX/.test(app) });
+
+  // 실제로 저장되는 모양을 확인한다
+  await d.kvSet('ask_threads', [
+    { id: 't1', ts: Date.now(), title: '심실세동이 뭐야', n: 3, note: 'BLS', pin: false },
+    { id: 't2', ts: Date.now() - 1000, title: '제세동 금기', n: 1, note: '', pin: true },
+  ]);
+  await d.kvSet('ask_t_t1', { turns: [
+    { q: '심실세동이 뭐야', html: '<p>세포가 제각각 떨리는 상태다.</p>', ts: 1 },
+    { q: '그럼 반대는?', html: '<p>무수축이다.</p>', ts: 2 },
+    { q: '처치는?', html: '<p>즉시 제세동.</p>', ts: 3 },
+  ] });
+  const list = await d.kvGet('ask_threads');
+  out.push({ name: '목록 한 줄에 답변 본문이 들어있지 않다',
+    ok: list.every((x) => !('html' in x)), detail: Object.keys(list[0]).join(',') });
+  out.push({ name: '목록이 가볍다(실 2개가 1KB 미만)',
+    ok: JSON.stringify(list).length < 1024, detail: `${JSON.stringify(list).length}B` });
+
+  // 창을 열어 실이 통째로 그려지는지
+  if (window.__askForTest) {
+    await window.__askForTest.reload();
+    await window.__askForTest.open('t1');
+    const turns = document.querySelectorAll('#afBody .af-turn');
+    out.push({ name: '**주고받은 것이 전부 보인다**(마지막 답 하나가 아니라)',
+      ok: turns.length === 3, detail: `${turns.length}덩어리` });
+    out.push({ name: '질문과 답이 짝으로 보인다',
+      ok: !!turns[1] && /그럼 반대는/.test(turns[1].querySelector('.af-tq').textContent)
+        && /무수축/.test(turns[1].querySelector('.af-ta').textContent) });
+    const head = document.getElementById('afStatus').textContent;
+    out.push({ name: '몇 번 주고받았는지 알려준다', ok: /3번 주고받음/.test(head), detail: head });
+
+    // 목록: 꼬리 개수 · 꽂기 · 지우기 · 찾기
+    document.getElementById('afLog').click();
+    await new Promise((r) => setTimeout(r, 80));
+    const box = document.getElementById('afLogList');
+    out.push({ name: '목록에 찾기 칸이 있다', ok: !!box.querySelector('.al-bar input') });
+    out.push({ name: '＋ 새 주제로 실을 새로 팔 수 있다',
+      ok: /새 주제/.test(box.querySelector('.al-bar .btn')?.textContent || '') });
+    const rows = [...box.querySelectorAll('.af-log-item')];
+    out.push({ name: '실마다 한 줄', ok: rows.length === 2, detail: `${rows.length}줄` });
+    out.push({ name: '꼬리질문이 몇 번인지 보인다',
+      ok: rows.some((r) => /꼬리 2/.test(r.textContent)), detail: rows.map((r) => r.textContent).join(' | ') });
+    out.push({ name: '꽂아둔 실이 위로 온다', ok: rows[0].classList.contains('pinned') });
+    out.push({ name: '한 줄씩 지울 수 있다', ok: rows.every((r) => !!r.querySelector('.al-del')) });
+    // 찾기
+    const q = box.querySelector('.al-bar input');
+    q.value = '제세동';
+    q.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 40));
+    out.push({ name: '찾기로 걸러진다',
+      ok: box.querySelectorAll('.af-log-item').length === 1,
+      detail: `${box.querySelectorAll('.af-log-item').length}줄` });
+    box.classList.add('hidden');
+  } else {
+    out.push({ name: '실을 열 통로가 있다', ok: false, detail: '__askForTest 없음' });
+  }
+  document.getElementById('askFloat').classList.add('hidden');
+  await d.kvSet('ask_threads', []);
+  await d.kvDel('ask_t_t1');
+  if (window.__askForTest) await window.__askForTest.reload();   // 메모리까지 비운다
+  return out;
+});
+
+await run('AI 답변의 수식 토막을 걷어낸다', async () => {
+  const out = [];
+  const M = await import('/js/markdown.js');
+  const cases = [
+    ['VF/pVT $\\rightarrow$ 제세동', '→', '\\rightarrow'],
+    ['체온 $\\ge$ 40$^\\circ$C', '≥', '\\ge'],
+    ['$\\text{COHb} \\ge 25\\%$', 'COHb ≥ 25%', '\\text'],
+  ];
+  for (const [src, want, bad] of cases) {
+    const h = M.renderMarkdown(src);
+    out.push({ name: `기호로 바뀐다: ${src}`, ok: h.includes(want) && !h.includes(bad), detail: h });
+  }
+  const money = M.renderMarkdown('가격은 $5 달러고 $10도 있다');
+  out.push({ name: '**달러 기호는 건드리지 않는다**', ok: /\$5/.test(money) && /\$10/.test(money), detail: money });
+  const g = await fetch('/js/gemini.js').then((r) => r.text());
+  out.push({ name: '애초에 쓰지 말라고 일러둔다', ok: /수식 표기\(LaTeX\)는 쓰지 않는다/.test(g) });
+  return out;
+});
+
 await run('저장 대기 띠', async () => {
   const out = [];
   const d = await import('/js/db.js');
@@ -5699,6 +5876,8 @@ await run('새 질문 하기', async () => {
   window.getSelection().removeAllRanges();
   const d = await import('/js/db.js');
   await d.kvSet('ask_log', []);
+  await d.kvSet('ask_threads', []);                  // 실로 바뀌었다(2026-10-15)
+  if (window.__askForTest) await window.__askForTest.reload();
   await new Promise((r) => setTimeout(r, 120));
 
   // 긁은 것도 지난 답도 없는데 눌러본다 — 전에는 "먼저 드래그하세요"로 막혔다
