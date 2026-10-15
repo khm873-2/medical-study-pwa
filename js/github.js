@@ -156,7 +156,10 @@ export async function createFile(path, content, message) {
     ? content.base64
     : base64EncodeUtf8(content);
   let target = path;
-  for (let attempt = 0; attempt < 5; attempt++) {
+  // 같은 이름이 있으면 -2, -3… 으로 비켜 간다. 그게 몇 번 더 부딪히면 **무작위 꼬리**를
+  // 붙여 끝낸다 — 번호만 올리다 보면 영영 못 넣는 수가 있다(2026-10-15: 이름이 -5까지
+  // 차서 "같은 이름의 파일이 너무 많습니다"로 떨어졌다).
+  for (let attempt = 0; attempt < 8; attempt++) {
     const res = await fetch(`${API}/repos/${repo}/contents/${encPath(target)}`, {
       method: 'PUT',
       headers: await headers({
@@ -166,15 +169,32 @@ export async function createFile(path, content, message) {
       body: JSON.stringify({ message: message || `iPad: ${target}`, content: b64 }),
     });
     if (res.ok) return { path: target };
-    if (res.status === 422) {
-      // 이미 존재 → 다른 이름으로 재시도
-      target = suffixPath(path, attempt + 2);
+    const body = await res.text().catch(() => '');
+    // 422는 "이미 있다"만이 아니다 — 내용이 너무 크거나 경로가 잘못돼도 422가 온다.
+    // 그걸 싸잡아 이름 탓으로 돌리면 **엉뚱한 메시지**를 띄우게 된다(2026-10-15 지적).
+    if (res.status === 422 && /already exists|"sha" wasn't supplied|sha/i.test(body)) {
+      target = attempt < 4 ? suffixPath(path, attempt + 2)
+        : suffixPath(path, `${Date.now().toString(36).slice(-4)}`);
       continue;
     }
-    const body = await res.text().catch(() => '');
-    throw new Error(`저장 실패 (${res.status}) — ${body.slice(0, 200)}`);
+    throw new Error(`저장 실패 (${res.status}) — ${explainGithub(res.status, body)}`);
   }
-  throw new Error('저장 실패 — 같은 이름의 파일이 너무 많습니다.');
+  throw new Error('저장 실패 — 같은 이름으로 여러 번 부딪혔습니다. 잠시 뒤 다시 보내보세요.');
+}
+
+/** GitHub가 돌려준 오류를 **무엇을 하면 되는지**가 보이는 말로 바꾼다. */
+function explainGithub(status, body) {
+  const msg = (() => {
+    try { return JSON.parse(body).message || ''; } catch { return ''; }
+  })() || String(body || '').slice(0, 160);
+  if (status === 401) return '토큰이 만료됐습니다 — 설정에서 다시 연결하세요.';
+  if (status === 403 && /rate limit/i.test(body)) return 'GitHub 요청 한도에 걸렸습니다 — 잠시 뒤 다시.';
+  if (status === 403) return `권한이 없습니다 (${msg})`;
+  if (status === 404) return '저장소나 폴더를 찾지 못했습니다 — 설정의 저장소 이름을 확인하세요.';
+  if (status === 409) return '같은 파일을 동시에 고쳤습니다 — 다시 보내면 됩니다.';
+  if (status === 413 || /too large/i.test(body)) return '파일이 너무 큽니다.';
+  if (status >= 500) return 'GitHub 쪽 문제입니다 — 잠시 뒤 다시 보내보세요.';
+  return msg || '알 수 없는 오류';
 }
 
 function suffixPath(path, n) {

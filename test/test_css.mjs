@@ -12,7 +12,7 @@
 import { readFileSync } from 'fs';
 
 const CSS = '/Users/hyunminkang/Documents/medical-study-pwa/css/app.css';
-const BUDGET = 55;          // 2026-10-12 기준. 줄이는 건 환영, 늘리는 건 금지.
+const BUDGET = 54;          // 2026-10-15 기준. 줄이는 건 환영, 늘리는 건 금지.
 // 86 → 61: `카드 관리` 블록 76줄이 통째로 두 번 들어가 있던 걸 지웠다(앞 복사본은
 // 캐스케이드로 아예 안 쓰이고 있었다 — 고쳐도 아무 일도 안 일어나는 죽은 코드였다).
 
@@ -69,6 +69,22 @@ ok('!important 가 10개를 넘지 않는다', bangs <= 10,
 const rootBlock = (css.match(/:root\s*\{([\s\S]*?)\}/) || [])[1] || '';
 for (const tok of ['--bg', '--text', '--card', '--border', '--accent', '--sub', '--warn', '--correct']) {
   ok(`${tok} 가 기본 :root 에 있다`, rootBlock.includes(tok));
+}
+
+// 배경만 덮어쓰고 글씨색을 안 바꾸면 **글자가 배경에 묻힌다**.
+// 2026-10-15에 실제로 그랬다 — `#syncBar.stuck`의 배경을 뒤쪽 블록에서 #b45309로
+// 덮었는데 글씨는 var(--warn) = 같은 #b45309라서, 글자 없는 주황 막대가 떴다.
+{
+  const blocks = [...css.matchAll(/#syncBar\.stuck\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  ok('#syncBar.stuck 이 한 군데서만 정의된다', blocks.length === 1, `${blocks.length}곳`);
+  const body = blocks.join(' ');
+  const bg = (body.match(/background:\s*([^;]+)/) || [])[1];
+  const fg = (body.match(/(?:^|[^-])color:\s*([^;]+)/) || [])[1];
+  ok('막힌 띠에 배경과 글씨색이 함께 있다', !!bg && !!fg, `배경 ${bg} / 글씨 ${fg}`);
+  ok('막힌 띠의 글씨가 배경과 다른 색이다',
+    !!bg && !!fg && bg.trim() !== fg.trim(), `둘 다 ${bg}`);
+  const btn = (css.match(/#syncBar\.stuck button\s*\{([^}]*)\}/) || [])[1] || '';
+  ok('막힌 띠의 단추도 읽힌다', /color:\s*#fff|color:\s*white/.test(btn), btn.trim().slice(0, 60));
 }
 
 console.log(`test_css.mjs  ${fail.length ? '❌' : '✅'} ${pass}개 통과${fail.length ? `, ${fail.length}개 실패` : ''}`);

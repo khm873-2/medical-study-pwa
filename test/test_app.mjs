@@ -268,7 +268,14 @@ check('retryWrong: 답안 비워짐', q2.order.every((i) => q2.answers[i] === nu
   // 세 저장 경로가 전부 이 함수를 쓰는지 — 하나라도 빠지면 그 경로만 다시 길어진다
   for (const kind of ['모아두기', '채택', '모의고사풀이']) {
     check(`${kind} 경로가 vaultName을 쓴다`,
-      new RegExp(`vaultName\\([^)]*'${kind}'\\)`).test(src));
+      new RegExp(`vaultName\\([\\s\\S]{0,160}?'${kind}'\\)`).test(src));
+  }
+  // 이름에 **시각**이 들어가야 같은 날 두 번 모아도 안 부딪힌다 (2026-10-15:
+  // "저장 실패 — 같은 이름의 파일이 너무 많습니다"로 떨어졌다)
+  for (const kind of ['모아두기', '채택', '모의고사풀이']) {
+    const m = src.match(new RegExp(`vaultName\\(([\\s\\S]{0,160}?)'${kind}'\\)`));
+    check(`${kind} 이름에 시각이 들어간다`, !!m && /getHours\(\)|\$\{hh\}/.test(m[1]),
+      m ? m[1].slice(0, 70) : '없음');
   }
   check('옛 slice(0, 40) 방식이 남아있지 않다', !/slug\s*=\s*\(ctx\.title/.test(src));
 }

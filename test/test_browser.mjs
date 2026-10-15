@@ -1147,8 +1147,15 @@ await run('카드 만들기', async () => {
   // 답은 data-answer 속성에만 있어야 한다 — **화면 글자**로 보이면 안 된다
   const peek = document.createElement('div');
   peek.innerHTML = cards[0].contextHtml;
-  out.push({ name: '화면 글자에는 답이 안 보인다',
-    ok: !peek.textContent.includes('수축기혈압 90mmHg 미만'), detail: peek.textContent.slice(0, 50) });
+  // 답은 빈칸 **안에 숨어** 자리를 잡는다(폭이 안 변하게) — 밖으로 새면 안 된다
+  out.push({ name: '빈칸 밖으로 답이 새지 않는다',
+    ok: ![...peek.childNodes].map((n) => (n.textContent || '')).join('')
+      .replace(/수축기혈압 90mmHg 미만|2\.2 미만|PCWP 15 이상/g, '')
+      .includes('수축기혈압'),
+    detail: peek.textContent.slice(0, 50) });
+  out.push({ name: '답은 빈칸 안에 숨어 있다(폭을 잡아두려고)',
+    ok: [...peek.querySelectorAll('.cloze')].every((c) => c.querySelector('i')
+      && c.querySelector('i').textContent === c.dataset.answer) });
   out.push({ name: '빈칸에 답이 data로 붙어 있다(답 보기용)',
     ok: /data-answer="수축기혈압 90mmHg 미만"/.test(cards[0].contextHtml) });
 
@@ -3471,23 +3478,38 @@ await run('카드 창', async () => {
 
   // 후보 한 장을 띄운다(실제 cloze 구조 그대로)
   f.classList.remove('hidden');
-  document.getElementById('cfBody').innerHTML =
-    '<div class="cf-q">깊이는 <span class="cloze" data-answer="5~6cm">      </span>다.</div>';
+  // 옛 카드 꼴(공백만 든 빈칸)로 넣어본다 — 그려줄 때 지금 모양으로 고쳐져야 한다
+  const R0 = await import('/js/reader.js');
+  document.getElementById('cfBody').innerHTML = R0.tidyCardHtml(
+    '<div class="cf-q">깊이는 <span class="cloze" data-answer="5~6cm">      </span>다.</div>');
   const cz = document.querySelector('#cfBody .cloze');
+  const hid = cz.querySelector('i');
+  out.push({ name: '옛 카드의 빈칸도 지금 모양으로 고쳐진다', ok: !!hid,
+    detail: cz.innerHTML });
+  if (!hid) { f.classList.add('hidden'); return out; }
   out.push({ name: '가려진 상태에서는 답이 안 보인다',
-    ok: getComputedStyle(cz).color === 'rgba(0, 0, 0, 0)' });
+    ok: getComputedStyle(hid).visibility === 'hidden',
+    detail: getComputedStyle(hid).visibility });
+  const wasW = cz.getBoundingClientRect().width;
 
-  // ★ 버그: 색만 칠하고 글자를 안 넣으면 초록 칸만 뜬다
+  // ★ 답을 열어도 **폭이 안 변해야** 한다 — 변하면 뒷글이 확 밀린다(2026-10-15 지적)
   cz.classList.add('filled');
-  cz.textContent = cz.dataset.answer;
-  out.push({ name: '답을 열면 글자가 실제로 들어간다', ok: cz.textContent === '5~6cm', detail: cz.textContent });
+  await new Promise((r) => setTimeout(r, 40));
+  out.push({ name: '답을 열면 글자가 실제로 보인다',
+    ok: getComputedStyle(hid).visibility === 'visible' && cz.textContent === '5~6cm',
+    detail: cz.textContent });
+  out.push({ name: '**답을 열어도 빈칸 폭이 그대로다**(글이 안 밀린다)',
+    ok: Math.abs(cz.getBoundingClientRect().width - wasW) < 0.6,
+    detail: `${wasW.toFixed(1)} → ${cz.getBoundingClientRect().width.toFixed(1)}px` });
   out.push({ name: '열린 답은 읽히는 색이다',
     ok: getComputedStyle(cz).color !== 'rgba(0, 0, 0, 0)', detail: getComputedStyle(cz).color });
   f.classList.add('hidden');
 
   const app = await fetch('/js/app.js').then((r) => r.text());
-  out.push({ name: '빈칸을 칠할 때 data-answer를 넣는다(한 곳에서만 처리)',
-    ok: /function paintCloze\(root, shown\)/.test(app) && /el\.textContent = ans;/.test(app) });
+  out.push({ name: '빈칸을 칠할 때 글자를 갈아끼우지 않는다(폭이 안 변하게)',
+    ok: /function paintCloze\(root, shown\)/.test(app)
+      && /el\.classList\.toggle\('filled'/.test(app)
+      && !/el\.textContent = ans;/.test(app) });
   out.push({ name: '네모를 쳐도 바로 저장하지 않는다',
     ok: !/readerCardMode\(false\);\s*\n\s*saveCards\(cards\)/.test(app) });
   out.push({ name: '＋추가를 눌러야 저장된다', ok: /await saveCards\(\[c\]\)/.test(app) });
@@ -3816,14 +3838,19 @@ await run('선택 팝업', async () => {
   out.push({ name: '**버튼마다 뭘 하는지 글씨가 있다**',
     ok: acts.every((b) => (b.querySelector('.sb-t') || {}).textContent),
     detail: acts.map((b) => (b.querySelector('.sb-t') || {}).textContent || '?').join(' / ') });
-  out.push({ name: '주 동작이 맨 앞',
-    ok: acts[0].classList.contains('primary') && /질문/.test(acts[0].textContent) });
+  // 많이 쓰는 것부터 — 복사·모아두기·카드·다른앱·여기서질문 (2026-10-15 요청)
+  out.push({ name: '**많이 쓰는 차례대로 선다**',
+    ok: acts.map((b) => b.id).join(',') === 'selCopy,selNote,selCloze,selSend,selAsk',
+    detail: acts.map((b) => b.id).join(',') });
+  out.push({ name: '맨 앞(복사)이 주 동작으로 두드러진다',
+    ok: acts[0].classList.contains('primary') && /복사/.test(acts[0].textContent) });
   out.push({ name: '모아두기가 도구막대와 같은 그림',
     ok: document.querySelector('#selNote .sb-ic svg')
       && document.querySelector('#selNote .sb-ic svg').innerHTML
         === document.querySelector('#toolScrap svg').innerHTML });
   out.push({ name: '아이콘에도 뭘 하는지 적혀 있다(길게 누르면 뜬다)',
-    ok: acts.slice(1).every((b) => b.title && b.getAttribute('aria-label')) });
+    ok: acts.every((b) => b.title && b.getAttribute('aria-label')),
+    detail: acts.filter((b) => !b.title).map((b) => b.id).join(',') || '전부 있음' });
   const tops = acts.map((b) => Math.round(b.getBoundingClientRect().top));
   out.push({ name: '버튼이 한 줄에 들어간다(줄바꿈 없음)',
     ok: new Set(tops).size === 1, detail: tops.join(',') });
@@ -4298,7 +4325,6 @@ await run('빈칸 카드', async () => {
   const src = await fetch('/js/app.js').then((r) => r.text());
   const grab = (re) => { const m = src.match(re); return m ? m[0] : ''; };
   const parts = [
-    grab(/\/\*\* 카드 본문에 들어갈 빈칸[\s\S]*?\n}\n/),
     grab(/const RE_ESC[\s\S]*?\nfunction placeOneBlank[\s\S]*?\n}\n/),
     grab(/function placeBlanksIn[\s\S]*?\n}\n/),
     grab(/function czGroups\(\) \{[\s\S]*?\n}\n/),
@@ -4307,15 +4333,16 @@ await run('빈칸 카드', async () => {
     grab(/function suggestCloze\(\) \{[\s\S]*?\n}\n/),
   ];
   out.push({ name: '빈칸 카드 함수들이 app.js에 있다', ok: parts.every(Boolean),
-    detail: `${parts.filter(Boolean).length}/7` });
+    detail: `${parts.filter(Boolean).length}/6` });
   if (!parts.every(Boolean)) return out;
   // eslint-disable-next-line no-new-func
-  const api = new Function('wordScore', `
+  const api = new Function('wordScore', 'blankNode', 'tidyCardHtml', `
     let czWords = [], czCtx = {};
+    const blankSpan = blankNode;
     ${parts.join('\n')}
     return { czGroups, buildClozeCards, suggestCloze, placeBlanksIn,
       set(w) { czWords = w; }, setCtx(c) { czCtx = c; } };
-  `)(rd.wordScore);
+  `)(rd.wordScore, rd.blankNode, rd.tidyCardHtml);
 
   const note = '- 👨🏼‍🏫 [전사문] 🗣️ "**제일 중요한 것은 4시간에 200을 기준**으로 합니다. 노모그램의 **아래쪽은\n  toxicity가 없고 위쪽은 toxicity가 있어서**, 시간에 따른 혈중 농도를 찍어보고 범위에 들면\n  치료하고 안 들면 치료하지 않습니다."';
   const holder = document.createElement('div');

@@ -929,7 +929,7 @@ function blockCard(block, els, meta, n, box) {
     id: `${meta.notePath || ''}#${meta.heading || ''}#b${n}#${answers.join('|').slice(0, 40)}`,
     notePath: meta.notePath || '', noteTitle: meta.noteTitle || '',
     heading: meta.heading || '',
-    contextHtml: html,
+    contextHtml: tidyCardHtml(html),
     answers,
     starred: els.some((e) => e.tagName === 'MARK'),
     kind: 'block',
@@ -961,7 +961,7 @@ function tableCard(tr, els, meta, n, box) {
     id: `${meta.notePath || ''}#${meta.heading || ''}#t${n}#${answers.join('|').slice(0, 40)}`,
     notePath: meta.notePath || '', noteTitle: meta.noteTitle || '',
     heading: meta.heading || '',
-    contextHtml: wrap.outerHTML,
+    contextHtml: tidyCardHtml(wrap.outerHTML),
     answers,
     starred: els.some((e) => e.tagName === 'MARK'),
     kind: 'table',
@@ -1001,13 +1001,111 @@ function cloneWithBlanks(block, els, answers, box) {
   return clone.outerHTML;
 }
 
-/** 빈칸. 글자 수만큼 넓이를 줘서 "몇 자쯤인지"가 힌트가 되게 한다. */
-function blankNode(answer) {
+/**
+ * 빈칸 — **답을 그 자리에 넣어두고 숨긴다**.
+ *
+ * 전에는 공백을 글자 수만큼 넣어뒀다가 답을 볼 때 `textContent`를 답으로 갈아끼웠다.
+ * 그러면 가림막과 답의 폭이 달라 **답을 볼 때마다 뒷글이 확 밀렸다**(2026-10-15 지적:
+ * "가림막이랑 실제 글자 크기가 달라지면서 기존에 있던 글씨가 확 이동하면서 보기 힘듦").
+ * 답을 숨긴 채로 자리를 잡아두면 폭이 처음부터 정확해서 드러내도 글이 1px도 안 움직인다.
+ * 글자 수가 힌트가 되는 것도 그대로다 — 오히려 더 정확해진다.
+ */
+export function blankNode(answer) {
   const b = document.createElement('span');
   b.className = 'cloze';
   b.dataset.answer = answer;
-  b.textContent = ' '.repeat(Math.min(14, Math.max(4, answer.length)));
+  const t = document.createElement('i');      // 숨겨둔 답 — 폭만 차지한다
+  t.textContent = answer;
+  b.appendChild(t);
   return b;
+}
+
+// 조각 경계에서 끼어든 공백을 턴다 — 어느 쪽이 군더더기인지 가리는 기준들
+const GLUE_BEFORE = /^[,.)\]}:;?!·%»”’]/;        // 이 기호 **앞**의 공백은 군더더기
+const GLUE_AFTER = /[([{«“‘]$/;                  // 이 기호 **뒤**의 공백도
+// 홀로 선 조사 — 한국어에서 "것 은", "toxicity 가"처럼 띄어 쓰는 일은 없다
+const JOSA_ALONE = /^(은|는|이|가|을|를|와|과|의|에|에서|으로|로|도|만|부터|까지|께|라|이라)$/;
+
+/**
+ * 카드 본문을 정돈한다 — **읽기 화면의 흔적을 지우고 없던 띄어쓰기를 턴다**.
+ *
+ * 카드는 읽기 화면의 DOM을 그대로 복제해 만든다. 그 DOM은 펜으로 긁으라고 낱말마다
+ * `.tok`을 씌워둔 상태이고, 그 조각은 **굵게·괄호 경계에서도 갈라진다**. 예전 코드가
+ * 조각을 ' '로 이어 붙인 탓에 이미 만들어둔 카드에는 `" 제일`, `기준 으로`,
+ * `있어서 ,` 같은 틈이 **박혀 있다**(2026-10-15 지적: "띄어쓰기가 심각하게 왜곡").
+ *
+ * 만들 때도, 그릴 때도 이걸 통과시킨다 — 그려줄 때 터니까 **이미 만든 카드도 같이 낫는다**.
+ * 지우는 건 공백뿐이고 글자는 건드리지 않는다.
+ */
+export function tidyCardHtml(html) {
+  const box = document.createElement('div');
+  box.innerHTML = String(html || '');
+  // ① 낱말 조각은 긁기용이다 — 카드에는 쓸모가 없고 경계만 만든다
+  box.querySelectorAll('span.tok').forEach((el) => el.replaceWith(...el.childNodes));
+  box.normalize();
+  // ② 옛 카드의 빈칸은 공백만 들어 있다 — 답을 숨겨 넣어 폭을 맞춘다(위 blankNode 참고)
+  box.querySelectorAll('.cloze').forEach((el) => {
+    if (el.querySelector('i')) return;
+    const t = document.createElement('i');
+    t.textContent = el.dataset.answer || '';
+    el.textContent = '';
+    el.appendChild(t);
+  });
+  // ③ 조각 경계에서 끼어든 공백을 턴다
+  glueSpaces(box);
+  return box.innerHTML;
+}
+
+/**
+ * 군더더기 공백만 골라 턴다.
+ *
+ * 빈칸(답)은 **글자는 세되 손은 안 댄다**. 건너뛰면 안 된다 — 빈칸을 빼고 이어 붙이면
+ * `4시간에 [200]을`의 공백 뒤가 "을"로 보여서 조사인 줄 알고 붙여버린다
+ * (`4시간에[200]을`). 빈칸도 글자로 세어두면 그 자리가 조사가 아님이 드러난다.
+ */
+function glueSpaces(root) {
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  let flat = '';
+  let n;
+  while ((n = walk.nextNode())) {
+    const locked = !!(n.parentElement && n.parentElement.closest('.cloze'));
+    nodes.push({ node: n, at: flat.length, locked });
+    flat += n.nodeValue;
+  }
+  if (!flat) return;
+
+  const drop = [];
+  const re = /[ \t]+/g;
+  let m;
+  while ((m = re.exec(flat))) {
+    const head = flat.slice(0, m.index);
+    const rest = flat.slice(m.index + m[0].length);
+    if (!rest) continue;
+    const word = (rest.match(/^\S+/) || [''])[0];
+    // 곧은 따옴표는 여는 것·닫는 것이 같은 글자다 — 앞에 몇 개 나왔나(홀/짝)로 가린다
+    const inQuote = (head.match(/"/g) || []).length % 2 === 1;
+    const afterOpen = inQuote && /"$/.test(head);      // 여는 따옴표 **뒤**의 공백
+    const beforeClose = inQuote && rest[0] === '"';    // 닫는 따옴표 **앞**의 공백
+    if (GLUE_BEFORE.test(rest) || GLUE_AFTER.test(head) || JOSA_ALONE.test(word)
+        || afterOpen || beforeClose) {
+      drop.push([m.index, m.index + m[0].length]);
+    }
+  }
+  // 뒤에서부터 지운다 — 앞쪽 자리 번호가 밀리지 않게
+  for (let i = drop.length - 1; i >= 0; i--) {
+    const [s, e] = drop[i];
+    // 답 안쪽에 걸치는 자리는 통째로 건너뛴다
+    if (nodes.some((nd) => nd.locked && nd.at < e && nd.at + nd.node.nodeValue.length > s)) continue;
+    for (const nd of nodes) {
+      const a = nd.at;
+      const b = a + nd.node.nodeValue.length;
+      if (b <= s || a >= e) continue;
+      const from = Math.max(s, a) - a;
+      const to = Math.min(e, b) - a;
+      nd.node.nodeValue = nd.node.nodeValue.slice(0, from) + nd.node.nodeValue.slice(to);
+    }
+  }
 }
 
 /**

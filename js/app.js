@@ -20,7 +20,7 @@ import {
   isStarred, isSuspended, isLeech, LEECH_AT, retrievability, parseExamDates, nextExam,
   parseSchedule, lecturesFor, lectureDays, weekOf, dayKey, qaCards, dueToday,
   splitAnswer,
-  splitWord, wordScore, blockContext,
+  splitWord, wordScore, blockContext, blankNode, tidyCardHtml,
 } from './reader.js';
 import { search, cacheSubject, storageInfo, matcher, findAll } from './search.js';
 import { JOKBO_ROOT, parseJokbo, chapterTitle } from './jokbo.js';
@@ -3960,7 +3960,10 @@ async function saveScrap() {
   embeds.forEach((n) => lines.push(`![[${n}]]`, ''));
 
   payloads.push({
-    path: `${LOG_DIR}/${vaultName(ctx.subject, stamp, ctx.title, '모아두기')}`,
+    // 이름에 **시각까지** 넣는다 — 날짜만 쓰니 같은 날 같은 대목에서 모은 것들이
+    // 서로 이름이 겹쳐 -2…-5 까지 차고 결국 "같은 이름의 파일이 너무 많습니다"로
+    // 떨어졌다(2026-10-15 지적).
+    path: `${LOG_DIR}/${vaultName(ctx.subject, `${stamp}_${p2(now.getHours())}${p2(now.getMinutes())}`, ctx.title, '모아두기')}`,
     content: lines.join('\n'),
     message: `iPad 모아두기: ${ctx.title || '메모'}`,
   });
@@ -4163,7 +4166,7 @@ async function recordPick(doc, lineIdx, lines, label) {
   L.push('');
 
   await saveToVault([{
-    path: `${LOG_DIR}/${vaultName(subject, stamp, doc.title, '채택')}`,
+    path: `${LOG_DIR}/${vaultName(subject, `${stamp}_${p2(now.getHours())}${p2(now.getMinutes())}`, doc.title, '채택')}`,
     content: L.join('\n'),
     message: `iPad 채택: ${doc.title || '노트'} — ${label.slice(0, 30)}`,
   }]);
@@ -4187,6 +4190,8 @@ let cardFloat = null;
 let cfDeck = null;          // {cards, idx, shown} — 아직 저장 안 된 후보
 let cfTab = 'new';          // 'new' | 'all'
 let cfSaved = [];           // 이 노트에 이미 저장된 카드
+// 오래 눌러 고른 카드들 — 한 번에 지우려고 (2026-10-15 요청)
+let cfSel = new Set();
 
 function openCardFloat(cards) {
   cfDeck = { cards: cards || [], idx: 0, shown: false };
@@ -4218,8 +4223,12 @@ function renderCardFloat() {
   document.getElementById('cfTabAll').classList.toggle('active', cfTab === 'all');
   document.getElementById('cfBody').classList.toggle('hidden', cfTab !== 'new');
   document.getElementById('cfList').classList.toggle('hidden', cfTab !== 'all');
+  // 고르는 중에는 "외우기" 대신 고르기 단추가 선다
+  const picking = cfTab === 'all' && cfSel.size > 0;
   document.getElementById('cfFootNew').classList.toggle('hidden', cfTab !== 'new');
-  document.getElementById('cfFootAll').classList.toggle('hidden', cfTab !== 'all');
+  document.getElementById('cfFootAll').classList.toggle('hidden', cfTab !== 'all' || picking);
+  document.getElementById('cfFootSel').classList.toggle('hidden', !picking);
+  if (picking) document.getElementById('cfSelDel').textContent = `지우기 ${cfSel.size}장`;
   if (cfTab === 'new') renderCfNew(); else renderCfList();
 }
 
@@ -4267,11 +4276,7 @@ function makeWordsTappable(root, card) {
       w.textContent = piece;
       w.onclick = (e) => {
         e.stopPropagation();
-        const b = document.createElement('span');
-        b.className = 'cloze';
-        b.dataset.answer = piece;
-        b.textContent = ' '.repeat(Math.min(14, Math.max(4, piece.length)));
-        w.replaceWith(b);
+        w.replaceWith(blankSpan(piece));
         card.answers = [...(card.answers || []), piece];
         card.contextHtml = root.innerHTML
           .replace(/<span class="cf-w">([^<]*)<\/span>/g, '$1')
@@ -4284,13 +4289,27 @@ function makeWordsTappable(root, card) {
   }
 }
 
-/** 빈칸을 가리거나 드러낸다. 답은 `data-answer`에 있다(reader.js blankNode). */
+/**
+ * 빈칸을 가리거나 드러낸다.
+ *
+ * **글자를 갈아끼우지 않는다** — 답은 처음부터 `<i>` 안에 들어 있고 숨겨져만 있다
+ * (reader.js blankNode). class 하나만 뒤집으니 폭이 안 변하고, 그래서 답을 볼 때
+ * 뒷글이 밀리지 않는다(2026-10-15 지적). 옛 카드처럼 `<i>`가 없으면 그때만 넣어준다.
+ */
 function paintCloze(root, shown) {
   root.querySelectorAll('.cloze').forEach((el) => {
-    const ans = el.dataset.answer || '';
-    if (shown) { el.classList.add('filled'); el.textContent = ans; }
-    else { el.classList.remove('filled'); el.textContent = ' '.repeat(Math.min(14, Math.max(4, ans.length))); }
+    fixOldBlank(el);
+    el.classList.toggle('filled', !!shown);
   });
+}
+
+/** 옛 카드의 빈칸(공백만 든 것)을 지금 모양으로 바꾼다 — 폭이 안 변하게. */
+function fixOldBlank(el) {
+  if (el.querySelector('i')) return;
+  const t = document.createElement('i');
+  t.textContent = el.dataset.answer || '';
+  el.textContent = '';
+  el.appendChild(t);
 }
 
 function renderCfNew() {
@@ -4316,7 +4335,7 @@ function renderCfNew() {
   }
   const q = document.createElement('div');
   q.className = 'cf-q cf-pick';
-  q.innerHTML = c.contextHtml || '';
+  q.innerHTML = tidyCardHtml(c.contextHtml || '');
   makeWordsTappable(q, c);        // 낱말을 눌러 빈칸을 더하고 뺀다(2026-10-14 요청)
   paintCloze(q, shown);
   body.appendChild(q);
@@ -4349,9 +4368,15 @@ function renderCfList() {
     return;
   }
   document.getElementById('cfStudy').disabled = false;
+  // 지워진 카드가 고른 목록에 남아 있지 않게
+  const live = new Set(cfSaved.map((c) => c.id));
+  [...cfSel].forEach((id) => { if (!live.has(id)) cfSel.delete(id); });
+  const picking = cfSel.size > 0;
+  list.classList.toggle('picking', picking);
+
   cfSaved.forEach((c) => {
     const row = document.createElement('div');
-    row.className = 'cf-row';
+    row.className = `cf-row${cfSel.has(c.id) ? ' picked' : ''}`;
     const main = document.createElement('div');
     main.className = 'cf-row-main';
     const top = document.createElement('div');
@@ -4359,14 +4384,16 @@ function renderCfList() {
     top.textContent = c.topic || c.heading || '';
     const q = document.createElement('div');
     q.className = 'cf-row-q';
-    q.innerHTML = c.contextHtml || '';
+    q.innerHTML = tidyCardHtml(c.contextHtml || '');
     paintCloze(q, false);
     main.append(top, q);
-    // 눌러서 답을 들춰본다 — 지우기 전에 뭔지 확인해야 한다
+    // 고르는 중이면 누르는 건 **고르기**, 아니면 답 들추기
     main.onclick = () => {
+      if (cfSel.size) { toggleCfPick(c.id); return; }
       const on = q.classList.toggle('shown');
       paintCloze(q, on);
     };
+    longPress(main, () => toggleCfPick(c.id));
     const del = document.createElement('button');
     del.className = 'cf-del';
     del.textContent = '✕';
@@ -4380,14 +4407,66 @@ function renderCfList() {
   });
 }
 
+function toggleCfPick(id) {
+  if (cfSel.has(id)) cfSel.delete(id); else cfSel.add(id);
+  renderCardFloat();
+}
+
+/**
+ * 오래 누르면 고르기 (2026-10-15 요청: "오래 누르기 하면 선택되면서 한번에 지우고").
+ *
+ * 손가락·펜은 꾹 눌러야 시작한다 — 바로 켜면 목록을 넘길 수가 없다. 그래서 움직이면
+ * (스크롤하려는 것이므로) 포기한다. 마우스는 오른쪽 단추로도 켤 수 있게 둔다.
+ * 켜진 뒤에는 그냥 눌러도 골라진다(위 main.onclick) — 여러 장을 집을 때 편하다.
+ */
+const LONG_MS = 420;
+const LONG_SLOP = 10;
+function longPress(el, fn) {
+  let timer = null;
+  let at = null;
+  const stop = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button > 0) return;
+    at = { x: e.clientX, y: e.clientY };
+    stop();
+    timer = setTimeout(() => {
+      timer = null;
+      el.dataset.longfired = '1';       // 뒤따라오는 click을 삼킨다
+      fn();
+    }, LONG_MS);
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (at && Math.hypot(e.clientX - at.x, e.clientY - at.y) > LONG_SLOP) stop();
+  });
+  for (const t of ['pointerup', 'pointercancel', 'pointerleave']) el.addEventListener(t, stop);
+  el.addEventListener('click', (e) => {
+    if (el.dataset.longfired) { delete el.dataset.longfired; e.stopPropagation(); e.preventDefault(); }
+  }, true);
+  el.addEventListener('contextmenu', (e) => { e.preventDefault(); fn(); });
+}
+
 function initCardFloat() {
   cardFloat = makeFloat({
     panel: 'cardFloat', head: 'cfHead', grip: 'cfResize', key: 'card_float_box',
     def: { w: Math.min(560, innerWidth * 0.92), h: Math.min(470, innerHeight * 0.6) },
   });
   document.getElementById('cfClose').onclick = closeCardFloat;
-  document.getElementById('cfTabNew').onclick = () => { cfTab = 'new'; renderCardFloat(); };
+  document.getElementById('cfTabNew').onclick = () => { cfTab = 'new'; cfSel.clear(); renderCardFloat(); };
   document.getElementById('cfTabAll').onclick = () => { cfTab = 'all'; refreshCardFloat(); };
+
+  // 오래 눌러 고른 카드들 — 한 번에 지운다(되돌리기도 한 번에)
+  document.getElementById('cfSelAll').onclick = () => {
+    if (cfSel.size === cfSaved.length) cfSel.clear();
+    else cfSaved.forEach((c) => cfSel.add(c.id));
+    renderCardFloat();
+  };
+  document.getElementById('cfSelNone').onclick = () => { cfSel.clear(); renderCardFloat(); };
+  document.getElementById('cfSelDel').onclick = async () => {
+    const gone = cfSaved.filter((c) => cfSel.has(c.id));
+    if (!gone.length) return;
+    cfSel.clear();
+    await deleteCardsUndoable(gone, refreshCardFloat);
+  };
 
   document.getElementById('cfPrev').onclick = () => {
     if (cfDeck && cfDeck.idx > 0) { cfDeck.idx--; cfDeck.shown = false; renderCfNew(); }
@@ -5250,7 +5329,8 @@ function renderCard() {
     [cardDeck.noteTitle || cardDeck.title, c.topic || c.heading].filter(Boolean).join('  ·  ');
 
   const ctx = document.getElementById('cardContext');
-  if (c.contextHtml) ctx.innerHTML = c.contextHtml;    // 표·서식을 그대로 살린다
+  // 그려줄 때마다 정돈한다 — **이미 만들어둔 카드의 틀어진 띄어쓰기도 여기서 낫는다**
+  if (c.contextHtml) ctx.innerHTML = tidyCardHtml(c.contextHtml);   // 표·서식은 그대로 살린다
   else ctx.textContent = c.context || '';
   // 노트에서 가져온 Q&A는 빈칸이 아니라 문장형 질문이라 왼쪽 정렬이 읽기 쉽다
   ctx.classList.toggle('qa-q', c.kind === 'qa');
@@ -5283,11 +5363,9 @@ function renderCard() {
 
 document.getElementById('cardShow').onclick = () => {
   document.getElementById('cardAnswer').classList.remove('hidden');
-  // 빈칸 자리에 답을 채워 넣는다 — 목록만 따로 보면 어느 칸인지 헷갈린다
-  document.querySelectorAll('#cardContext .cloze').forEach((el) => {
-    el.textContent = el.dataset.answer || '';
-    el.classList.add('filled');
-  });
+  // 빈칸 자리에 답을 드러낸다 — 목록만 따로 보면 어느 칸인지 헷갈린다.
+  // 글자를 넣는 게 아니라 숨겨둔 걸 보이게만 한다 — 그래야 글이 안 밀린다.
+  paintCloze(document.getElementById('cardContext'), true);
   document.getElementById('cardPre').classList.add('hidden');
   document.getElementById('cardGrade').classList.remove('hidden');
 };
@@ -6053,7 +6131,7 @@ function deckCard(c, srs, idx = 0) {
 
   const q = document.createElement('div');
   q.className = 'deck-q';
-  q.innerHTML = c.contextHtml || '';
+  q.innerHTML = tidyCardHtml(c.contextHtml || '');
   q.querySelectorAll('.cloze').forEach((el) => { el.textContent = '____'; });
 
   const a = document.createElement('div');
@@ -6642,7 +6720,7 @@ function buildMarkdown(res) {
     lines.push('');
   }
 
-  const path = `${LOG_DIR}/${vaultName(subject, dateStr, topic, '모의고사풀이')}`;
+  const path = `${LOG_DIR}/${vaultName(subject, `${dateStr}_${hh}${mi}`, topic, '모의고사풀이')}`;
   return { path, content: lines.join('\n'), message: `iPad 모의고사 풀이: ${topic} ${res.correct}/${res.total}` };
 }
 
@@ -7173,7 +7251,7 @@ function buildClozeCards(split) {
       // 맥락도 같이 — 무슨 이야기인지 모르면 맞힐 수가 없다
       trail: czCtx.trail || [],
       topic: [czCtx.heading, ...(czCtx.trail || [])].filter(Boolean).join('  ›  '),
-      contextHtml: html,
+      contextHtml: tidyCardHtml(html),
       answers,
       starred: false,
       kind: 'block',
@@ -7264,14 +7342,8 @@ function placeOneBlank(root, want) {
   return true;
 }
 
-/** 카드 본문에 들어갈 빈칸 — 읽기 화면의 것과 같은 모양이어야 한다. */
-function blankSpan(answer) {
-  const b = document.createElement('span');
-  b.className = 'cloze';
-  b.dataset.answer = answer;
-  b.textContent = ' '.repeat(Math.min(14, Math.max(4, answer.length)));
-  return b;
-}
+/** 카드 본문에 들어갈 빈칸 — 읽기 화면의 것과 **같은 함수**를 쓴다(모양이 어긋나지 않게). */
+const blankSpan = blankNode;
 let clozeFloat = null;
 
 // ═══════════ 번호로 가기 ═══════════
