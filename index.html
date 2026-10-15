@@ -85,9 +85,22 @@
     </div>
 
     <div class="card">
+      <h2>검색 범위</h2>
+      <p class="muted">
+        vault의 <b>글 전체</b>(노트·족보·퀴즈 — 약 20MB)를 한 번 받아두면 열어본 적 없는
+        자료도 찾힙니다. 그다음부터는 <b>바뀐 것만</b> 받으므로 금방 끝납니다.
+      </p>
+      <div class="cache-row" style="margin-top:12px">
+        <div class="cr-name">전체 글 받아두기<div class="cr-meta" id="indexInfo">확인 중…</div></div>
+        <button id="indexBtn">받기</button>
+      </div>
+      <p class="muted" id="indexProgress" style="margin-top:10px"></p>
+    </div>
+
+    <div class="card">
       <h2>오프라인 저장</h2>
       <p class="muted">
-        과목을 저장해두면 네트워크 없이도 풀 수 있고, 검색 범위에도 들어옵니다.
+        과목을 저장해두면 네트워크 없이도 풀 수 있습니다 — 모의고사 html까지 같이 받습니다.
         (한 번 열어본 자료는 자동으로 저장됩니다.)
       </p>
       <div id="cacheList" style="margin-top:12px"></div>
@@ -756,6 +769,25 @@
     <button class="btn primary" id="czAdd">＋ 카드 추가</button>
   </div>
   <div class="af-resize" id="czResize" title="끌어서 크기 조절"></div>
+</div>
+
+<!-- 살짝 들러보기 — 찾기 결과를 **열지 않고** 그 자리에서 읽는다(2026-10-15 요청).
+     옵시디언의 [Cmd ,] preview 자리. 읽다 말고 딴 문서로 떠내려가지 않게. -->
+<div id="peekFloat" class="ask-float hidden">
+  <div class="af-head" id="pkHead">
+    <span class="af-grip" aria-hidden="true"></span>
+    <b class="af-title" id="pkTitle">들러보기</b>
+    <span class="af-status" id="pkWhere"></span>
+    <button class="icon-btn" id="pkClose" title="닫기 (Esc)">✕</button>
+  </div>
+  <div class="af-body peek-body" id="pkBody"></div>
+  <div class="af-foot">
+    <button class="btn" id="pkPrev">‹ 앞</button>
+    <button class="btn" id="pkNext">뒤 ›</button>
+    <button class="btn" id="pkSplit">⫽ 옆에 띄우기</button>
+    <button class="btn primary" id="pkOpen">여기서 열기</button>
+  </div>
+  <div class="af-resize" id="pkResize" title="끌어서 크기 조절"></div>
 </div>
 
 <div id="cardFloat" class="ask-float hidden">

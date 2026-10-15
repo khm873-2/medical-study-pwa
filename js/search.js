@@ -1,10 +1,21 @@
 // 검색 · 오프라인 저장.
 //
-// 검색 전략: vault 전체(1,800여 md)를 다 받아오는 건 비현실적이라, **이미 기기에 캐시된 것**
-// 안에서만 찾는다. 모의고사는 한 번 열면 캐시되므로 사실상 "내가 본 것 전부"가 대상이 된다.
-// 과목을 오프라인 저장해두면 그 과목은 통째로 검색 범위에 들어온다.
+// ── 검색 범위에 대하여 (2026-10-15 재검토) ──
+// 원래는 "이미 기기에 캐시된 것"만 뒤졌다. 근거는 "vault 전체(1,800여 md)를 받는 건
+// 비현실적"이었는데, **재어 보니 틀린 전제였다**:
+//
+//   02_Wiki 172개 6.5MB · 01_임종평_전범위 195개 5.2MB · 기출문제_학교 74개 4.1MB
+//   05_퀴즈 79개 1.6MB · 98_예습노트_보관 52개 1.0MB · 06_모의고사 54개 0.7MB
+//   → 합쳐서 md 673개 · 약 20MB
+//
+// 1.5GB는 첨부(이미지·PDF) 이야기였고, **글만 보면 20MB**다. 아이패드 IndexedDB에
+// 충분히 들어간다. 그래서 글은 통째로 받아두고 **전부 검색**한다(buildIndex).
+// 한 번 받아두면 그다음부터는 git tree의 sha를 견줘 **바뀐 것만** 받는다 — 요청 한 번
+// + 달라진 파일 몇 개면 끝난다.
+//
+// 열어본 것만 뒤지던 옛 방식도 그대로 남는다 — 색인을 아직 안 받았어도 본 건 찾힌다.
 
-import { listDir, getText } from './github.js';
+import { listDir, getText, listTree } from './github.js';
 import { cacheGet, cacheSet, kvGet, kvSet } from './db.js';
 import { parseExamHtml, prettyExamName } from './parser.js';
 import { resolveNotePath } from './wiki.js';
@@ -50,6 +61,88 @@ export async function cacheSubject(subject, onProgress = () => {}) {
     onProgress(done, files.length + notes.size, n);
   }
   return done;
+}
+
+// ── vault 전체 글 색인 ──
+// 글이 든 폴더만 받는다. 첨부(attachments/)와 앱 전용 폴더(.medstudy)는 뺀다.
+export const INDEX_ROOTS = [
+  '02_Wiki', '01_임종평_전범위', '98_예습노트_보관',
+  '03_오답중심노트', '04_요약노트', '00_Raw_Text',
+  '05_퀴즈', '06_모의고사',
+];
+const TREE_KEY = 'vault_tree';        // {경로: sha} — 지난번에 받아둔 것
+const INDEX_AT = 'vault_tree_at';     // 마지막으로 맞춰본 시각
+const BIG = 600 * 1024;               // 이보다 큰 글은 건너뛴다(검색에 쓸모없는 덩치)
+
+/** 색인 대상인가 — 글이 든 폴더의 .md 만. */
+export function indexable(path) {
+  if (!path.endsWith('.md')) return false;
+  if (path.startsWith('.')) return false;
+  return INDEX_ROOTS.some((r) => path === r || path.startsWith(`${r}/`));
+}
+
+/** 색인 상태 — 화면에 "몇 개 받아뒀는지" 보여주려고. */
+export async function indexInfo() {
+  const tree = (await kvGet(TREE_KEY)) || null;
+  return {
+    files: tree ? Object.keys(tree).length : 0,
+    at: (await kvGet(INDEX_AT)) || 0,
+    built: !!tree,
+  };
+}
+
+/**
+ * vault의 글을 통째로 받아 검색 범위에 넣는다.
+ *
+ * 처음에는 전부 받고, 그다음부터는 **sha가 달라진 것만** 받는다. 받은 글은 평소 쓰는
+ * 캐시(cacheGet/cacheSet)에 그대로 들어가므로 search()는 손댈 게 없다 — 범위가 저절로 넓어진다.
+ *
+ * @param {Function} onProgress (done, total, label)
+ * @returns {Promise<{total:number, fetched:number, removed:number, truncated:boolean}>}
+ */
+export async function buildIndex(onProgress = () => {}, { signal } = {}) {
+  const tree = await listTree();
+  const want = tree.filter((e) => indexable(e.path) && e.size <= BIG);
+  const was = (await kvGet(TREE_KEY)) || {};
+  const now = {};
+  want.forEach((e) => { now[e.path] = e.sha; });
+
+  // 지워진 파일은 검색 범위에서도 뺀다
+  const gone = Object.keys(was).filter((p) => !(p in now));
+  let paths = await cachedPaths();
+  if (gone.length) {
+    const drop = new Set(gone);
+    paths = paths.filter((p) => !drop.has(p));
+  }
+
+  const todo = want.filter((e) => was[e.path] !== e.sha || !paths.includes(e.path));
+  const have = new Set(paths);
+  let done = 0;
+  let fetched = 0;
+  // 한 번에 여섯 개씩 — 너무 많이 띄우면 사파리가 요청을 줄 세운다
+  const LANES = 6;
+  const queue = todo.slice();
+  const worker = async () => {
+    for (;;) {
+      if (signal && signal.aborted) return;
+      const e = queue.shift();
+      if (!e) return;
+      try {
+        const text = await getText(e.path, { useCache: false });
+        await cacheSet(e.path, text);
+        have.add(e.path);
+        fetched++;
+      } catch { /* 한 파일이 막혀도 나머지는 받는다 */ }
+      done++;
+      onProgress(done, todo.length, e.path.split('/').pop());
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(LANES, queue.length || 1) }, worker));
+
+  await kvSet('cached_paths', [...have]);
+  await kvSet(TREE_KEY, now);
+  await kvSet(INDEX_AT, Date.now());
+  return { total: want.length, fetched, removed: gone.length, truncated: !!tree.truncated };
 }
 
 /**

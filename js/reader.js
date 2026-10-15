@@ -1051,9 +1051,24 @@ export function tidyCardHtml(html) {
     el.textContent = '';
     el.appendChild(t);
   });
-  // ③ 조각 경계에서 끼어든 공백을 턴다
+  // ③ 두 칸 넘게 벌어진 자리는 한 칸으로 — 조각을 ' '로 이어 붙이던 시절의 카드에는
+  //    같은 자리에 공백이 겹쳐 들어가 있다. 글자는 안 건드리고 칸만 줄인다.
+  squeezeSpaces(box);
+  // ④ 조각 경계에서 끼어든 공백을 턴다
   glueSpaces(box);
   return box.innerHTML;
+}
+
+/** 두 칸 이상 이어진 공백을 한 칸으로. 빈칸(답) 안은 건드리지 않는다. */
+function squeezeSpaces(root) {
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement && n.parentElement.closest('.cloze'))
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const hit = [];
+  let n;
+  while ((n = walk.nextNode())) if (/[ \t]{2,}/.test(n.nodeValue)) hit.push(n);
+  hit.forEach((x) => { x.nodeValue = x.nodeValue.replace(/[ \t]{2,}/g, ' '); });
 }
 
 /**

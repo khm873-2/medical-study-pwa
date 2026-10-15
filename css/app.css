@@ -1020,6 +1020,16 @@ body.boxing .resize-grip { pointer-events: none; }
 .card-context th { background: var(--badge-bg); font-weight: 700; }
 .card-context .card-row-focus > * { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
+/* 카드 본문은 **왼쪽 정렬·보통 자간**으로 못박는다 (2026-10-15 지적:
+   "기준       으로        합니다. 이렇게 칸이 넓어야 할 이유가 있나?").
+   본문은 읽기 화면 DOM을 복제해 오는 것이라 어디선가 양끝맞춤·자간이 묻어 들어오면
+   낱말 사이가 제멋대로 벌어진다. 카드에서는 그럴 이유가 없으므로 여기서 끊는다. */
+.card-context, .cf-q, .cf-row-q, .deck-q, .peek-body,
+.card-context *, .cf-q *, .cf-row-q *, .deck-q *, .peek-body * {
+  text-align: left; text-align-last: auto; word-spacing: normal; letter-spacing: normal;
+}
+.card-context table, .cf-q table, .cf-row-q table, .deck-q table { text-align: left; }
+
 /* 빈칸 — 글자 수만큼 넓어서 길이가 힌트가 된다 */
 .cloze {
   display: inline-block; min-width: 3em;
@@ -1899,6 +1909,25 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
   .icon-btn { min-width: 36px; min-height: 36px; padding: 6px; }
   .quiz-head .tool { min-width: 34px; min-height: 34px; padding: 5px 6px; }
 }
+
+/* ── 살짝 들러보기 창 (2026-10-15) ── 찾기 결과를 열지 않고 그 자리에서 읽는다 */
+.peek-body {
+  font-size: calc(15px * var(--ui-scale)); line-height: var(--read-line);
+  word-break: keep-all; overflow-wrap: anywhere;
+}
+.peek-body > :first-child { margin-top: 0; }
+.peek-body p { margin: 8px 0; }
+.peek-body table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.peek-body th, .peek-body td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; }
+.peek-body th { background: var(--badge-bg); }
+.peek-body img { max-width: 100%; height: auto; }
+/* 걸린 말 — 들어오자마자 눈에 띄어야 한다 */
+mark.peek-hit {
+  background: color-mix(in srgb, var(--accent) 34%, transparent);
+  border-radius: 3px; padding: 0 2px; color: inherit;
+}
+#peekFloat .af-foot .btn { flex: 0 1 auto; }
+#peekFloat .af-foot .btn:disabled { opacity: .35; }
 
 /* ── 만든 카드 미리보기 창 ── (.ask-float의 틀을 그대로 쓴다) */
 .cf-body { display: flex; flex-direction: column; gap: 12px; justify-content: center; }

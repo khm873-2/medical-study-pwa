@@ -4403,7 +4403,40 @@ await run('빈칸 카드', async () => {
   out.push({ name: '"한 장에 모두"는 한 장에 둘 다', ok: one.length === 1 && one[0].answers.length === 2,
     detail: one.map((c) => c.answers.join('+')).join('') });
 
-  // ── ③ 여러 조각에 걸친 답도 블록 서식 안에서 찾는다 ──
+  // ── ③ 이미 만들어둔 카드의 벌어진 칸도 그려줄 때 낫는다 ──
+  // "기준       으로        합니다. 이렇게 칸이 넓어야 할 이유가 있나?" (2026-10-15)
+  const stale = '<li><span class="tok">"</span> <span class="tok">제일</span>   <span class="tok">중요한</span>'
+    + '  <span class="tok">것</span> <span class="tok">은</span>'
+    + ' <span class="cloze" data-answer="4시간에">     </span>  <span class="cloze" data-answer="200을">    </span>'
+    + '   <span class="tok">기준</span>    <span class="tok">으로</span>     <span class="tok">합니다.</span></li>';
+  const tidied = rd.tidyCardHtml(stale);
+  const seen = document.createElement('div');
+  seen.innerHTML = tidied;
+  seen.querySelectorAll('.cloze').forEach((c) => { c.textContent = `[${c.dataset.answer}]`; });
+  out.push({ name: '**두 칸 넘게 벌어진 자리가 한 칸으로 좁혀진다**',
+    ok: !/ {2}/.test(seen.textContent), detail: seen.textContent });
+  out.push({ name: '좁히면서 조사·따옴표도 제자리로',
+    ok: seen.textContent === '"제일 중요한 것은 [4시간에] [200을] 기준으로 합니다.',
+    detail: seen.textContent });
+  out.push({ name: '빈칸 두 개는 그대로 둘', ok: seen.querySelectorAll('.cloze').length === 2 });
+  // 카드 본문은 양끝맞춤·자간이 묻어 들어오지 않게 못박혀 있다
+  // 바깥에서 물려받는 양끝맞춤·자간을 막는지 본다(카드는 읽기 화면 DOM을 복제해 온다)
+  const host = document.createElement('div');
+  host.style.cssText = 'text-align:justify;word-spacing:9px;letter-spacing:3px';
+  const probe = document.createElement('div');
+  probe.className = 'cf-row-q';
+  probe.innerHTML = '<p>가 나 다</p>';
+  host.appendChild(probe);
+  document.body.appendChild(host);
+  const cs = getComputedStyle(probe.querySelector('p'));
+  out.push({ name: '카드 본문은 왼쪽 정렬로 못박혀 있다', ok: cs.textAlign === 'left', detail: cs.textAlign });
+  out.push({ name: '자간도 보통으로 못박혀 있다', ok: cs.wordSpacing === 'normal' || cs.wordSpacing === '0px',
+    detail: cs.wordSpacing });
+  out.push({ name: '글자 사이 간격도 물려받지 않는다', ok: cs.letterSpacing === 'normal',
+    detail: cs.letterSpacing });
+  host.remove();
+
+  // ── ④ 여러 조각에 걸친 답도 블록 서식 안에서 찾는다 ──
   // "제일 중요한"은 .tok 두 개에 걸쳐 있다 — 예전엔 못 찾아 맨 글자 본문으로 떨어졌다
   const clone = block.cloneNode(true);
   const spanned = api.placeBlanksIn(clone, ['제일 중요한']);
@@ -4413,6 +4446,79 @@ await run('빈칸 카드', async () => {
     detail: show(clone.outerHTML).slice(0, 50) });
 
   holder.remove();
+  return out;
+});
+
+// ══════════ 찾기에서 살짝 들러보기 (2026-10-15 요청) ══════════
+// "노트 읽다가 다른 내용 잠깐 찾아보고 싶을 때가 꽤 많은데 지금 찾기에서는 아주 불편함."
+await run('들러보기', async () => {
+  const out = [];
+  const f = document.getElementById('peekFloat');
+  out.push({ name: '들러보기 창이 있다', ok: !!f });
+  if (!f) return out;
+  out.push({ name: '열기·옆에 띄우기·앞뒤 넘기기가 다 있다',
+    ok: ['pkOpen', 'pkSplit', 'pkPrev', 'pkNext', 'pkClose'].every((id) => !!document.getElementById(id)),
+    detail: ['pkOpen', 'pkSplit', 'pkPrev', 'pkNext', 'pkClose']
+      .filter((id) => !document.getElementById(id)).join(',') || '전부 있음' });
+
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '**찾기 결과를 길게 누르면 들러본다**',
+    ok: /longPress\(b, \(\) => openPeek\(h\)\)/.test(app) });
+  out.push({ name: '그냥 누르면 전처럼 바로 연다(빠른 길이 남아 있다)',
+    ok: /b\.onclick = \(\) => \{\s*\n\s*closeSearch\(\);/.test(app) });
+  out.push({ name: 'Esc로 닫힌다', ok: /\['peekFloat', closePeek\]/.test(app) });
+  out.push({ name: '옆에 띄우기가 실제 split을 쓴다',
+    ok: /splitPane\(note\)/.test(app) && /openInPane\(note, \{ pane: 1/.test(app) });
+
+  // 실제로 띄워본다 — 걸린 말이 칠해지고 그 자리로 굴러가야 한다
+  f.classList.remove('hidden');
+  f.style.cssText = '--af-w:600px;--af-h:420px;--af-x:40px;--af-y:40px';
+  const body = document.getElementById('pkBody');
+  body.innerHTML = '<p>' + '앞말 '.repeat(200) + '<b>doxycycline</b> 뒷말</p>';
+  const markFirst = new Function('root', 'needle', `
+    ${(app.match(/function markFirst\(root, needle\) \{[\s\S]*?\n}\n/) || [''])[0]}
+    return markFirst(root, needle);`);
+  const m = markFirst(body, 'doxycycline');
+  out.push({ name: '**걸린 말이 노랗게 칠해진다**', ok: !!m && m.className === 'peek-hit',
+    detail: m ? m.textContent : '못 칠함' });
+  if (m) {
+    const bg = getComputedStyle(m).backgroundColor;
+    out.push({ name: '칠한 자리가 눈에 띈다', ok: bg !== 'rgba(0, 0, 0, 0)', detail: bg });
+  }
+  out.push({ name: '본문이 제 스크롤 상자다(창 안에서만 움직인다)',
+    ok: getComputedStyle(body).overflowY === 'auto', detail: getComputedStyle(body).overflowY });
+  f.classList.add('hidden');
+  return out;
+});
+
+// ══════════ 찾기 범위 — 열어본 것만이 아니라 전부 (2026-10-15) ══════════
+// "지금껏 꼭 열어본 페이지만 검색이 되는 이유는 뭐지. 그게 더 좋은가?"
+await run('찾기 범위', async () => {
+  const out = [];
+  const S = await import('/js/search.js');
+  out.push({ name: 'vault 글 전체를 받는 길이 있다', ok: typeof S.buildIndex === 'function' });
+  out.push({ name: '받아둔 상태를 알려준다', ok: typeof S.indexInfo === 'function' });
+  out.push({ name: '글이 든 폴더만 받는다(첨부는 뺀다)',
+    ok: S.indexable('02_Wiki/응급_중환자/가.md')
+      && S.indexable('00_Raw_Text/기출문제_학교/응급_중환자/10_환경의학.md')
+      && S.indexable('05_퀴즈/응급_중환자/가.md')
+      && !S.indexable('attachments/그림.png')
+      && !S.indexable('attachments/메모.md')
+      && !S.indexable('.medstudy/state.json')
+      && !S.indexable('02_Wiki/응급_중환자/가.html') });
+  const info = await S.indexInfo();
+  out.push({ name: '아직 안 받았으면 그렇다고 한다', ok: typeof info.built === 'boolean',
+    detail: `${info.built ? `글 ${info.files}개` : '아직'}` });
+
+  const app = await fetch('/js/app.js').then((r) => r.text());
+  out.push({ name: '설정에 "전체 글 받아두기"가 있다', ok: !!document.getElementById('indexBtn') });
+  out.push({ name: '**결과가 없을 때 그 자리에서 받을 수 있다**',
+    ok: /vault 글 전체 받아두기/.test(app) });
+  out.push({ name: '받아둔 뒤에는 바뀐 것만 조용히 맞춘다',
+    ok: /runIndex\(\{ quiet: true \}\)/.test(app) && /git\/trees/.test(
+      await fetch('/js/github.js').then((r) => r.text())) });
+  out.push({ name: '"열어본 것만 검색된다"는 옛 안내가 남아 있지 않다',
+    ok: !/한 번도 열어보지 않은 자료는 검색되지 않습니다/.test(app) });
   return out;
 });
 

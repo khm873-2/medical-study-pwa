@@ -36,6 +36,30 @@ export async function listDir(path) {
 }
 
 /**
+ * vault 전체 파일 목록을 **요청 한 번**에 받는다.
+ *
+ * 폴더를 하나씩 훑으면(listDir) 과목 수만큼 요청이 나간다. 검색용 색인처럼 전부를
+ * 봐야 할 때는 git tree 한 방이 훨씬 싸다 — 경로와 함께 **blob sha**가 같이 오므로
+ * "지난번과 달라진 파일"만 골라 받을 수 있다(2026-10-15 전체 검색).
+ *
+ * @returns {Promise<Array<{path:string, sha:string, size:number}>>}
+ */
+export async function listTree(ref = 'HEAD') {
+  const repo = await getRepo();
+  const res = await fetch(`${API}/repos/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`, {
+    headers: await headers({ Accept: 'application/vnd.github+json' }),
+  });
+  if (!res.ok) throw new Error(`목록 조회 실패 (${res.status})`);
+  const json = await res.json();
+  if (!Array.isArray(json.tree)) throw new Error('파일 목록을 읽지 못했습니다.');
+  // truncated면 git이 목록을 잘랐다는 뜻 — 받은 만큼이라도 쓰되 부른 쪽에 알린다
+  const out = json.tree.filter((e) => e.type === 'blob')
+    .map((e) => ({ path: e.path, sha: e.sha, size: e.size || 0 }));
+  out.truncated = !!json.truncated;
+  return out;
+}
+
+/**
  * 텍스트 파일 읽기. raw 미디어 타입을 쓰면 base64 디코딩이 필요 없고 1MB 제한도 없다.
  * useCache=true면 IndexedDB 캐시를 먼저 보고, 실패(오프라인) 시에도 캐시로 폴백한다.
  */

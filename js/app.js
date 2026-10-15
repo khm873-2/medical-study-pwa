@@ -22,7 +22,7 @@ import {
   splitAnswer,
   splitWord, wordScore, blockContext, blankNode, tidyCardHtml,
 } from './reader.js';
-import { search, cacheSubject, storageInfo, matcher, findAll } from './search.js';
+import { search, cacheSubject, storageInfo, matcher, findAll, buildIndex, indexInfo } from './search.js';
 import { JOKBO_ROOT, parseJokbo, chapterTitle } from './jokbo.js';
 import { nameSimilarity } from './wiki.js';
 import {
@@ -191,6 +191,7 @@ async function openSetup() {
     if (el) el.textContent = `앱 버전 ${version}${built ? ` · ${built} 배포` : ''}`;
   });
   document.getElementById('backupMsg').textContent = '';
+  paintIndexInfo();
   if (await hasToken()) renderCacheList();
   show('setupScreen');
 }
@@ -208,6 +209,60 @@ async function updateStorageInfo() {
     el.textContent = '확인할 수 없음';
   }
 }
+
+// ── vault 글 전체 색인 (2026-10-15) ──
+// "지금껏 꼭 열어본 페이지만 검색이 되는 이유는 뭐지. 그게 더 좋은가?"
+// 더 좋지 않았다 — 자세한 사정은 search.js 머리말에 적었다(글만 보면 20MB다).
+let indexing = false;
+
+function sinceLabel(ms) {
+  if (!ms) return '아직 안 받음';
+  const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 1) return '방금';
+  if (m < 60) return `${m}분 전`;
+  const h = Math.round(m / 60);
+  return h < 24 ? `${h}시간 전` : `${Math.round(h / 24)}일 전`;
+}
+
+async function paintIndexInfo() {
+  const el = document.getElementById('indexInfo');
+  const btn = document.getElementById('indexBtn');
+  if (!el) return;
+  const info = await indexInfo();
+  el.textContent = info.built ? `글 ${info.files}개 · ${sinceLabel(info.at)}` : '아직 안 받음';
+  if (btn && !indexing) btn.textContent = info.built ? '새로 고침' : '받기';
+}
+
+/** 색인을 맞춘다. 처음이면 전부, 그다음부터는 바뀐 것만. */
+async function runIndex({ quiet = false } = {}) {
+  if (indexing) return null;
+  indexing = true;
+  const prog = document.getElementById('indexProgress');
+  const btn = document.getElementById('indexBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '받는 중…'; }
+  try {
+    const r = await buildIndex((done, total, label) => {
+      if (prog && !quiet) prog.textContent = `${done}/${total} — ${label}`;
+    });
+    if (prog && !quiet) {
+      prog.textContent = r.fetched
+        ? `${r.fetched}개를 새로 받았습니다 (글 ${r.total}개가 검색 범위에 있습니다).`
+        : `이미 최신입니다 — 글 ${r.total}개가 검색 범위에 있습니다.`;
+    }
+    if (r.truncated && prog) prog.textContent += ' ⚠️ 목록이 너무 길어 일부만 받았습니다.';
+    updateStorageInfo();
+    return r;
+  } catch (e) {
+    if (prog && !quiet) prog.textContent = `받지 못했습니다: ${e.message}`;
+    return null;
+  } finally {
+    indexing = false;
+    if (btn) btn.disabled = false;
+    paintIndexInfo();
+  }
+}
+
+document.getElementById('indexBtn')?.addEventListener('click', () => runIndex());
 
 /** 설정 화면의 과목별 오프라인 저장 목록 */
 async function renderCacheList() {
@@ -6372,9 +6427,24 @@ async function runSearch(q) {
   const hits = await search(q, 60, { ...searchOpt, dir: searchScope === 'dir' ? currentDir() : null });
   box.innerHTML = '';
   if (!hits.length) {
-    msg.textContent = searchOpt.regex && !matcher(q, searchOpt)
-      ? '정규식이 올바르지 않습니다.'
-      : '결과가 없습니다. (한 번도 열어보지 않은 자료는 검색되지 않습니다 — 설정에서 과목을 오프라인 저장하면 전체가 검색됩니다.)';
+    if (searchOpt.regex && !matcher(q, searchOpt)) { msg.textContent = '정규식이 올바르지 않습니다.'; return; }
+    const info = await indexInfo();
+    if (info.built) { msg.textContent = `결과가 없습니다. (글 ${info.files}개를 뒤졌습니다)`; return; }
+    // 아직 전체를 안 받았으면 **여기서 바로** 받게 한다 — 설정까지 찾아가게 하지 않는다
+    msg.textContent = '결과가 없습니다 — 아직 열어본 자료만 찾고 있습니다.';
+    const b = document.createElement('button');
+    b.className = 'btn primary';
+    b.style.marginTop = '10px';
+    b.textContent = '📚 vault 글 전체 받아두기 (한 번만)';
+    b.onclick = async () => {
+      b.disabled = true;
+      b.textContent = '받는 중… 잠시만';
+      const r = await runIndex({ quiet: true });
+      b.remove();
+      if (r) { msg.textContent = `글 ${r.total}개를 받았습니다 — 다시 찾습니다.`; runSearch(q); }
+      else msg.textContent = '받지 못했습니다 — 연결을 확인해 주세요.';
+    };
+    box.appendChild(b);
     return;
   }
   msg.textContent = `${hits.length}건`;
@@ -6397,8 +6467,150 @@ async function runSearch(q) {
       if (h.kind === 'note') openNote(h.path).then(() => { if (h.at != null) jumpToOffset(h.at); });
       else openExamAt(h.path, h.qnum);
     };
+    // 오래 누르면 **열지 않고 들러본다** — 읽던 자리를 잃지 않게(2026-10-15 요청)
+    if (h.kind === 'note') {
+      b.title = '길게 누르면 열지 않고 들러봅니다';
+      longPress(b, () => openPeek(h));
+    }
     box.appendChild(b);
   }
+}
+
+// ═══════════ 살짝 들러보기 (2026-10-15 요청) ═══════════
+//
+// "노트 읽다가 다른 내용 잠깐 찾아보고 싶을 때가 꽤 많은데 지금 찾기에서는 아주 불편함."
+// 맞다 — 지금은 결과를 누르면 **읽던 문서를 떠나** 그리로 간다. 잠깐 확인하려던 것이
+// 자리를 잃게 만든다. 옵시디언의 [Cmd ,] preview가 푸는 문제가 정확히 이것이다.
+//
+// 세 길을 한 창에 모았다. 결과를 **오래 누르면** 뜨고,
+//   · 그 자리에서 읽는다(걸린 곳이 노랗게 칠해져 있다)
+//   · ‹ 앞 / 뒤 › 로 앞뒤 장을 넘겨본다 — 맥락이 필요할 때가 많다
+//   · 마음에 들면 "여기서 열기" 또는 "⫽ 옆에 띄우기"
+// 그냥 누르면 전처럼 바로 연다 — 빠른 길을 잃지 않게.
+
+let peekFloat = null;
+let peekState = null;      // {note, secIdx, at, len}
+
+function initPeek() {
+  peekFloat = makeFloat({
+    panel: 'peekFloat', head: 'pkHead', grip: 'pkResize', key: 'peek_float_box',
+    def: { w: Math.min(620, innerWidth * 0.94), h: Math.min(520, innerHeight * 0.64) },
+  });
+  document.getElementById('pkClose').onclick = closePeek;
+  document.getElementById('pkPrev').onclick = () => movePeek(-1);
+  document.getElementById('pkNext').onclick = () => movePeek(1);
+  document.getElementById('pkOpen').onclick = () => {
+    if (!peekState) return;
+    const { note, secIdx } = peekState;
+    closePeek();
+    closeSearch();
+    openNote(note.path).then(() => {
+      if (reader && reader.note && reader.note.path === note.path && reader.secIdx !== secIdx) {
+        reader.secIdx = secIdx;
+        renderReader();
+      }
+    });
+  };
+  document.getElementById('pkSplit').onclick = async () => {
+    if (!peekState) return;
+    const { note, secIdx } = peekState;
+    closePeek();
+    closeSearch();
+    // 읽기 화면이 아직 아니면 먼저 세운다 — 옆칸만 띄울 수는 없다
+    if (document.body.dataset.screen !== 'readScreen' || !reader) { await openNote(note.path); return; }
+    if (paneCount() >= 2) openInPane(note, { pane: 1, secIdx });
+    else await splitPane(note);
+    const p2 = panes[1];
+    if (p2 && p2.tabs.length) {
+      const t = p2.tabs.find((x) => x.note.path === note.path);
+      if (t) t.secIdx = secIdx;
+    }
+    renderPanes();
+  };
+}
+
+function closePeek() {
+  document.getElementById('peekFloat').classList.add('hidden');
+  peekState = null;
+}
+
+/** 앞뒤 장을 넘겨본다 — 걸린 자리만 보면 무슨 이야기인지 모를 때가 있다. */
+function movePeek(d) {
+  if (!peekState) return;
+  const n = peekState.note;
+  const i = Math.max(0, Math.min(n.sections.length - 1, peekState.secIdx + d));
+  if (i === peekState.secIdx) return;
+  peekState.secIdx = i;
+  peekState.at = null;              // 다른 장이면 칠할 자리가 없다
+  paintPeek();
+}
+
+/**
+ * 찾기 결과 한 건을 창에 띄운다.
+ * @param {{path,title,at}} hit  search()가 준 것
+ */
+async function openPeek(hit) {
+  const body = document.getElementById('pkBody');
+  document.getElementById('peekFloat').classList.remove('hidden');
+  if (peekFloat) peekFloat.place();
+  document.getElementById('pkTitle').textContent = hit.title || '들러보기';
+  body.innerHTML = '<p class="muted">여는 중…</p>';
+  try {
+    const note = await loadNote(hit.path);
+    // 걸린 글자가 몇 번째 장에 있는지 — jumpToOffset과 같은 셈법
+    let secIdx = 0;
+    let within = hit.at || 0;
+    let seen = 0;
+    for (let i = 0; i < note.sections.length; i++) {
+      const len = note.sections[i].text.length + 1;
+      if ((hit.at || 0) < seen + len) { secIdx = i; within = (hit.at || 0) - seen; break; }
+      seen += len;
+    }
+    peekState = { note, secIdx, at: hit.at == null ? null : within, len: hit.len || 0,
+      needle: hit.snippet ? hit.snippet.match : '' };
+    paintPeek();
+  } catch (e) {
+    body.innerHTML = `<p class="muted">열지 못했습니다: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function paintPeek() {
+  if (!peekState) return;
+  const { note, secIdx } = peekState;
+  const sec = note.sections[secIdx] || { heading: '', text: '' };
+  document.getElementById('pkWhere').textContent =
+    `${secIdx + 1}/${note.sections.length}${sec.heading ? ` · ${sec.heading}` : ''}`;
+  const body = document.getElementById('pkBody');
+  renderSection(body, sec);
+  hydrateEmbeds(body, note.path);
+  document.getElementById('pkPrev').disabled = secIdx === 0;
+  document.getElementById('pkNext').disabled = secIdx >= note.sections.length - 1;
+  // 걸린 말을 칠하고 그리로 굴린다 — 긴 장에서는 어디가 걸렸는지 안 보인다
+  const needle = peekState.needle;
+  if (needle && needle.length >= 1) {
+    const mark = markFirst(body, needle);
+    if (mark) requestAnimationFrame(() => mark.scrollIntoView({ block: 'center' }));
+  } else body.scrollTop = 0;
+}
+
+/** 본문에서 그 말이 처음 나오는 자리를 노랗게 칠한다. 없으면 null. */
+function markFirst(root, needle) {
+  const want = String(needle).normalize('NFC');
+  if (!want.trim()) return null;
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let n;
+  while ((n = walk.nextNode())) {
+    const i = n.nodeValue.normalize('NFC').indexOf(want);
+    if (i < 0) continue;
+    const after = n.splitText(i);
+    after.splitText(want.length);
+    const m = document.createElement('mark');
+    m.className = 'peek-hit';
+    after.replaceWith(m);
+    m.textContent = want;
+    return m;
+  }
+  return null;
 }
 
 /**
@@ -7690,6 +7902,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     const layers = [
       ['searchSheet', closeSearch],
+      ['peekFloat', closePeek],
       ['jumpSheet', closeJump],
       ['keySheet', () => document.getElementById('keySheet').classList.add('hidden')],
       ['selPop', () => document.getElementById('selCancel').click()],
@@ -7937,6 +8150,7 @@ function hideSplash() {
   initResizers();
   initAskFloat();
   initCardFloat();
+  initPeek();
   initScrap();
   initDisplayUI();
   initDocDrop();
@@ -7949,6 +8163,15 @@ function hideSplash() {
     else openSetup();
   } finally {
     hideSplash();                        // 실패해도 스플래시에 갇히지 않게
+  }
+  // 전체 색인을 한 번 받아둔 사람이면 **조용히 맞춰둔다** — 요청 한 번(git tree)으로
+  // 달라진 파일만 가려내므로, 보통 아무것도 안 받고 끝난다. 오늘 올라온 노트가
+  // 검색에 안 걸리는 일을 없애려는 것이다(2026-10-15).
+  if (await hasToken()) {
+    const info = await indexInfo();
+    if (info.built && Date.now() - (info.at || 0) > 30 * 60 * 1000) {
+      setTimeout(() => runIndex({ quiet: true }), 2500);
+    }
   }
 })();
 
