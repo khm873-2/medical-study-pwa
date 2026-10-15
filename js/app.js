@@ -42,6 +42,40 @@ const EXAM_ROOTS = [
   { root: JOKBO_ROOT, kind: '족보', ext: '.md', only: ['응급_중환자'] },
 ];
 const LOG_DIR = '00_Raw_Text/AI대화로그';
+
+/**
+ * vault에 남길 파일 이름을 짓는다.
+ *
+ * 왜 길이를 재는가(2026-10-15): 강의 제목을 그대로 넣었더니
+ * `응급_중환자_26-10-14_응급_중환자_—_소아기본소생술(PBLS)_및_이물질_기도폐쇄_(차민수_교_모아두기.md`
+ * 같은 이름이 나왔고, **맥의 문서 동기화가 이런 긴 이름을 제멋대로 줄여버렸다** —
+ * 끝 네 글자가 ` 2`나 `ᄆ`로 바뀌어 `_모아두기`가 통째로 날아갔다. 내용은 멀쩡한데
+ * 이름만 뭉개져서 git이 "지워졌다"고 보고, 같은 날 올린 6개가 서로 이름이 겹칠 뻔했다.
+ *
+ * 그래서 **글자 수가 아니라 바이트로** 잰다(한글 한 글자가 3바이트다). 여유를 두고
+ * 90바이트에서 자른다 — 뒤에 `-2`, `-3`이 붙을 자리도 남겨야 한다.
+ *
+ * 제목이 과목으로 시작하면 그 부분은 뗀다. 파일 이름이 이미 과목으로 시작하므로
+ * 두 번 적을 이유가 없다(위 예에서 "응급_중환자"가 두 번 들어가 있었다).
+ */
+const NAME_BYTES = 90;
+function vaultName(subject, stamp, title, kind) {
+  const bytes = (s) => new TextEncoder().encode(s).length;
+  let slug = String(title || '메모').replace(/[\/\\:*?"<>|]+/g, '_').trim();
+  if (subject) {
+    // "응급_중환자 — 소아기본소생술…" / "응급중환자_소아기본소생술…" 둘 다 떼어낸다
+    const bare = subject.replace(/_/g, '');
+    slug = slug.replace(new RegExp(`^(${subject}|${bare})\\s*[—\\-_·]*\\s*`), '').trim() || slug;
+  }
+  slug = slug.replace(/\s+/g, '_');
+  const head = `${subject ? `${subject}_` : ''}${stamp}_`;
+  const tail = `_${kind}.md`;
+  let room = NAME_BYTES - bytes(head) - bytes(tail);
+  // 한 글자씩 떼어내며 줄인다 — 바이트 중간에서 자르면 글자가 깨진다
+  while (slug && bytes(slug) > room) slug = slug.slice(0, -1);
+  slug = slug.replace(/[_\-—·\s]+$/, '');   // 자르다 남은 이음표는 떼어낸다
+  return `${head}${slug || '메모'}${tail}`;
+}
 // 여러 시험에서 끌어모아 푸는 "다시 볼 문항"의 이어풀기 키 — 실제 파일 경로와 겹치지 않게 한다
 const WEAK_KEY = '__weak__';
 
@@ -3835,7 +3869,6 @@ async function saveScrap() {
   const yy = String(now.getFullYear()).slice(2);
   const stamp = `${yy}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}`;
   const uniq = `${stamp.replace(/-/g, '')}_${p2(now.getHours())}${p2(now.getMinutes())}${p2(now.getSeconds())}`;
-  const slug = (ctx.title || '메모').replace(/[\/\\:*?"<>|\s]+/g, '_').slice(0, 40);
 
   // ① 그림부터 — attachments/에 올리고 임베드 이름을 받는다
   const payloads = [];
@@ -3866,7 +3899,7 @@ async function saveScrap() {
   embeds.forEach((n) => lines.push(`![[${n}]]`, ''));
 
   payloads.push({
-    path: `${LOG_DIR}/${ctx.subject ? `${ctx.subject}_` : ''}${stamp}_${slug}_모아두기.md`,
+    path: `${LOG_DIR}/${vaultName(ctx.subject, stamp, ctx.title, '모아두기')}`,
     content: lines.join('\n'),
     message: `iPad 모아두기: ${ctx.title || '메모'}`,
   });
@@ -4048,7 +4081,6 @@ async function recordPick(doc, lineIdx, lines, label) {
   const p2 = (n) => String(n).padStart(2, '0');
   const stamp = `${String(now.getFullYear()).slice(2)}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}`;
   const subject = (doc.path.split('/')[1] || '').replace(/_/g, '_');
-  const slug = (doc.title || '노트').replace(/[\/\\:*?"<>|]/g, '_').slice(0, 40);
 
   const L = [];
   L.push('---');
@@ -4070,9 +4102,9 @@ async function recordPick(doc, lineIdx, lines, label) {
   L.push('');
 
   await saveToVault([{
-    path: `${LOG_DIR}/${subject ? `${subject}_` : ''}${stamp}_${slug}_채택.md`,
+    path: `${LOG_DIR}/${vaultName(subject, stamp, doc.title, '채택')}`,
     content: L.join('\n'),
-    message: `iPad 채택: ${slug} — ${label.slice(0, 30)}`,
+    message: `iPad 채택: ${doc.title || '노트'} — ${label.slice(0, 30)}`,
   }]);
 }
 
@@ -6257,8 +6289,7 @@ function buildMarkdown(res) {
     lines.push('');
   }
 
-  const safeTopic = topic.replace(/[\/\\:*?"<>|]/g, '_');
-  const path = `${LOG_DIR}/${subject}_${dateStr}_${safeTopic}_모의고사풀이.md`;
+  const path = `${LOG_DIR}/${vaultName(subject, dateStr, topic, '모의고사풀이')}`;
   return { path, content: lines.join('\n'), message: `iPad 모의고사 풀이: ${topic} ${res.correct}/${res.total}` };
 }
 

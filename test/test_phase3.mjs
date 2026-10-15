@@ -43,6 +43,13 @@ ok('위키링크 별칭', wl2.includes('>표시이름<') && wl2.includes('data-n
 const prose = renderMarkdown('무호흡은 90% 이상 기류저하가 10초 이상이다.\n저호흡은 30% 이상이다.');
 ok('산문 2줄은 한 문단으로 합쳐짐', !prose.includes('<br>'), prose);
 ok('합쳐질 때 공백이 들어감', /이상이다\. 저호흡은/.test(prose), prose);
+// 한글↔한글 개행도 공백이다. 2026-10-14에 "비자발적 / 으로"가 벌어진다는 신고를 받고
+// 여기만 붙이도록 바꿨다가, 제대로 띄어 쓴 4,238곳이 전부 들러붙었다(02_Wiki 실측).
+// 낱말 한가운데가 갈린 건 **원문 쪽 문제**라 원문을 고쳤다 — 렌더는 표준대로 공백이다.
+const kk = renderMarkdown('파란색을\n떠올렸다면 잘못 끌어온 것이다.');
+ok('한글↔한글 개행도 공백으로 합친다', /파란색을 떠올렸다면/.test(kk), kk);
+ok('한글↔한글이 들러붙지 않는다', !/파란색을떠올렸다면/.test(kk), kk);
+
 const items = renderMarkdown('ㄱ. 무호흡은 90%다.\nㄴ. 저호흡은 30%다.');
 ok('ㄱ/ㄴ 항목은 줄바꿈 유지', items.includes('<br>'), items);
 const nums = renderMarkdown('① 첫째 선지\n② 둘째 선지');

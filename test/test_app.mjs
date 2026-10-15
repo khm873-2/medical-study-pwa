@@ -230,6 +230,49 @@ check('retryWrong: 답안 비워짐', q2.order.every((i) => q2.answers[i] === nu
   check('OX: 집계 1/2', r3.correct === 1 && r3.total === 2, `${r3.correct}/${r3.total}`);
 }
 
+// ---------- vault 파일 이름 길이 ----------
+//
+// 2026-10-15에 실제로 데이터를 잃을 뻔했다: 강의 제목을 그대로 넣은 긴 이름을
+// 맥의 문서 동기화가 제멋대로 줄여버려서, 같은 날 올린 6개 파일의 끝 네 글자가
+// ` 2`·`ᄆ` 따위로 바뀌고 `_모아두기`가 통째로 날아갔다. 이름이 뭉개지면 git은
+// "지워졌다"고 보고, 서로 이름이 겹치면 **덮어쓴다**. 그래서 길이를 검사로 묶는다.
+{
+  const src = readFileSync(`${PWA}/js/app.js`, 'utf8');
+  const m = src.match(/const NAME_BYTES[\s\S]*?\n}\n/);
+  check('app.js에 vaultName이 있다', !!m);
+  if (m) {
+    // eslint-disable-next-line no-eval
+    const vaultName = eval(`(() => { ${m[0]} return vaultName; })()`);
+    const bytes = (s) => Buffer.byteLength(s, 'utf8');
+    const cases = [
+      ['응급_중환자', '26-10-14', '응급_중환자 — 소아기본소생술(PBLS) 및 이물질 기도폐쇄 (차민수 교수)', '모아두기'],
+      ['응급_중환자', '26-10-14', '응급중환자_소아기본소생술PBLS및이물질기도폐쇄 — 암기법 후보', '채택'],
+      ['응급_중환자', '26-10-14', '소아기본소생술PBLS및이물질기도폐쇄', '모의고사풀이'],
+      ['두경부_피부', '26-10-14', '두경부피부 — 구진비늘모반종양색소이상증피부노화 (아주 긴 제목이 들어와도)', '모아두기'],
+      ['', '26-10-15', '', '모아두기'],
+    ];
+    let worst = 0;
+    for (const c of cases) {
+      const n = vaultName(...c);
+      worst = Math.max(worst, bytes(n));
+      check(`이름이 100바이트 안: ${n}`, bytes(n) <= 100, `${bytes(n)}B`);
+      check(`종류가 이름에 남는다: ${n}`, n.endsWith(`_${c[3]}.md`));
+      check(`이음표로 끝나지 않는다: ${n}`, !/[_\-—·]_/.test(n.replace(`_${c[3]}.md`, '_')));
+    }
+    check('가장 긴 이름도 90바이트 이하', worst <= 90, `${worst}B`);
+    // 제목이 과목으로 시작하면 한 번만 적는다 — 전에는 "응급_중환자"가 두 번 들어갔다
+    const dup = vaultName('응급_중환자', '26-10-14', '응급_중환자 — 환경의학 (송명제 교수)', '모아두기');
+    check('과목을 두 번 적지 않는다', dup.split('응급_중환자').length - 1 === 1, dup);
+    check('빈 제목도 이름이 된다', vaultName('', '26-10-15', '', '모아두기') === '26-10-15_메모_모아두기.md');
+  }
+  // 세 저장 경로가 전부 이 함수를 쓰는지 — 하나라도 빠지면 그 경로만 다시 길어진다
+  for (const kind of ['모아두기', '채택', '모의고사풀이']) {
+    check(`${kind} 경로가 vaultName을 쓴다`,
+      new RegExp(`vaultName\\([^)]*'${kind}'\\)`).test(src));
+  }
+  check('옛 slice(0, 40) 방식이 남아있지 않다', !/slug\s*=\s*\(ctx\.title/.test(src));
+}
+
 // ---------- 결과 ----------
 console.log(`\n통과 ${pass}건`);
 if (fail.length) {
