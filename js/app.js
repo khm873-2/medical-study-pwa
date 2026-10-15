@@ -4321,6 +4321,23 @@ function renderCardFloat() {
  * 추천은 그대로 두고 **고칠 길만** 연다. 표도 문장과 똑같이 칸마다 낱말이 되므로
  * 표 카드에서도 그대로 쓸 수 있다.
  */
+/**
+ * 편집용 껍데기를 벗긴 본문 HTML.
+ *
+ * 낱말을 누를 수 있게 하려고 글자마다 `<span class="cf-w">`를 씌우는데, 이걸 **그대로
+ * 저장하면** 다음에 그릴 때 그 위에 또 씌워진다. `.cf-w`에는 좌우 2px 여백이 있어서
+ * 누를 때마다 낱말 사이가 4px씩 벌어졌다(2026-10-16 신고: "같은 단어를 계속 누르면
+ * 점점 글자 간격이 벌어지는데?"). 글자로 지우려 했던 정규식은 껍데기가 겹치면 못 벗긴다.
+ * 사본을 떠서 **요소째로** 벗긴다 — 몇 겹이 쌓여 있어도 확실하다.
+ */
+function cleanPickHtml(root) {
+  const c = root.cloneNode(true);
+  c.querySelectorAll('span.cf-w').forEach((el) => el.replaceWith(...el.childNodes));
+  c.querySelectorAll('.cloze').forEach((el) => el.classList.remove('pickable'));
+  c.normalize();
+  return c.innerHTML;
+}
+
 function makeWordsTappable(root, card) {
   // ① 이미 빈칸인 것 — 누르면 되돌린다
   root.querySelectorAll('.cloze').forEach((el) => {
@@ -4330,7 +4347,7 @@ function makeWordsTappable(root, card) {
       const ans = el.dataset.answer || '';
       el.replaceWith(document.createTextNode(ans));
       card.answers = (card.answers || []).filter((x) => x !== ans);
-      card.contextHtml = root.innerHTML.replace(/ class="cloze pickable"/g, ' class="cloze"');
+      card.contextHtml = cleanPickHtml(root);
       renderCfNew();
     };
   });
@@ -4358,9 +4375,7 @@ function makeWordsTappable(root, card) {
         e.stopPropagation();
         w.replaceWith(blankSpan(piece));
         card.answers = [...(card.answers || []), piece];
-        card.contextHtml = root.innerHTML
-          .replace(/<span class="cf-w">([^<]*)<\/span>/g, '$1')
-          .replace(/ class="cloze pickable"/g, ' class="cloze"');
+        card.contextHtml = cleanPickHtml(root);
         renderCfNew();
       };
       frag.appendChild(w);
@@ -4416,6 +4431,9 @@ function renderCfNew() {
   const q = document.createElement('div');
   q.className = 'cf-q cf-pick';
   q.innerHTML = tidyCardHtml(c.contextHtml || '');
+  // 옛 카드에 껍데기가 묻어 있을 수 있다 — 씌우기 전에 한 번 벗긴다
+  q.querySelectorAll('span.cf-w').forEach((el) => el.replaceWith(...el.childNodes));
+  q.normalize();
   makeWordsTappable(q, c);        // 낱말을 눌러 빈칸을 더하고 뺀다(2026-10-14 요청)
   paintCloze(q, shown);
   body.appendChild(q);

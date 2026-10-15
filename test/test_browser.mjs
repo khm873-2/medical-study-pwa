@@ -6299,6 +6299,69 @@ await run('카드 빈칸 직접 고치기', async () => {
   out.push({ name: '추천 빈칸도 그대로 있다(추천 기능은 유지)',
     ok: document.querySelectorAll('#cfBody .cloze').length > 0 });
 
+  // ── 같은 낱말을 몇 번을 눌러도 글이 안 움직인다 (2026-10-16 지적) ──
+  // "같은 단어를 계속 누르면 점점 글자 간격이 벌어지는데? 이런일이 있어서는 안되지."
+  // 껍데기(.cf-w)를 본문에 함께 저장하면 다음에 그릴 때 그 위에 또 씌워지고,
+  // 껍데기마다 좌우 2px이 붙어 누를 때마다 4px씩 벌어졌다.
+  {
+    // 줄글 카드로 바꿔 끼운다 — 표는 칸이 자리를 먹어 밀림이 눈에 안 띈다
+    body.innerHTML = renderMarkdown(
+      '소아 소생에서는 **수축기 혈압 하한**을 먼저 보고 **모세혈관 재충전**도 함께 확인한다고 배웠다.');
+    await new Promise((r) => setTimeout(r, 120));
+    const rr = body.getBoundingClientRect();
+    const prose = R.cardsFromBox(body, { l: rr.left, t: rr.top, r: rr.right, b: rr.bottom },
+      { notePath: 'x.md', noteTitle: '노트', heading: '1. 쇼크' });
+    out.push({ name: '줄글 카드가 만들어진다', ok: prose.length === 1, detail: `${prose.length}장` });
+    window.__openCardFloat(prose);
+    await new Promise((r) => setTimeout(r, 300));
+    const picked2 = '먼저';
+    const q2 = () => document.querySelector('#cfBody .cf-q');
+    const target = () => {
+      const el = q2();
+      return el ? [...el.querySelectorAll('.cf-w, .cloze.pickable')]
+        .find((x) => x.textContent.trim() === picked2) : null;
+    };
+    const span = () => Math.round(q2().getBoundingClientRect().height);
+    const tailX = () => {
+      const all = [...q2().querySelectorAll('.cf-w')];
+      const last = all[all.length - 1];
+      return last ? Math.round(last.getBoundingClientRect().left) : -1;
+    };
+    const h0 = span();
+    const x0 = tailX();
+    let toggled = 0;
+    for (let i = 0; i < 6; i++) {
+      const t = target();
+      if (!t) break;
+      t.click();
+      toggled++;
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    out.push({ name: '여섯 번 눌러도 끝까지 눌린다', ok: toggled === 6, detail: `${toggled}번` });
+    out.push({ name: '**눌러도 줄 수가 안 늘어난다(글이 안 벌어진다)**',
+      ok: Math.abs(span() - h0) <= 1, detail: `${h0} → ${span()}px` });
+    out.push({ name: '**마지막 낱말이 제자리에 있다**', ok: Math.abs(tailX() - x0) <= 1,
+      detail: `${x0} → ${tailX()}px` });
+    const saved = prose[0] ? (prose[0].contextHtml || '') : '';
+    out.push({ name: '저장되는 본문에 편집용 껍데기가 안 섞인다',
+      ok: !/cf-w/.test(saved) && !/pickable/.test(saved),
+      detail: saved.slice(0, 60) });
+    out.push({ name: '껍데기가 겹쳐 쌓이지 않는다',
+      ok: !/class="cf-w"[^>]*>\s*<span class="cf-w"/.test(q2().innerHTML) });
+    // 빈칸과 낱말의 상자가 같아야 자리가 안 바뀐다
+    const w = q2().querySelector('.cf-w');
+    const cz = q2().querySelector('.cloze');
+    if (w && cz) {
+      const a = getComputedStyle(w);
+      const b = getComputedStyle(cz);
+      out.push({ name: '빈칸과 낱말의 여백이 같다',
+        ok: a.paddingLeft === b.paddingLeft && a.paddingRight === b.paddingRight,
+        detail: `${a.paddingLeft}/${a.paddingRight} vs ${b.paddingLeft}/${b.paddingRight}` });
+      out.push({ name: '빈칸이 억지로 넓어지지 않는다(min-width 없음)',
+        ok: b.minWidth === '0px' || b.minWidth === 'auto', detail: b.minWidth });
+    }
+  }
+
   document.getElementById('cfClose').click();
   body.innerHTML = '';
   return out;

@@ -2748,6 +2748,14 @@ li.task.done .task-box { color: var(--accent); }
 .cf-w:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .cloze.pickable { cursor: pointer; }
 .cloze.pickable:hover { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+/* 고르는 중에는 빈칸이 **낱말과 똑같은 자리**를 차지해야 한다 (2026-10-16 지적:
+   "그냥 자기 위치에 있으면서 가려졌다가 다시 취소해서 누른다고 해도 그 자리에 있어야지").
+   읽을 때 쓰는 넓은 빈칸(min-width·굵게)을 여기서 그대로 쓰면, 누를 때마다 글이 밀려
+   방금 누른 낱말이 어디 갔는지 눈으로 좇을 수가 없다. 치수를 .cf-w와 똑같이 맞춘다. */
+.cf-pick .cloze {
+  min-width: 0; padding: 1px 2px; border-radius: 5px;
+  font-weight: inherit; vertical-align: baseline;
+}
 .cf-hint { margin-top: 10px; font-size: 11.5px; }
 
 /* ── AI 질문 (2026-10-14) ──
