@@ -527,6 +527,17 @@
 
 </div>
 
+<!-- 어디서든 찾기 (2026-10-15 요청: "찾기 정도는 어디서든 쓸 수 있는거니까 전면에서
+     보이는 아이콘으로 빼자"). 화면마다 들어가는 자리가 달라서 머리줄에 하나씩 심는
+     대신, 늘 같은 자리에 떠 있게 했다 — 어느 화면에서든 손이 같은 곳으로 간다.
+     길게 누르면 vault 전체에서 찾는다(그냥 누르면 보던 문서 안에서). -->
+<button id="findFab" class="hidden" title="찾기 (⌘F) — 길게 누르면 vault 전체" aria-label="찾기">
+  <svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"
+       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>
+  </svg>
+</button>
+
 <!-- 동기화 대기 알림(아웃박스에 쌓인 게 있을 때만) -->
 <div id="syncBar" class="hidden">
   <span id="syncText"></span>

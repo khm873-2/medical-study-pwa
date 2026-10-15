@@ -100,6 +100,19 @@ function show(id) {
   // 막대는 그 화면일 때만 보이므로, 화면이 바뀐 **뒤에야** 폭을 잴 수 있다.
   // 모듈이 뜰 때 재면 전부 0이라 머리줄이 막대 밑에 깔린다(2026-10-13).
   document.querySelectorAll('.read-tools').forEach(reserveForTools);
+  paintFindFab();
+}
+
+// 찾을 것이 없는 화면에서는 안 띄운다 — 설정·첫 연결 화면에는 찾을 게 없다
+const NO_FIND = new Set(['setupScreen']);
+function paintFindFab() {
+  const el = document.getElementById('findFab');
+  if (!el) return;
+  // "찾는 중" 표시는 **창이 실제로 떠 있는지**를 보고 다시 맞춘다. 어디선가 창만
+  // 숨기고 closeSearch를 안 부르면 돋보기가 영영 안 돌아오기 때문이다.
+  const sheet = document.getElementById('searchSheet');
+  document.body.classList.toggle('finding', !!sheet && !sheet.classList.contains('hidden'));
+  el.classList.toggle('hidden', NO_FIND.has(document.body.dataset.screen || ''));
 }
 
 // ---------- 테마 · 표시 설정 ----------
@@ -6346,6 +6359,7 @@ function setScope(scope) {
  */
 function openSearch(scope) {
   sEl('searchSheet').classList.remove('hidden');
+  document.body.classList.add('finding');
   setScope(scope || (currentDoc() ? 'doc' : 'all'));
   const inp = sEl('searchInput');
   inp.focus();
@@ -6353,10 +6367,20 @@ function openSearch(scope) {
 }
 function closeSearch() {
   sEl('searchSheet').classList.add('hidden');
+  document.body.classList.remove('finding');
   clearDocMarks();
+  paintFindFab();
 }
 sEl('searchBtn').onclick = () => openSearch();
 document.getElementById('toolFind').onclick = () => openSearch();
+// 늘 떠 있는 돋보기 — 그냥 누르면 보던 문서 안에서, 길게 누르면 vault 전체에서
+{
+  const fab = document.getElementById('findFab');
+  if (fab) {
+    fab.onclick = () => openSearch();
+    longPress(fab, () => openSearch('all'));
+  }
+}
 sEl('searchClose').onclick = closeSearch;
 sEl('searchSheet').onclick = (e) => { if (e.target.id === 'searchSheet') closeSearch(); };
 document.querySelectorAll('#searchSheet .scope-btn[data-scope]')

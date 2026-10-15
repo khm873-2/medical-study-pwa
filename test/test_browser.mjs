@@ -4491,6 +4491,120 @@ await run('들러보기', async () => {
   return out;
 });
 
+// ══════════ 찾기 창은 크기가 변하지 않는다 (2026-10-15 요청) ══════════
+// "아래쪽에 검색되는게 계속 바뀌니까 타이핑하는 부분이 자꾸 위치가 바뀌어서 어지러움."
+await run('찾기 창 고정', async () => {
+  const out = [];
+  const sheet = document.getElementById('searchSheet');
+  const card = sheet.querySelector('.search-card');
+  const input = document.getElementById('searchInput');
+  const res = document.getElementById('searchResults');
+  sheet.classList.remove('hidden');
+  res.innerHTML = '';
+  await new Promise((r) => setTimeout(r, 60));
+
+  const h0 = Math.round(card.getBoundingClientRect().height);
+  const y0 = Math.round(input.getBoundingClientRect().top);
+
+  // 결과가 쏟아져도 입력칸이 제자리에 있어야 한다
+  res.innerHTML = Array.from({ length: 60 },
+    () => '<button class="search-hit"><div class="sh-title">가</div><div class="sh-snip">나</div></button>').join('');
+  await new Promise((r) => setTimeout(r, 60));
+  const h1 = Math.round(card.getBoundingClientRect().height);
+  const y1 = Math.round(input.getBoundingClientRect().top);
+
+  out.push({ name: '**결과가 쏟아져도 입력칸이 안 움직인다**', ok: Math.abs(y1 - y0) <= 1,
+    detail: `${y0} → ${y1}px` });
+  out.push({ name: '창 높이도 그대로다', ok: Math.abs(h1 - h0) <= 1, detail: `${h0} → ${h1}px` });
+  out.push({ name: '결과만 제 안에서 구른다',
+    ok: getComputedStyle(res).overflowY === 'auto' && res.scrollHeight > res.clientHeight + 10,
+    detail: `${res.scrollHeight} > ${res.clientHeight}` });
+  out.push({ name: '창이 화면을 다 먹지 않는다', ok: h1 <= innerHeight * 0.8,
+    detail: `${h1} / ${innerHeight}` });
+  out.push({ name: '입력칸이 손 닿는 높이에 있다(너무 위도 아래도 아니게)',
+    ok: y1 > innerHeight * 0.05 && y1 < innerHeight * 0.6,
+    detail: `${Math.round((y1 / innerHeight) * 100)}%` });
+
+  // 결과를 지워도 다시 안 뛴다
+  res.innerHTML = '';
+  await new Promise((r) => setTimeout(r, 60));
+  out.push({ name: '결과를 지워도 되돌아 뛰지 않는다',
+    ok: Math.abs(Math.round(input.getBoundingClientRect().top) - y0) <= 1,
+    detail: `${Math.round(input.getBoundingClientRect().top)}px` });
+
+  sheet.classList.add('hidden');
+  return out;
+});
+
+// ══════════ 어디서든 찾기 — 늘 떠 있는 돋보기 (2026-10-15 요청) ══════════
+// "찾기 정도는 어디서든 쓸 수 있는거니까 전면에서 보이는 아이콘으로 빼자."
+await run('떠 있는 돋보기', async () => {
+  const out = [];
+  const fab = document.getElementById('findFab');
+  out.push({ name: '돋보기 단추가 있다', ok: !!fab });
+  if (!fab) return out;
+  out.push({ name: '돋보기 모양이다(원 + 손잡이)',
+    ok: !!fab.querySelector('circle') && !!fab.querySelector('path') });
+
+  // 앞 검사에서 찾기 창을 열어둔 채 지나갔을 수 있다 — 먼저 닫는다
+  document.getElementById('searchClose').click();
+  await new Promise((r) => setTimeout(r, 40));
+  const screens = ['listScreen', 'readScreen', 'quizScreen', 'cardScreen', 'deckScreen'];
+  const miss = [];
+  for (const id of screens) {
+    document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+    document.getElementById(id).classList.remove('hidden');
+    document.body.dataset.screen = id;
+    fab.classList.toggle('hidden', false);
+    await new Promise((r) => setTimeout(r, 30));
+    const r = fab.getBoundingClientRect();
+    if (!(r.width >= 40 && r.height >= 40 && getComputedStyle(fab).display !== 'none')) miss.push(id);
+  }
+  out.push({ name: '**모든 화면에서 같은 자리에 뜬다**', ok: !miss.length, detail: miss.join(',') || '전부' });
+
+  const r = fab.getBoundingClientRect();
+  out.push({ name: '손가락으로 누를 만한 크기다', ok: r.width >= 44 && r.height >= 44,
+    detail: `${Math.round(r.width)}×${Math.round(r.height)}` });
+  out.push({ name: '왼쪽 아래에 있다(저장 대기 띠·AI 단추와 안 겹친다)',
+    ok: r.left < innerWidth / 3 && r.top > innerHeight / 2,
+    detail: `${Math.round(r.left)},${Math.round(r.top)}` });
+  const sync = document.getElementById('syncBar').getBoundingClientRect();
+  out.push({ name: '저장 대기 띠와 겹치지 않는다',
+    ok: !(r.right > sync.left && r.left < sync.right && r.bottom > sync.top && r.top < sync.bottom)
+      || !sync.width });
+  out.push({ name: '아래 네비를 가리지 않는다',
+    ok: [...document.querySelectorAll('.navbar')].every((n) => {
+      const b = n.getBoundingClientRect();
+      return !b.width || r.bottom <= b.top + 2;
+    }) });
+
+  // 눌러서 찾기가 열리고, 열린 동안에는 자기가 숨는다
+  const app = await fetch('/js/app.js').then((x) => x.text());
+  out.push({ name: '그냥 누르면 찾기가 열린다', ok: /fab\.onclick = \(\) => openSearch\(\)/.test(app) });
+  out.push({ name: '**길게 누르면 vault 전체에서 찾는다**',
+    ok: /longPress\(fab, \(\) => openSearch\('all'\)\)/.test(app) });
+  document.getElementById('findFab').click();
+  await new Promise((rs) => setTimeout(rs, 60));
+  out.push({ name: '찾기 창이 실제로 뜬다',
+    ok: !document.getElementById('searchSheet').classList.contains('hidden') });
+  out.push({ name: '열린 동안에는 돋보기가 비켜준다',
+    ok: document.body.classList.contains('finding')
+      && getComputedStyle(fab).display === 'none' });
+  document.getElementById('searchClose').click();
+  await new Promise((rs) => setTimeout(rs, 60));
+  out.push({ name: '닫으면 다시 뜬다',
+    ok: !document.body.classList.contains('finding') && getComputedStyle(fab).display !== 'none' });
+
+  // 설정 화면에는 찾을 게 없다
+  document.body.dataset.screen = 'setupScreen';
+  const paint = new Function('return ' + (app.match(/function paintFindFab\(\) \{[\s\S]*?\n}/) || [''])[0]
+    .replace('function paintFindFab()', 'function()'))();
+  const NO = new Function(`return ${(app.match(/const NO_FIND = new Set\(\[[^\]]*\]\)/) || [''])[0].replace('const NO_FIND = ', '')}`)();
+  out.push({ name: '설정 화면에서는 안 뜬다', ok: NO.has('setupScreen') });
+  document.body.dataset.screen = 'listScreen';
+  return out;
+});
+
 // ══════════ 찾기 범위 — 열어본 것만이 아니라 전부 (2026-10-15) ══════════
 // "지금껏 꼭 열어본 페이지만 검색이 되는 이유는 뭐지. 그게 더 좋은가?"
 await run('찾기 범위', async () => {
