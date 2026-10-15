@@ -12,9 +12,9 @@ global.document = { createElement: () => ({ className: '', textContent: '' }), a
 
 // reader.js는 브라우저 모듈을 import하므로 스텁으로 치환한 복사본을 쓴다.
 const src = readFileSync(`${PWA}/js/reader.js`, 'utf8')
-  .replace("import { listDir, getText, getBlobUrl } from './github.js';",
+  .replace(/import \{[^}]*\} from '\.\/github\.js';/,
     'const listDir=async()=>[],getText=async()=>"",getBlobUrl=async()=>"";')
-  .replace("import { kvGet, kvSet } from './db.js';",
+  .replace(/import \{[^}]*\} from '\.\/db\.js';/,
     'const _kv={};const kvGet=async(k)=>_kv[k],kvSet=async(k,v)=>{_kv[k]=v;};');
 const shim = `${PWA}/js/__t_reader.mjs`;
 writeFileSync(shim, src);
@@ -42,8 +42,8 @@ const noteMd = picked.text;
 // loadNote는 네트워크를 타므로 splitSections 결과를 직접 조립
 const { splitSections } = await import(pathToFileURL(`${PWA}/js/wiki.js`).href).catch(async () => {
   const ws = readFileSync(`${PWA}/js/wiki.js`, 'utf8')
-    .replace("import { listDir, getText } from './github.js';", 'const listDir=async()=>[],getText=async()=>"";')
-    .replace("import { linkedNoteFromMd } from './parser.js';", 'const linkedNoteFromMd=()=>null;');
+    .replace(/import \{[^}]*\} from '\.\/github\.js';/, 'const listDir=async()=>[],getText=async()=>"",listTree=async()=>[];')
+    .replace(/import \{[^}]*\} from '\.\/parser\.js';/, 'const linkedNoteFromMd=()=>null;');
   const s2 = `${PWA}/js/__t_wiki2.mjs`;
   writeFileSync(s2, ws);
   try { return await import(pathToFileURL(s2).href); } finally { rmSync(s2, { force: true }); }
@@ -168,11 +168,21 @@ ok('통계', st.total === 3 && st.new === 1 && st.mature === 1 && st.learning ==
 
 // ── search.js 스니펫 ──
 const ss = readFileSync(`${PWA}/js/search.js`, 'utf8')
-  .replace("import { listDir, getText } from './github.js';", 'const listDir=async()=>[],getText=async()=>"";')
-  .replace("import { cacheGet, cacheSet, kvGet, kvSet } from './db.js';",
-    'const _c={},_k={};const cacheGet=async(p)=>_c[p],cacheSet=async(p,d)=>{_c[p]={data:d};},kvGet=async(k)=>_k[k],kvSet=async(k,v)=>{_k[k]=v;};')
-  .replace("import { parseExamHtml, prettyExamName } from './parser.js';",
-    `import { parseExamHtml, prettyExamName } from ${JSON.stringify(PWA + '/js/parser.js')};`);
+  // ⚠️ import 줄을 글자 그대로 집으면 이름 하나만 더해도 갈아끼우기가 빗나가 **진짜 모듈이
+  //    딸려 들어온다**(2026-10-16에 실제로 그랬다 — 그래도 이 검사는 운 좋게 통과했다).
+  //    줄 모양으로 집고, 아래에서 남은 게 없는지 확인한다.
+  .replace(/import \{[^}]*\} from '\.\/github\.js';/, 'const listDir=async()=>[],getText=async()=>"",listTree=async()=>[];')
+  .replace(/import \{[^}]*\} from '\.\/db\.js';/,
+    'const _c={},_k={};const cacheGet=async(p)=>_c[p],cacheSet=async(p,d)=>{_c[p]={data:d};},'
+    + 'cacheGetMany=async(ps)=>new Map((ps||[]).filter((p)=>_c[p]).map((p)=>[p,_c[p].data])),'
+    + 'kvGet=async(k)=>_k[k],kvSet=async(k,v)=>{_k[k]=v;};')
+  .replace(/import \{[^}]*\} from '\.\/parser\.js';/,
+    `import { parseExamHtml, prettyExamName } from ${JSON.stringify(PWA + '/js/parser.js')};`)
+  .replace(/import \{[^}]*\} from '\.\/wiki\.js';/, 'const resolveNotePath=async()=>null;');
+{
+  const left = (ss.match(/import[^;]*from '\.\/[^']+';/g) || []);
+  ok('search 갈아끼우기에 빠진 import가 없다', !left.length, left.join(' | '));
+}
 const s3 = `${PWA}/js/__t_search.mjs`;
 writeFileSync(s3, ss);
 let S;

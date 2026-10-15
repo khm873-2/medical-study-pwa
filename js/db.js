@@ -122,6 +122,27 @@ export async function cacheGet(path) {
   const db = await open();
   return req2val(db.transaction(STORE_CACHE, 'readonly').objectStore(STORE_CACHE).get(path));
 }
+/**
+ * 여러 경로를 **한 트랜잭션으로** 읽는다.
+ *
+ * 찾기는 캐시에 든 글을 전부 훑는다. 경로마다 cacheGet을 부르면 트랜잭션이 그 수만큼
+ * 열렸다 닫히는데, vault 글을 통째로 받아두면 그게 670번이 된다(2026-10-16 점검).
+ * 트랜잭션 하나에 요청을 몰아 넣으면 같은 일을 훨씬 싸게 한다.
+ *
+ * @returns {Promise<Map<string, string>>} 경로 → 글. 없는 건 빠진다.
+ */
+export async function cacheGetMany(paths) {
+  const out = new Map();
+  const list = [...new Set(paths || [])];
+  if (!list.length) return out;
+  const db = await open();
+  const store = db.transaction(STORE_CACHE, 'readonly').objectStore(STORE_CACHE);
+  await Promise.all(list.map((p) => req2val(store.get(p)).then((v) => {
+    if (v && v.data != null) out.set(p, v.data);
+  }).catch(() => {})));
+  return out;
+}
+
 export async function cacheSet(path, data) {
   return tx(STORE_CACHE, 'readwrite', (s) => s.put({ data, at: Date.now() }, path));
 }

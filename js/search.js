@@ -16,7 +16,7 @@
 // 열어본 것만 뒤지던 옛 방식도 그대로 남는다 — 색인을 아직 안 받았어도 본 건 찾힌다.
 
 import { listDir, getText, listTree } from './github.js';
-import { cacheGet, cacheSet, kvGet, kvSet } from './db.js';
+import { cacheGet, cacheGetMany, cacheSet, kvGet, kvSet } from './db.js';
 import { parseExamHtml, prettyExamName } from './parser.js';
 import { resolveNotePath } from './wiki.js';
 
@@ -100,7 +100,7 @@ export async function indexInfo() {
  * @param {Function} onProgress (done, total, label)
  * @returns {Promise<{total:number, fetched:number, removed:number, truncated:boolean}>}
  */
-export async function buildIndex(onProgress = () => {}, { signal } = {}) {
+export async function buildIndex(onProgress = () => {}) {
   const tree = await listTree();
   const want = tree.filter((e) => indexable(e.path) && e.size <= BIG);
   const was = (await kvGet(TREE_KEY)) || {};
@@ -124,7 +124,6 @@ export async function buildIndex(onProgress = () => {}, { signal } = {}) {
   const queue = todo.slice();
   const worker = async () => {
     for (;;) {
-      if (signal && signal.aborted) return;
       const e = queue.shift();
       if (!e) return;
       try {
@@ -217,11 +216,19 @@ export async function search(query, limit = 40, opt = {}) {
   }
   const hits = [];
 
-  for (const p of paths) {
+  // 캐시를 **묶음으로** 읽는다.
+  //  · 경로마다 트랜잭션을 여는 건 글이 수백 개가 되면 비싸다(670번).
+  //  · 그렇다고 한 번에 다 읽으면, 흔한 말이라 앞에서 금방 끝날 때도 끝까지 읽는다.
+  // 그래서 묶음으로 끊어 읽고 **채워지면 그 자리에서 멈춘다**(2026-10-16 점검).
+  const CHUNK = 64;
+  let texts = new Map();
+
+  for (let i = 0; i < paths.length; i++) {
     if (hits.length >= limit) break;
-    const entry = await cacheGet(p);
-    if (!entry) continue;
-    const text = entry.data;
+    if (i % CHUNK === 0) texts = await cacheGetMany(paths.slice(i, i + CHUNK));
+    const p = paths[i];
+    const text = texts.get(p);
+    if (text == null) continue;
 
     if (p.endsWith('.html') && p.startsWith('06_모의고사/')) {
       // 문항 단위로 찾는다

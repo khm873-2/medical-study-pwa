@@ -16,7 +16,7 @@ let pass = 0; const fail = [];
 const ok = (n, c, d) => { if (c) pass++; else fail.push(`${n}${d ? ' — ' + d : ''}`); };
 
 const src = readFileSync(`${PWA}/js/jokbo.js`, 'utf8')
-  .replace("import { listDir, getText } from './github.js';", 'const listDir=async()=>[],getText=async()=>"";');
+  .replace(/import \{[^}]*\} from '\.\/github\.js';/, 'const listDir=async()=>[],getText=async()=>"";');
 const shim = `${PWA}/js/__t_jokbo.mjs`;
 writeFileSync(shim, src);
 let J;
@@ -169,9 +169,9 @@ if (existsSync(DIR)) {
 // ── 챕터 ↔ 강의 노트 짝짓기 ──
 {
   const ws = readFileSync(`${PWA}/js/wiki.js`, 'utf8')
-    .replace("import { listDir, getText } from './github.js';",
+    .replace(/import \{[^}]*\} from '\.\/github\.js';/,
       'const listDir=async(p)=>((globalThis.__FS||{})[p]||[]),getText=async()=>"";')
-    .replace("import { linkedNoteFromMd } from './parser.js';", 'const linkedNoteFromMd=()=>null;');
+    .replace(/import \{[^}]*\} from '\.\/parser\.js';/, 'const linkedNoteFromMd=()=>null;');
   const wshim = `${PWA}/js/__t_jw.mjs`;
   writeFileSync(wshim, ws);
   let W;

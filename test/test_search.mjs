@@ -18,14 +18,26 @@ const FILES = {
   '02_Wiki/두경부_피부/0901_비출혈.md': 'Kiesselbach 신경총에서 전방 비출혈이 흔하다.',
 };
 const src = readFileSync(`${PWA}/js/search.js`, 'utf8')
-  .replace("import { listDir, getText } from './github.js';", 'const listDir=async()=>[],getText=async()=>"";')
-  .replace("import { cacheGet, cacheSet, kvGet, kvSet } from './db.js';",
+  .replace(/import \{[^}]*\} from '\.\/github\.js';/, 'const listDir=async()=>[],getText=async()=>"",listTree=async()=>[];')
+  // ⚠️ import 줄을 **글자 그대로** 집으면, 거기에 이름 하나만 더해도 갈아끼우기가 조용히
+  //    빗나가 진짜 db.js가 딸려 들어온다(2026-10-16: cacheGetMany를 더했다가 겪었다).
+  //    줄 모양으로 집어서 무엇이 늘든 받아낸다.
+  .replace(/import \{[^}]*\} from '\.\/db\.js';/,
     'const cacheGet=async(p)=>(globalThis.__F[p]?{data:globalThis.__F[p]}:null),cacheSet=async()=>{},'
+    + 'cacheGetMany=async(ps)=>new Map((ps||[]).filter((p)=>globalThis.__F[p])'
+    + '.map((p)=>[p,globalThis.__F[p]])),'
     + 'kvGet=async(k)=>(k==="cached_paths"?Object.keys(globalThis.__F):null),kvSet=async()=>{};')
-  .replace("import { parseExamHtml, prettyExamName } from './parser.js';",
+  .replace(/import \{[^}]*\} from '\.\/parser\.js';/,
     'const parseExamHtml=()=>({questions:[]}),prettyExamName=(x)=>x;')
-  .replace("import { resolveNotePath } from './wiki.js';", 'const resolveNotePath=async()=>null;');
+  .replace(/import \{[^}]*\} from '\.\/wiki\.js';/, 'const resolveNotePath=async()=>null;');
 globalThis.__F = FILES;
+// 갈아끼우기가 하나라도 빗나가면 진짜 모듈이 딸려 들어온다 — 그러면 이 검사는
+// 더 이상 "검색만" 보는 게 아니다. 남은 상대경로 import가 있는지 먼저 확인한다.
+const leftover = (src.match(/import[^;]*from '\.\/[^']+';/g) || []);
+if (leftover.length) {
+  console.log(`test_search.mjs  ❌ 갈아끼우지 못한 import가 남았습니다:\n   ${leftover.join('\n   ')}`);
+  process.exit(1);
+}
 const shim = `${PWA}/js/__t_search.mjs`;
 writeFileSync(shim, src);
 let S;

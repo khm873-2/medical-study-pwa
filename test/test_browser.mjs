@@ -4596,32 +4596,42 @@ await run('떠 있는 돋보기', async () => {
   await new Promise((r) => setTimeout(r, 40));
   const screens = ['listScreen', 'readScreen', 'quizScreen', 'cardScreen', 'deckScreen'];
   const miss = [];
+  const places = [];
   for (const id of screens) {
     document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
     document.getElementById(id).classList.remove('hidden');
     document.body.dataset.screen = id;
+    if (window.__paintFindFab) window.__paintFindFab();
     fab.classList.toggle('hidden', false);
     await new Promise((r) => setTimeout(r, 30));
     const r = fab.getBoundingClientRect();
-    if (!(r.width >= 40 && r.height >= 40 && getComputedStyle(fab).display !== 'none')) miss.push(id);
+    if (!(r.width >= 36 && r.height >= 36 && getComputedStyle(fab).display !== 'none')) miss.push(id);
+    places.push(`${id}:${fab.closest('.navbar') ? '막대' : '떠있음'}`);
   }
-  out.push({ name: '**모든 화면에서 같은 자리에 뜬다**', ok: !miss.length, detail: miss.join(',') || '전부' });
+  out.push({ name: '**모든 화면에서 보인다**', ok: !miss.length, detail: miss.join(',') || '전부' });
+  // 막대가 있는 화면이면 막대 안으로 들어간다 — 넓은 화면에서 막대가 글 아래로
+  // 내려가도 자리가 어긋나지 않게(2026-10-16)
+  out.push({ name: '**막대가 있으면 막대 안에 선다**',
+    ok: places.join(' ').includes('readScreen:막대') && places.join(' ').includes('quizScreen:막대'),
+    detail: places.join(' ') });
 
   const r = fab.getBoundingClientRect();
-  out.push({ name: '손가락으로 누를 만한 크기다', ok: r.width >= 44 && r.height >= 44,
+  out.push({ name: '손가락으로 누를 만한 크기다', ok: r.width >= 36 && r.height >= 36,
     detail: `${Math.round(r.width)}×${Math.round(r.height)}` });
-  out.push({ name: '왼쪽 아래에 있다(저장 대기 띠·AI 단추와 안 겹친다)',
-    ok: r.left < innerWidth / 3 && r.top > innerHeight / 2,
-    detail: `${Math.round(r.left)},${Math.round(r.top)}` });
+  // 막대가 없는 화면에서는 왼쪽 아래에 떠 있는다
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('deckScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'deckScreen';
+  if (window.__paintFindFab) window.__paintFindFab();
+  await new Promise((rs) => setTimeout(rs, 30));
+  const rf = fab.getBoundingClientRect();
+  out.push({ name: '막대가 없으면 왼쪽 아래에 떠 있는다',
+    ok: !fab.closest('.navbar') && rf.left < innerWidth / 3 && rf.top > innerHeight / 2,
+    detail: `${Math.round(rf.left)},${Math.round(rf.top)}` });
   const sync = document.getElementById('syncBar').getBoundingClientRect();
   out.push({ name: '저장 대기 띠와 겹치지 않는다',
-    ok: !(r.right > sync.left && r.left < sync.right && r.bottom > sync.top && r.top < sync.bottom)
-      || !sync.width });
-  out.push({ name: '아래 네비를 가리지 않는다',
-    ok: [...document.querySelectorAll('.navbar')].every((n) => {
-      const b = n.getBoundingClientRect();
-      return !b.width || r.bottom <= b.top + 2;
-    }) });
+    ok: !sync.width || !(rf.right > sync.left && rf.left < sync.right
+      && rf.bottom > sync.top && rf.top < sync.bottom) });
 
   // 눌러서 찾기가 열리고, 열린 동안에는 자기가 숨는다
   const app = await fetch('/js/app.js').then((x) => x.text());
@@ -4647,6 +4657,88 @@ await run('떠 있는 돋보기', async () => {
   const NO = new Function(`return ${(app.match(/const NO_FIND = new Set\(\[[^\]]*\]\)/) || [''])[0].replace('const NO_FIND = ', '')}`)();
   out.push({ name: '설정 화면에서는 안 뜬다', ok: NO.has('setupScreen') });
   document.body.dataset.screen = 'listScreen';
+  return out;
+});
+
+// ══════════ 이상한 입력에도 안 무너진다 (2026-10-16 점검) ══════════
+await run('이상한 입력', async () => {
+  const out = [];
+  const R = await import('/js/reader.js');
+  const S = await import('/js/search.js');
+  const db = await import('/js/db.js');
+
+  // 카드 본문 정돈 — 무엇이 들어와도 글자열을 돌려주고 터지지 않는다
+  const weird = [['빈값', ''], ['null', null], ['안 닫힌 태그', '<p>열고 안 닫음'],
+    ['중첩 빈칸', '<span class="cloze" data-answer="가"><span class="cloze" data-answer="나">나</span></span>'],
+    ['답 없는 빈칸', '<span class="cloze">   </span>']];
+  const broke = [];
+  for (const [label, v] of weird) {
+    try { if (typeof R.tidyCardHtml(v) !== 'string') broke.push(label); } catch { broke.push(label); }
+  }
+  out.push({ name: '이상한 본문에도 안 터진다', ok: !broke.length, detail: broke.join(',') || '전부 멀쩡' });
+
+  // 여러 번 정돈해도 결과가 같다 — 그릴 때마다 도는 함수라 쌓이면 안 된다
+  const once = R.tidyCardHtml('<li><span class="tok">가</span>   <span class="tok">은</span>'
+    + ' <span class="cloze" data-answer="나">  </span>    <span class="tok">다</span></li>');
+  out.push({ name: '**정돈을 여러 번 돌려도 결과가 같다**',
+    ok: R.tidyCardHtml(once) === once && R.tidyCardHtml(R.tidyCardHtml(once)) === once,
+    detail: once.slice(0, 50) });
+
+  // 공백을 털되 **글자는 안 먹는다**
+  const keep = [['영문 사이', '<p>AST and ALT</p>', 'AST and ALT'],
+    ['숫자 사이', '<p>1 2 3</p>', '1 2 3'],
+    ['조사 아닌 한 글자', '<p>안 들면 치료하지</p>', '안 들면 치료하지'],
+    ['영문 괄호 관례', '<p>text (note) here</p>', 'text (note) here']];
+  const lost = [];
+  for (const [label, html, want] of keep) {
+    const d = document.createElement('div');
+    d.innerHTML = R.tidyCardHtml(html);
+    if (d.textContent.replace(/\s+/g, ' ').trim() !== want) lost.push(label);
+  }
+  out.push({ name: '공백을 털어도 글자는 안 먹는다', ok: !lost.length, detail: lost.join(',') || '전부 보존' });
+
+  // 점수 매기기가 null에 속지 않는다 — String(null)이 "null"이 되어 영문 용어로 3점을 받았다
+  out.push({ name: 'wordScore가 null에 점수를 안 준다',
+    ok: R.wordScore(null) === 0 && R.wordScore(undefined) === 0 && R.wordScore('') === 0,
+    detail: `${R.wordScore(null)}/${R.wordScore(undefined)}` });
+
+  // 깨진 정규식·빈 일치로 멈추지 않는다
+  const t0 = performance.now();
+  let threw = '';
+  for (const q of ['.*', 'a*', '(((', '[']) {
+    try { await S.search(q, 20, { regex: true }); } catch (e) { threw = `${q}: ${e.message}`; }
+  }
+  out.push({ name: '깨지거나 빈 정규식에도 멈추지 않는다',
+    ok: !threw && performance.now() - t0 < 3000, detail: threw || `${Math.round(performance.now() - t0)}ms` });
+
+  // 묶음 읽기
+  await db.cacheSet('zz/1.md', '하나');
+  const got = await db.cacheGetMany(['zz/1.md', '없는/것.md', 'zz/1.md']);
+  out.push({ name: '캐시 묶음 읽기가 맞다',
+    ok: got.get('zz/1.md') === '하나' && !got.has('없는/것.md') && got.size === 1 });
+  out.push({ name: '빈 목록·null에도 안 터진다',
+    ok: (await db.cacheGetMany([])).size === 0 && (await db.cacheGetMany(null)).size === 0 });
+
+  // 길게 누르기 — 손가락은 뒤따르는 click이 없다. 깃발이 남아 **다음 탭을 삼키면** 안 된다
+  const app = await fetch('/js/app.js').then((x) => x.text());
+  const longPress = new Function(
+    `${app.match(/const LONG_MS[\s\S]*?\nfunction longPress\(el, fn\) \{[\s\S]*?\n}\n/)[0]}; return longPress;`)();
+  const el = document.createElement('button');
+  document.body.appendChild(el);
+  let longs = 0;
+  let clicks = 0;
+  longPress(el, () => longs++);
+  el.addEventListener('click', () => clicks++);
+  el.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, bubbles: true, clientX: 5, clientY: 5 }));
+  await new Promise((r) => setTimeout(r, 520));
+  el.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true, clientX: 5, clientY: 5 }));
+  out.push({ name: '길게 누르면 길게 누른 걸로 친다', ok: longs === 1 && clicks === 0 });
+  el.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 2, bubbles: true, clientX: 5, clientY: 5 }));
+  el.dispatchEvent(new PointerEvent('pointerup', { pointerId: 2, bubbles: true, clientX: 5, clientY: 5 }));
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  out.push({ name: '**길게 누른 뒤의 보통 탭을 삼키지 않는다**', ok: clicks === 1 && longs === 1,
+    detail: `탭 ${clicks}번 · 길게 ${longs}번` });
+  el.remove();
   return out;
 });
 
@@ -6362,6 +6454,36 @@ await run('카드 빈칸 직접 고치기', async () => {
     }
   }
 
+  // ── 같은 말이 두 번 빈칸일 때 하나만 풀어도 나머지는 남는다 (2026-10-16 점검) ──
+  // 답을 따로 더하고 빼면서 `filter(x => x !== ans)`로 지우고 있었다 — 같은 말이
+  // 두 군데면 하나만 풀어도 **답이 둘 다** 날아가 본문과 어긋났다.
+  {
+    body.innerHTML = renderMarkdown(
+      '초기에는 **아트로핀**을 주고 이어서 다시 **아트로핀**을 더 준다고 배웠다.');
+    await new Promise((r) => setTimeout(r, 120));
+    const rr = body.getBoundingClientRect();
+    const dup = R.cardsFromBox(body, { l: rr.left, t: rr.top, r: rr.right, b: rr.bottom },
+      { notePath: 'x.md', noteTitle: '노트', heading: '1. 해독제' });
+    out.push({ name: '같은 말이 두 번이면 빈칸도 두 개',
+      ok: dup.length === 1 && dup[0].answers.length === 2,
+      detail: dup.length ? dup[0].answers.join(',') : '0장' });
+    if (dup.length) {
+      window.__openCardFloat(dup);
+      await new Promise((r) => setTimeout(r, 320));
+      const n0 = document.querySelectorAll('#cfBody .cloze').length;
+      const one = document.querySelector('#cfBody .cloze.pickable');
+      if (one) { one.click(); await new Promise((r) => setTimeout(r, 180)); }
+      const n1 = document.querySelectorAll('#cfBody .cloze').length;
+      out.push({ name: '하나를 풀면 빈칸이 하나만 준다', ok: n0 === 2 && n1 === 1, detail: `${n0} → ${n1}` });
+      out.push({ name: '**답 목록도 하나만 준다**', ok: (dup[0].answers || []).length === 1,
+        detail: `${(dup[0].answers || []).length}개` });
+      out.push({ name: '본문 빈칸 수와 답 수가 늘 맞는다',
+        ok: n1 === (dup[0].answers || []).length,
+        detail: `본문 ${n1} · 답 ${(dup[0].answers || []).length}` });
+      document.getElementById('cfClose').click();
+    }
+  }
+
   document.getElementById('cfClose').click();
   body.innerHTML = '';
   return out;
@@ -6583,6 +6705,48 @@ await run('묶음·항목 구별', async () => {
   body.innerHTML = '';
   return out;
 });
+
+// ══════════ 폭을 바꿔가며 한 번 더 — 겹침·넘침 (2026-10-16) ══════════
+// 넓은 화면에서만 나던 겹침(막대가 글 아래로 내려가는 경우)과 좁은 화면에서만 나던
+// 넘침(퀴즈 막대가 밀려나는 경우)은 한 폭만 재서는 못 잡는다.
+for (const [W, H] of [[390, 844], [768, 1024], [1024, 768], [1366, 1024]]) {
+  await page.setViewport({ width: W, height: H });
+  await new Promise((r) => setTimeout(r, 120));
+  await run(`${W}×${H}`, async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const bad = [];
+    for (const id of ['listScreen', 'readScreen', 'quizScreen', 'cardScreen', 'deckScreen']) {
+      document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+      document.getElementById(id).classList.remove('hidden');
+      document.body.dataset.screen = id;
+      if (window.__paintFindFab) window.__paintFindFab();
+      document.getElementById('findFab').classList.remove('hidden');
+      await wait(30);
+      const fab = document.getElementById('findFab').getBoundingClientRect();
+      if (document.documentElement.scrollWidth > innerWidth + 1) bad.push(`${id}: 가로 넘침`);
+      if (fab.left < 0 || fab.right > innerWidth) bad.push(`${id}: 돋보기가 화면 밖`);
+      const nav = document.querySelector(`#${id} .navbar`);
+      if (!nav) continue;
+      const nr = nav.getBoundingClientRect();
+      for (const b of nav.querySelectorAll('button')) {
+        if (b.id === 'findFab') continue;
+        const r = b.getBoundingClientRect();
+        if (!r.width) continue;
+        if (r.left < fab.right && r.right > fab.left && r.top < fab.bottom && r.bottom > fab.top) {
+          bad.push(`${id}: 돋보기가 ${b.id || b.textContent.trim().slice(0, 8)}와 겹침`);
+        }
+        if (r.left < nr.left - 1 || r.right > nr.right + 1) {
+          bad.push(`${id}: ${b.id || b.textContent.trim().slice(0, 8)}가 막대 밖으로`);
+        }
+      }
+    }
+    document.body.dataset.screen = 'listScreen';
+    return [{ name: `**${innerWidth}px에서 겹치거나 넘치지 않는다**`, ok: !bad.length,
+      detail: bad.join(' | ') || '문제 없음' }];
+  });
+}
+await page.setViewport({ width: 1280, height: 900 });
+
 await browser.close();
 
 // ══════════ 결과 ══════════

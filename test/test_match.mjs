@@ -14,9 +14,9 @@ const ok = (n, c, d) => { if (c) pass++; else fail.push(`${n}${d ? ' — ' + d :
 
 const src = readFileSync(`${PWA}/js/wiki.js`, 'utf8')
   // github.js를 가짜 파일시스템으로 바꾼다 — globalThis.__FS/__TXT로 조종한다
-  .replace("import { listDir, getText } from './github.js';",
+  .replace(/import \{[^}]*\} from '\.\/github\.js';/,
     'const listDir=async(p)=>((globalThis.__FS||{})[p]||[]),getText=async(p)=>((globalThis.__TXT||{})[p]||"");')
-  .replace("import { linkedNoteFromMd } from './parser.js';", 'const linkedNoteFromMd=()=>null;');
+  .replace(/import \{[^}]*\} from '\.\/parser\.js';/, 'const linkedNoteFromMd=()=>null;');
 const shim = `${PWA}/js/__tm.mjs`;
 writeFileSync(shim, src);
 let W;
@@ -111,19 +111,44 @@ const secsOpt = [{ heading: '1. 미각성 비염', text: '콜린성 반사.\n(�
 ok('족보 오답 선지가 매칭을 끌고 가지 않는다',
   W.rankSections({ q: '비강 스테로이드의 안전성은?', opts: [], explain: '' }, secsOpt)[0].heading.startsWith('2.'));
 
+// ── 제목이 조금 바뀌어도 그 대목을 찾는다 (2026-10-16) ──
+// 노트는 계속 자라서 제목이 바뀐다. `13. 🔥 오늘 퀴즈 11문항 …`이 수업 뒤
+// `… 27문항 …`이 됐는데, 글자가 같아야만 찾던 탓에 참조가 **조용히 떨어져**
+// 노트 전체 자동매칭으로 넘어갔다 — 화면엔 엉뚱한 대목이 뜨고 왜인지 알 길이 없었다.
+{
+  const secs = [
+    { heading: '12. 소생 후 치료 [슬라이드 p.40]', text: 'a' },
+    { heading: '13. 🔥 오늘 퀴즈 27문항 · 증례 5건 [퀴즈 노트 56p · 슬라이드 p.43–46 · 전사문]', text: 'b' },
+    { heading: '14. 마무리', text: 'c' },
+  ];
+  const got = (w) => { const r = W.findHeading(secs, w); return r ? r.heading : null; };
+  ok('글자가 같으면 그대로', got('14. 마무리') === '14. 마무리');
+  ok('**숫자가 바뀌어도 같은 대목을 찾는다**',
+    got('13. 🔥 오늘 퀴즈 11문항 · 증례 4건 [슬라이드 p.43–46 · 전사문]') === secs[1].heading,
+    got('13. 🔥 오늘 퀴즈 11문항 · 증례 4건 [슬라이드 p.43–46 · 전사문]'));
+  ok('앞 번호가 같으면 그걸 믿는다', got('13. 아주 다르게 바뀐 제목') === secs[1].heading);
+  ok('번호가 없어도 많이 닮으면 찾는다', got('소생 후 치료 [슬라이드 p.40]') === secs[0].heading);
+  ok('남남은 안 찾는다(엉뚱한 대목을 들이밀지 않는다)', got('완전히 관계없는 다른 이야기') === null,
+    got('완전히 관계없는 다른 이야기'));
+  ok('빈 제목도 안 터진다', W.findHeading(secs, '') === null && W.findHeading([], '가') === null);
+}
+
 // ── wikiRefs(수동 지정) 경로 — 2026-10-09 도입. 자동 매칭보다 **항상** 우선해야 한다.
 {
+  // ⚠️ 문항 수를 숫자로 박아두면 **시험이 자라는 순간 거짓 경보**가 된다
+  //    (ACLS가 13→19문항이 되면서 하루 종일 빨간불이었다 — 2026-10-16).
+  //    여기서 볼 것은 "몇 개냐"가 아니라 **빠진 문항이 없느냐**다. 최소 개수만 못박는다.
   const labeled = [
     ['응급_중환자/1015_전문심장소생술ACLS_모의고사', 13],
     ['응급_중환자/1012_환경의학_모의고사', 18],
     ['두경부_피부/0929_두경부피부_알레르기비염부비동염비부비동종양_모의고사', 6],
   ];
-  for (const [exam, n] of labeled) {
+  for (const [exam, least] of labeled) {
     const h = readFileSync(`${V}/06_모의고사/${exam}.html`, 'utf8');
     const qs = JSON.parse(h.match(/const QUESTIONS = (\[[\s\S]*?\]);\s*\nconst LECTURE_NAME/)[1]);
     const withRefs = qs.filter((q) => Array.isArray(q.wikiRefs) && q.wikiRefs.length);
     ok(`${exam.split('/')[1].slice(0, 24)}: 전 문항에 wikiRefs`,
-      withRefs.length === qs.length && qs.length === n, `${withRefs.length}/${qs.length}`);
+      withRefs.length === qs.length && qs.length >= least, `${withRefs.length}/${qs.length}`);
 
     // 지정한 heading이 노트에 실제로 있어야 한다 — 오타 하나면 앱이 조용히 자동매칭으로 떨어진다
     let bad = 0;

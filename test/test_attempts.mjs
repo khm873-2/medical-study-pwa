@@ -15,9 +15,9 @@ const A = await import(pathToFileURL(`${PWA}/js/attempts.js`).href);
 // reader.js는 브라우저 모듈을 import하므로 스텁으로 치환한 복사본을 쓴다.
 global.document = { createElement: () => ({ className: '', textContent: '' }), addEventListener() {}, removeEventListener() {} };
 const src = readFileSync(`${PWA}/js/reader.js`, 'utf8')
-  .replace("import { listDir, getText, getBlobUrl } from './github.js';",
+  .replace(/import \{[^}]*\} from '\.\/github\.js';/,
     'const listDir=async()=>[],getText=async()=>"",getBlobUrl=async()=>"";')
-  .replace("import { kvGet, kvSet } from './db.js';",
+  .replace(/import \{[^}]*\} from '\.\/db\.js';/,
     'const _kv={};const kvGet=async(k)=>_kv[k],kvSet=async(k,v)=>{_kv[k]=v;};');
 const shim = `${PWA}/js/__t_att.mjs`;
 writeFileSync(shim, src);

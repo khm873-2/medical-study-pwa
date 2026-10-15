@@ -117,9 +117,12 @@ check('linkedNoteFromMd', linkedNoteFromMd(mdSample) === '1012_응급중환자_�
 // quiz.js는 브라우저 전용 모듈(db.js/github.js)을 import하므로, 그 두 줄만 스텁으로 바꾼
 // 복사본을 같은 폴더에 써서 로드한다(parser.js는 상대경로 그대로 해결되게).
 const quizSrc = readFileSync(`${PWA}/js/quiz.js`, 'utf8')
-  .replace("import { getBlobUrl } from './github.js';", 'const getBlobUrl = async () => "blob:fake";')
-  .replace("import { saveSession, loadSession, clearSession } from './db.js';",
-    'const saveSession=async()=>{},loadSession=async()=>null,clearSession=async()=>{};');
+  .replace(/import \{[^}]*\} from '\.\/github\.js';/, 'const getBlobUrl = async () => "blob:fake";')
+  // quiz.js가 db.js에서 가져오는 이름이 늘어났는데(recordAttempt·markUnsure) 가짜가
+  // 세 개뿐이라 모자랐다 — 지금 import에 적힌 이름을 **그대로 읽어** 다 만들어준다.
+  .replace(/import \{([^}]*)\} from '\.\/db\.js';/, (_m, names) => names.split(',')
+    .map((n) => n.trim()).filter(Boolean)
+    .map((n) => `const ${n}=async()=>(${n === 'loadSession' ? 'null' : 'undefined'});`).join(''));
 const shimPath = `${PWA}/js/__test_quiz_shim.mjs`;
 writeFileSync(shimPath, quizSrc);
 let Quiz;

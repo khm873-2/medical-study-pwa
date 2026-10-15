@@ -675,6 +675,17 @@ export function cardsFromBox(root, box, meta = {}) {
     if (!unitOf.has(host)) { unitOf.set(host, []); units.push(host); }
     unitOf.get(host).push(block);
   }
+  // 한 단위가 다른 단위를 품고 있으면(목록 항목 안의 표 따위) 안쪽은 뺀다 —
+  // 그냥 두면 같은 글이 카드에 두 번 실린다. 바깥 것이 안쪽 것을 이미 담고 있다.
+  for (let i = units.length - 1; i >= 0; i--) {
+    const inner = units[i];
+    if (!units.some((u) => u !== inner && u.contains && u.contains(inner))) continue;
+    // 안쪽 블록의 강조는 바깥 단위가 그릴 때 함께 처리되도록 넘긴다
+    const host = units.find((u) => u !== inner && u.contains(inner));
+    unitOf.get(host).push(...unitOf.get(inner));
+    unitOf.delete(inner);
+    units.splice(i, 1);
+  }
 
   const answers = [];
   const parts = [];
@@ -818,6 +829,9 @@ export function isLabel(el, text) {
  *   · 조사·서술어(이, 는, 한다)             — 가리면 문장이 깨진다. 0점.
  */
 export function wordScore(t) {
+  // null·undefined가 String()을 거치면 "null"·"undefined"가 되어 **영문 용어로 3점**을
+  // 받는다(2026-10-16 점검에서 드러남). 글자가 아닌 건 먼저 쳐낸다.
+  if (typeof t !== 'string' && typeof t !== 'number') return 0;
   const w = String(t).trim();
   if (!w) return 0;
   // 괄호는 앞말에 딸린 원어다("함몰(umbilication)") — 혼자 뽑히면 엉뚱하다.

@@ -105,15 +105,35 @@ function show(id) {
 
 // 찾을 것이 없는 화면에서는 안 띄운다 — 설정·첫 연결 화면에는 찾을 게 없다
 const NO_FIND = new Set(['setupScreen']);
+
+/**
+ * 늘 떠 있는 돋보기를 지금 화면에 맞춰 세운다.
+ *
+ * **막대가 있으면 막대 안으로 들어간다.** 처음에는 화면에 고정해 띄웠는데, 넓은 화면
+ * (900px 이상)에서는 읽기·퀴즈의 아래 막대가 화면에 붙어 있지 않고 **글 아래에 놓인다**
+ * (position: static). 그래서 고정 단추가 막대의 `‹` 위에 그대로 올라탔다
+ * (2026-10-16 다섯 가지 화면폭 점검에서 드러남). 막대의 **자식**으로 넣으면
+ * 막대가 어디에 있든 첫 단추 자리에 알아서 선다.
+ */
 function paintFindFab() {
   const el = document.getElementById('findFab');
   if (!el) return;
+  const screen = document.body.dataset.screen || '';
   // "찾는 중" 표시는 **창이 실제로 떠 있는지**를 보고 다시 맞춘다. 어디선가 창만
   // 숨기고 closeSearch를 안 부르면 돋보기가 영영 안 돌아오기 때문이다.
   const sheet = document.getElementById('searchSheet');
   document.body.classList.toggle('finding', !!sheet && !sheet.classList.contains('hidden'));
-  el.classList.toggle('hidden', NO_FIND.has(document.body.dataset.screen || ''));
+  el.classList.toggle('hidden', NO_FIND.has(screen));
+
+  const sec = screen ? document.getElementById(screen) : null;
+  const bar = sec ? sec.querySelector('.navbar') : null;
+  const host = bar || document.body;
+  if (el.parentElement !== host) host.insertBefore(el, bar ? host.firstChild : null);
+  el.classList.toggle('in-bar', !!bar);
 }
+// 창 크기가 바뀌면 막대가 떠 있던 것이 글 아래로 내려가거나 그 반대가 된다 — 다시 세운다
+window.addEventListener('resize', paintFindFab);
+window.__paintFindFab = paintFindFab;     // 화면폭 점검이 이 길로 부른다
 
 // ---------- 테마 · 표시 설정 ----------
 async function applyTheme() {
@@ -4338,16 +4358,29 @@ function cleanPickHtml(root) {
   return c.innerHTML;
 }
 
+/**
+ * 고친 화면을 카드에 반영한다 — **답은 본문에서 읽어온다**.
+ *
+ * 전에는 답 목록을 따로 더하고 뺐는데, 빼는 쪽이 `filter(x => x !== ans)` 였다.
+ * 같은 말이 두 군데 빈칸이면(`아트로핀 … 아트로핀`) 하나만 풀어도 **답이 둘 다** 날아가,
+ * 본문에는 빈칸이 하나 남았는데 답은 0개가 됐다(2026-10-16 점검). 본문이 곧 답이므로
+ * 매번 본문에서 다시 읽는다 — 어긋날 길이 없다.
+ */
+function syncCardFromDom(root, card) {
+  card.contextHtml = cleanPickHtml(root);
+  card.answers = [...root.querySelectorAll('.cloze')]
+    .map((el) => el.dataset.answer || '')
+    .filter(Boolean);
+}
+
 function makeWordsTappable(root, card) {
   // ① 이미 빈칸인 것 — 누르면 되돌린다
   root.querySelectorAll('.cloze').forEach((el) => {
     el.classList.add('pickable');
     el.onclick = (e) => {
       e.stopPropagation();
-      const ans = el.dataset.answer || '';
-      el.replaceWith(document.createTextNode(ans));
-      card.answers = (card.answers || []).filter((x) => x !== ans);
-      card.contextHtml = cleanPickHtml(root);
+      el.replaceWith(document.createTextNode(el.dataset.answer || ''));
+      syncCardFromDom(root, card);
       renderCfNew();
     };
   });
@@ -4374,8 +4407,7 @@ function makeWordsTappable(root, card) {
       w.onclick = (e) => {
         e.stopPropagation();
         w.replaceWith(blankSpan(piece));
-        card.answers = [...(card.answers || []), piece];
-        card.contextHtml = cleanPickHtml(root);
+        syncCardFromDom(root, card);
         renderCfNew();
       };
       frag.appendChild(w);
@@ -4519,17 +4551,20 @@ function toggleCfPick(id) {
  */
 const LONG_MS = 420;
 const LONG_SLOP = 10;
+const LONG_EAT = 700;      // 길게 누른 직후 **이 안에** 오는 click만 삼킨다
 function longPress(el, fn) {
   let timer = null;
   let at = null;
+  let firedAt = 0;
   const stop = () => { if (timer) { clearTimeout(timer); timer = null; } };
   el.addEventListener('pointerdown', (e) => {
     if (e.button > 0) return;
+    firedAt = 0;              // 새로 누르는 순간 지난 자국은 지운다
     at = { x: e.clientX, y: e.clientY };
     stop();
     timer = setTimeout(() => {
       timer = null;
-      el.dataset.longfired = '1';       // 뒤따라오는 click을 삼킨다
+      firedAt = Date.now();
       fn();
     }, LONG_MS);
   });
@@ -4537,8 +4572,16 @@ function longPress(el, fn) {
     if (at && Math.hypot(e.clientX - at.x, e.clientY - at.y) > LONG_SLOP) stop();
   });
   for (const t of ['pointerup', 'pointercancel', 'pointerleave']) el.addEventListener(t, stop);
+  // ⚠️ 깃발을 세워두고 **다음 click에서 내리는** 방식이면 안 된다. 손가락으로 길게 누르면
+  //    뒤따르는 click이 **아예 안 온다** — 깃발이 그대로 남아 그다음 진짜 탭을 삼킨다
+  //    (2026-10-16 점검에서 재현: 길게 누른 뒤 보통 탭이 안 먹혔다). 시각으로 재서
+  //    바로 뒤에 온 click만 삼키고, 늦게 온 것은 그냥 보낸다.
   el.addEventListener('click', (e) => {
-    if (el.dataset.longfired) { delete el.dataset.longfired; e.stopPropagation(); e.preventDefault(); }
+    if (firedAt && Date.now() - firedAt < LONG_EAT) {
+      firedAt = 0;
+      e.stopPropagation();
+      e.preventDefault();
+    }
   }, true);
   el.addEventListener('contextmenu', (e) => { e.preventDefault(); fn(); });
 }

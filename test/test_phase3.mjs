@@ -63,8 +63,8 @@ ok('HTML 이스케이프', !xss.includes('<script>'), xss);
 
 // ── wiki.js (네트워크 부분 제외한 순수 함수) ──
 const wikiSrc = readFileSync(`${PWA}/js/wiki.js`, 'utf8')
-  .replace("import { listDir, getText } from './github.js';", 'const listDir=async()=>[],getText=async()=>"";')
-  .replace("import { linkedNoteFromMd } from './parser.js';", 'const linkedNoteFromMd=()=>null;');
+  .replace(/import \{[^}]*\} from '\.\/github\.js';/, 'const listDir=async()=>[],getText=async()=>"";')
+  .replace(/import \{[^}]*\} from '\.\/parser\.js';/, 'const linkedNoteFromMd=()=>null;');
 const shim = `${PWA}/js/__t_wiki.mjs`;
 writeFileSync(shim, wikiSrc);
 let W;

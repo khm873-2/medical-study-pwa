@@ -317,6 +317,43 @@ export function fitLabel(fit) {
 }
 
 /**
+ * 노트에서 그 대목을 찾는다 — **제목이 조금 바뀌었어도** 찾아낸다.
+ *
+ * 전에는 글자가 똑같아야만 찾았다. 그런데 노트는 계속 자라서 제목이 바뀐다 —
+ * `13. 🔥 오늘 퀴즈 11문항 · 증례 4건 […]`이 수업 뒤 `… 27문항 · 증례 5건 […]`이 됐다.
+ * 그러면 시험에 적어둔 참조가 **조용히 떨어져** 노트 전체 자동매칭으로 넘어간다 —
+ * 화면에는 엉뚱한 대목이 뜨는데 왜 그런지 알 길이 없다(2026-10-16 점검).
+ *
+ * 그래서 세 단계로 본다: 글자가 같은 것 → **앞 번호가 같은 것**(`13.`) → 많이 닮은 것.
+ * 번호는 제목이 바뀌어도 잘 안 바뀌는 데다 노트 안에서 유일하다.
+ */
+const HEAD_FIT = 0.55;
+export function findHeading(sections, want) {
+  const w = String(want || '').trim();
+  if (!w) return null;
+  const exact = sections.find((s) => s.heading.trim() === w);
+  if (exact) return exact;
+  const num = w.match(/^\s*(\d+(?:[.-]\d+)*)\s*[.)]?\s/);
+  if (num) {
+    const same = sections.filter((s) => {
+      const m = s.heading.match(/^\s*(\d+(?:[.-]\d+)*)\s*[.)]?\s/);
+      return m && m[1] === num[1];
+    });
+    if (same.length === 1) return same[0];
+    if (same.length > 1) {
+      return same.reduce((a, b) => (nameSimilarity(w, b.heading) > nameSimilarity(w, a.heading) ? b : a));
+    }
+  }
+  let best = null;
+  let bestSim = 0;
+  for (const s of sections) {
+    const sim = nameSimilarity(w, s.heading);
+    if (sim > bestSim) { bestSim = sim; best = s; }
+  }
+  return bestSim >= HEAD_FIT ? best : null;
+}
+
+/**
  * 문항에 대한 위키 참조를 만든다.
  * @returns {{noteName, notePath, sections:[{heading,text,score}], auto:boolean}|null}
  */
@@ -329,7 +366,7 @@ export async function wikiFor(question, examHtmlPath) {
       const md = await getText(path);
       const all = splitSections(md);
       const picked = question.wikiRefs
-        .map((r) => all.find((s) => s.heading.trim() === String(r.heading).trim()))
+        .map((r) => findHeading(all, String(r.heading)))
         .filter(Boolean)
         .map((s) => ({ ...s, score: 1, fit: 1 }));
       if (picked.length) {
