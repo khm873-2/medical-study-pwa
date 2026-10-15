@@ -846,8 +846,9 @@ function renderDaySection(body, pool, index, attempts, noteGroups) {
   const lectures = pool.filter((l) => l.date === cur);
   const want = `26${cur.slice(5, 7)}${cur.slice(8, 10)}`;      // YYMMDD
   const usedExams = new Set();
+  const byLecture = assignExams(index, lectures, want);
 
-  lectures.forEach((l) => {
+  lectures.forEach((l, li) => {
     const row = document.createElement('div');
     row.className = 'today-lec';
     const head = document.createElement('div');
@@ -872,10 +873,15 @@ function renderDaySection(body, pool, index, attempts, noteGroups) {
     if (l.note) chip('📖 예습노트', () => openNoteByName(l.note, { groups: noteGroups }));
 
     // 이 강의의 모의고사·퀴즈 — 전에는 맨 아래 한 뭉치라 어느 강의 것인지 몰랐다
-    for (const { g, ex } of examsForLecture(index, l, want)) {
+    const mine = byLecture.get(li) || [];
+    // 같은 종류가 두 개면 칩에 주제까지 적는다 — "퀴즈" 두 개로는 뭐가 뭔지 모른다
+    const twice = new Set(mine.map(({ g }) => g.kind)
+      .filter((k, i, a) => a.indexOf(k) !== i));
+    for (const { g, ex } of mine) {
       usedExams.add(ex.path);
       const p = examProgress(attempts, ex.path);
       chip(`${g.kind === '퀴즈' ? '📝' : '🧪'} ${g.kind}`
+        + (twice.has(g.kind) ? ` · ${prettyExamName(ex.file)}` : '')
         + (p.seen ? ` ${p.solid}/${p.seen}${p.weak ? ` · 약함 ${p.weak}` : ''}` : ''),
       () => openExam(g.subject, ex), 'exam');
     }
@@ -928,7 +934,7 @@ function subjectOfLecture(index, lecture) {
 }
 
 /**
- * 이 강의의 모의고사·퀴즈를 찾는다.
+ * 그날의 모의고사·퀴즈를 강의마다 나눠 붙인다.
  *
  * 전에는 **그날의 시험 전부를 맨 아래 한 뭉치로** 보여줬다 — 강의가 하루 3개면
  * 어느 게 어느 강의 것인지 알 수가 없어서 사실상 바로가기가 아니었다(2026-10-13 지적).
@@ -936,18 +942,44 @@ function subjectOfLecture(index, lecture) {
  *
  *   "기본소생술(BLS)"        ↔ 1012_기본소생술BLS_모의고사.html
  *   "응급의료체계 및 재난의학"  ↔ 261012_김종선_응급의료체계및재난의학_퀴즈.html
+ *
+ * 그런데 강의마다 "닮은 시험"을 긁어모으게 했더니 **한 시험이 여러 강의에 겹쳐 붙었다**.
+ * "임상독성학총론"과 "임상독성학각론"은 서로 0.67만큼 닮아서(문턱 0.5) 두 줄이 서로의
+ * 퀴즈까지 집어갔고, 총론 줄의 퀴즈 칩 두 개 중 하나를 누르면 각론 문제가 나왔다
+ * (2026-10-15 지적). 그래서 방향을 뒤집는다 — **시험 쪽에서 가장 닮은 강의를 고른다**.
+ * 총론 퀴즈는 총론과 1, 각론과 0.67이라 총론 줄에만 붙는다.
+ *
+ * 다만 **제일 닮은 강의가 둘이면 둘 다에 붙인다**. 두 시간을 한 파일로 묶은 시험이
+ * 있어서다 — `1013_임상독성학_모의고사.html`은 총론·각론 어느 쪽과도 똑같이 1이고,
+ * 실제로 두 시간 내용을 같이 담고 있다. 여기서 한 줄만 고르면 나머지 줄의 모의고사가
+ * 사라진다. 어느 강의에도 0.5를 못 넘긴 시험은 아래 "이 날짜의 다른 자료"로 간다.
+ *
+ * @returns {Map<number, Array<{g, ex, sim}>>} lectures의 인덱스 → 그 줄에 붙을 시험들
  */
-function examsForLecture(index, lecture, dayKeyYYMMDD) {
-  const out = [];
+const SAME_SIM = 1e-9;      // Dice 값이 사실상 같은가 — 부동소수 오차만 흡수한다
+function assignExams(index, lectures, dayKeyYYMMDD) {
+  const out = new Map();
   for (const g of index) {
     if (g.kind === '족보') continue;                  // 족보는 날짜가 아니라 챕터로 붙는다
     for (const ex of g.exams) {
       if (examSortKey(ex.file) !== dayKeyYYMMDD) continue;
-      const sim = nameSimilarity(lecture.name, prettyExamName(ex.file));
-      if (sim >= 0.5) out.push({ g, ex, sim });
+      const topic = prettyExamName(ex.file);
+      const sims = lectures.map((l) => nameSimilarity(l.name, topic));
+      const bestSim = Math.max(0, ...sims);
+      if (bestSim < 0.5) continue;
+      sims.forEach((sim, i) => {
+        if (sim < bestSim - SAME_SIM) return;
+        if (!out.has(i)) out.set(i, []);
+        out.get(i).push({ g, ex, sim });
+      });
     }
   }
-  return out.sort((a, b) => b.sim - a.sim);
+  // 한 강의 안에서는 모의고사가 먼저, 그 다음 더 닮은 것부터
+  for (const list of out.values()) {
+    list.sort((a, b) => (a.g.kind === b.g.kind ? b.sim - a.sim
+      : a.g.kind === '모의고사' ? -1 : 1));
+  }
+  return out;
 }
 
 /** 시간표의 `가공족보` 칸(파일명)으로 족보 챕터를 찾는다. */
@@ -982,6 +1014,29 @@ function showJokboIntro(intro, subject) {
 }
 
 // ---------- 시험 열기 ----------
+/**
+ * 머리줄에 적을 제목 — 파일 안의 제목이 **딴 강의를 가리키면 안 쓴다**.
+ *
+ * 임상독성학각론 퀴즈를 열었는데 머리줄에 "소아기본소생술 PBLS 및 이물질 기도폐쇄 (차민수)"가
+ * 떴다(2026-10-15 지적). 문항은 아세트아미노펜인데 머리줄만 딴소리라 **지금 뭘 풀고 있는지**를
+ * 알 수 없었다. 파일을 열어보니 `<h1>`만 앞 강의에서 베껴온 채였다 — vault의 퀴즈 128개 중
+ * **8개가 같은 PBLS 머리말을 달고 있었다**. 같은 파일의 `<title>`("임상독성학 각론 퀴즈 —
+ * 윤성현 교수")과 `LECTURE_NAME`은 멀쩡했다. 손으로 베끼는 건 머리말이고, 나머지 둘은
+ * 만드는 쪽에서 박아 넣는 값이라 그렇다.
+ *
+ * 그래서 **기준을 LECTURE_NAME**으로 두고(없으면 파일 이름) 후보를 h1 → title →
+ * LECTURE_NAME 순으로 훑어 기준과 말이 되는 첫 번째를 쓴다. 128개를 다 재보니 베껴온
+ * 머리말은 기준과 0.00~0.19였고 멀쩡한 머리말은 0.38 위였다 — 그 사이인 0.3에서 끊는다.
+ */
+const TITLE_FIT = 0.3;
+function examTitle(parsed, fromFile) {
+  const cands = (parsed.titles || [parsed.title])
+    .map((t) => String(t || '').trim()).filter(Boolean);
+  const anchor = String(parsed.lectureName || '').trim() || fromFile;
+  if (!anchor) return cands[0] || '';
+  return cands.find((t) => nameSimilarity(t, anchor) >= TITLE_FIT) || fromFile || anchor;
+}
+
 async function openExam(subject, ex) {
   const body = document.getElementById('listBody');
   const prev = body.innerHTML;
@@ -992,11 +1047,11 @@ async function openExam(subject, ex) {
     // 사이드 노트·이어풀기)는 그대로 돈다.
     const isJokbo = (ex.kind || '') === '족보';
     const parsed = isJokbo ? parseJokbo(raw, ex.path) : parseExamHtml(raw);
-    const { questions, title } = parsed;
+    const { questions } = parsed;
     showJokboIntro(isJokbo ? parsed.intro : '', subject);
     if (!questions.length) throw new Error('이 파일에서 문항을 찾지 못했습니다.');
     const fallbackTitle = isJokbo ? chapterTitle(ex.file) : prettyExamName(ex.file);
-    currentExam = { subject, file: ex.file, path: ex.path, title: title || fallbackTitle,
+    currentExam = { subject, file: ex.file, path: ex.path, title: examTitle(parsed, fallbackTitle),
       kind: ex.kind || '' };
 
     if (quiz) quiz.destroy();

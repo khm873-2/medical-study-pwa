@@ -96,14 +96,28 @@ export function parseExamHtml(html) {
   good.forEach((q, i) => { q.num = q.num || i + 1; });
 
   const lm = html.match(LECTURE_RE);
-  return { questions: good, lectureName: lm ? lm[1] : '', title: extractTitle(html), dropped: items.length - good.length };
+  const lectureName = lm ? lm[1] : '';
+  const titles = titleCandidates(html, lectureName);
+  return { questions: good, lectureName, title: titles[0] || '', titles,
+    dropped: items.length - good.length };
 }
 
-function extractTitle(html) {
+/**
+ * 제목 후보를 **믿을 만한 순서로** 모은다.
+ *
+ * 하나만 뽑지 않는 이유(2026-10-15): 퀴즈 HTML을 베껴 만들면서 `<h1>`만 앞 강의 것이
+ * 남은 파일이 있다 — 임상독성학 총론·각론 퀴즈 둘 다 머리말이 "소아기본소생술 PBLS…"다.
+ * 같은 파일의 `<title>`과 `LECTURE_NAME`은 멀쩡하므로, 부르는 쪽(app.js의 examTitle)이
+ * 파일 이름과 견줘 **말이 되는 첫 후보**를 고를 수 있게 셋 다 넘긴다.
+ */
+function titleCandidates(html, lectureName) {
+  const out = [];
   const h1 = html.match(/<h1>([^<]*)<\/h1>/);
-  if (h1) return cleanTitle(h1[1]);
+  if (h1) out.push(cleanTitle(h1[1]));
   const t = html.match(/<title>([^<]*)<\/title>/);
-  return t ? cleanTitle(t[1]) : '';
+  if (t) out.push(cleanTitle(t[1]));
+  if (lectureName) out.push(cleanTitle(lectureName));
+  return out.filter(Boolean);
 }
 
 /**

@@ -273,6 +273,104 @@ check('retryWrong: 답안 비워짐', q2.order.every((i) => q2.answers[i] === nu
   check('옛 slice(0, 40) 방식이 남아있지 않다', !/slug\s*=\s*\(ctx\.title/.test(src));
 }
 
+// ---------- 오늘 탭: 시험을 강의에 붙이기 ----------
+// 2026-10-15: "퀴즈가 두개나 있고 누르니까 다른강의가 나옴".
+// 임상독성학총론 ↔ 임상독성학각론은 이름이 0.67만큼 닮아서, 강의마다 "닮은 시험"을
+// 긁어모으던 옛 방식에서는 두 줄이 서로의 퀴즈까지 집어갔다.
+{
+  const src = readFileSync(`${PWA}/js/app.js`, 'utf8');
+  const { nameSimilarity } = await import(`${PWA}/js/wiki.js`);
+  const { examSortKey } = await import(`${PWA}/js/parser.js`);
+
+  const fn = src.match(/const SAME_SIM[\s\S]*?\n}\n/);
+  check('app.js에 assignExams가 있다', !!fn);
+  check('강의마다 긁어모으던 옛 함수는 없앴다', !/function examsForLecture/.test(src));
+  if (fn) {
+    // eslint-disable-next-line no-eval
+    const assignExams = eval(
+      `(() => { ${fn[0]} return assignExams; })()`,
+    );
+    const quiz = (file) => ({ file, path: `05_퀴즈/응급_중환자/${file}` });
+    const index = [
+      // 임상독성학 모의고사는 총론·각론을 한 파일로 묶은 실제 파일이다
+      { kind: '모의고사', subject: '응급_중환자', exams: [
+        quiz('1013_임상독성학_모의고사.html'),
+        quiz('1013_소아기본소생술PBLS_모의고사.html'),
+      ] },
+      { kind: '퀴즈', subject: '응급_중환자', exams: [
+        quiz('261013_윤성현_임상독성학총론_퀴즈.html'),
+        quiz('261013_윤성현_임상독성학각론_퀴즈.html'),
+        quiz('261013_차민수_소아기본소생술PBLS이물질기도폐쇄_퀴즈.html'),
+      ] },
+      { kind: '족보', subject: '응급_중환자', exams: [quiz('06_임상독성학총론.md')] },
+    ];
+    const lectures = [
+      { name: '소아기본소생술(PBLS), 이물질 기도폐쇄' },
+      { name: '임상독성학총론' },
+      { name: '임상독성학각론' },
+    ];
+    const got = assignExams(index, lectures, '261013');
+    const names = (i) => (got.get(i) || []).map(({ ex }) => ex.file);
+
+    check('총론 줄에 퀴즈는 하나', names(1).filter((f) => f.includes('퀴즈')).length === 1,
+      names(1).join(', '));
+    check('총론 줄의 퀴즈는 총론 것', names(1).some((f) => f.includes('총론_퀴즈')));
+    check('각론 줄의 퀴즈는 각론 것',
+      names(2).filter((f) => f.includes('퀴즈')).join() === '261013_윤성현_임상독성학각론_퀴즈.html',
+      names(2).join(', '));
+    check('PBLS 줄은 제 퀴즈만',
+      names(0).filter((f) => f.includes('퀴즈')).join()
+        === '261013_차민수_소아기본소생술PBLS이물질기도폐쇄_퀴즈.html', names(0).join(', '));
+    check('모의고사가 퀴즈보다 앞', names(1)[0].includes('모의고사'), names(1).join(', '));
+    check('족보는 날짜로 붙지 않는다', ![...got.values()].flat().some(({ g }) => g.kind === '족보'));
+    // 두 시간을 묶은 모의고사는 양쪽에 남는다 — 퀴즈처럼 한 줄로 몰면 한 줄이 빈다
+    check('총론·각론 둘 다 모의고사가 있다',
+      names(1).some((f) => f.includes('임상독성학_모의고사'))
+      && names(2).some((f) => f.includes('임상독성학_모의고사')));
+    check('퀴즈는 겹치지 않는다',
+      [...got.values()].flat().filter(({ ex }) => ex.file.includes('퀴즈')).length === 3);
+    check('다른 날 시험은 안 붙는다', assignExams(index, lectures, '261014').size === 0);
+  }
+
+  // 파일 안 제목이 딴 강의를 가리키면 안 쓴다 — vault 퀴즈 8개의 <h1>이 실제로 그랬다
+  const tf = src.match(/const TITLE_FIT[\s\S]*?\n}\n/);
+  check('app.js에 examTitle이 있다', !!tf);
+  if (tf) {
+    // eslint-disable-next-line no-eval
+    const examTitle = eval(`(() => { ${tf[0]} return examTitle; })()`);
+    const pbls = '소아기본소생술 PBLS 및 이물질 기도폐쇄 (차민수)';
+    check('머리말이 딴 강의면 다음 후보로',
+      examTitle({ titles: [pbls, '임상독성학 각론 퀴즈 — 윤성현 교수', '임상독성학각론'],
+        lectureName: '임상독성학각론' }, '임상독성학각론') === '임상독성학 각론 퀴즈 — 윤성현 교수');
+    check('전부 딴소리면 파일 이름',
+      examTitle({ titles: [pbls], lectureName: '임상독성학각론' }, '임상독성학각론') === '임상독성학각론');
+    check('닮은 머리말은 그대로 쓴다',
+      examTitle({ titles: ['기본소생술(BLS) 모의고사'], lectureName: '기본소생술BLS' }, '기본소생술BLS')
+        === '기본소생술(BLS) 모의고사');
+    check('LECTURE_NAME이 없으면 파일 이름이 기준',
+      examTitle({ titles: ['중이염 모의고사'] }, '두경부피부_중이염') === '중이염 모의고사');
+    check('후보가 없으면 파일 이름', examTitle({ titles: [] }, '임상독성학각론') === '임상독성학각론');
+    check('족보처럼 title 하나만 와도 된다',
+      examTitle({ title: '중이염 모의고사' }, '중이염') === '중이염 모의고사');
+
+    // 실제 vault 파일로 끝까지 — 베껴온 <h1> 대신 제 강의 이름이 나와야 한다
+    const quizDir = `${VAULT}/05_퀴즈/응급_중환자`;
+    for (const [file, want] of [
+      ['261013_윤성현_임상독성학각론_퀴즈.html', '각론'],
+      ['261013_윤성현_임상독성학총론_퀴즈.html', '총론'],
+      ['261013_차민수_소아기본소생술PBLS및이물질기도폐쇄_퀴즈.html', '소아기본소생술'],
+    ]) {
+      let html = null;
+      try { html = readFileSync(`${quizDir}/${file}`, 'utf8'); } catch { /* vault 없는 환경 */ }
+      if (!html) continue;
+      const parsed = parseExamHtml(html);
+      const t = examTitle(parsed, prettyExamName(file));
+      check(`${want} 퀴즈 머리줄이 제 강의 — ${t}`,
+        t.includes(want) && (want === '소아기본소생술' || !t.includes('소아기본소생술')));
+    }
+  }
+}
+
 // ---------- 결과 ----------
 console.log(`\n통과 ${pass}건`);
 if (fail.length) {
