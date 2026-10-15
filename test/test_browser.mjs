@@ -1187,17 +1187,22 @@ await run('카드 만들기', async () => {
     '| 2 | 비전형 대퇴골절 | 재평가 + **whole body bone scan** 으로 확인 |',
   ].join('\n'));
   cards = cardsFromBox(body, whole(), meta);
-  out.push({ name: '표는 행마다 카드 한 장', ok: cards.length === 2, detail: `${cards.length}장` });
+  // 네모 친 범위는 통째로 한 장이다 (2026-10-16 요청) — 표를 두 번 그리지도 않는다
+  out.push({ name: '**네모 친 범위가 한 장으로 나온다**', ok: cards.length === 1, detail: `${cards.length}장` });
   out.push({ name: '카드 종류가 table', ok: cards.every((c) => c.kind === 'table') });
   const holder = document.createElement('div');
   holder.innerHTML = cards[0].contextHtml;
   out.push({ name: '표 전체가 살아 있다', ok: !!holder.querySelector('table') });
+  out.push({ name: '**표를 두 번 그리지 않는다**', ok: holder.querySelectorAll('table').length === 1,
+    detail: `${holder.querySelectorAll('table').length}개` });
   out.push({ name: '표의 모든 행이 들어 있다', ok: holder.querySelectorAll('tr').length === 3,
     detail: `${holder.querySelectorAll('tr').length}행` });
-  out.push({ name: '묻는 행이 표시된다', ok: !!holder.querySelector('tr.card-row-focus') });
+  out.push({ name: '묻는 행이 표시된다', ok: holder.querySelectorAll('tr.card-row-focus').length === 2,
+    detail: `${holder.querySelectorAll('tr.card-row-focus').length}행` });
   out.push({ name: '빈칸이 그 행 안에 있다', ok: !!holder.querySelector('tr.card-row-focus .cloze') });
-  out.push({ name: '다른 행은 가려지지 않는다(비교용으로 남는다)',
-    ok: holder.querySelectorAll('.cloze').length === 1 });
+  out.push({ name: '고른 두 칸이 다 빈칸이 된다',
+    ok: holder.querySelectorAll('.cloze').length === 2 && cards[0].answers.length === 2,
+    detail: cards[0].answers.join(' / ') });
   out.push({ name: '머리글(#·진단·치료)은 그대로', ok: /진단/.test(holder.textContent) && /치료/.test(holder.textContent) });
 
   // ── 카드에 어느 대목인지 달려 나온다 ──
@@ -1333,16 +1338,56 @@ await run('카드 만들기', async () => {
   out.push({ name: '{{ }}가 없으면 평소대로 굵게·하이라이트',
     ok: au[0].answers.join(',') === '여름철 소아,딱지', detail: au[0].answers.join(',') });
 
-  // ── 한 카드에 너무 많이 묻지 않는다 (최소 정보 원칙) ──
+  // ── 고른 범위는 쪼개지 않는다 (2026-10-16 요청) ──
+  // "적어도 내가 선택한 범위는 그냥 다 보여지는 상태에서 일단 된 다음에 거기서 고를 수
+  //  있게 해야함. 지금 보면 한 문장단위로 나와서 불편함."
+  // 최소 정보 원칙은 **고르는 단계**에서 지킨다(낱말을 눌러 빼면 된다).
   body.innerHTML = renderMarkdown(
     '원인균은 **포도알균**, **사슬알균**, **폐렴막대균**, **녹농균**, **장구균**, **혐기균** 이렇게 여섯 가지가 알려져 있다.');
   const many = cardsFromBox(body, whole(), meta);
-  out.push({ name: '빈칸이 많으면 여러 장으로 쪼갠다', ok: many.length === 2,
-    detail: many.map((c) => c.answers.length).join('+') + '장' });
-  out.push({ name: '한 장에 빈칸은 4개까지', ok: many.every((c) => c.answers.length <= 4) });
-  out.push({ name: '쪼개도 답을 빠뜨리지 않는다',
-    ok: many.reduce((n, c) => n + c.answers.length, 0) === 6 });
-  out.push({ name: '쪼갠 카드끼리 id가 다르다', ok: many[0].id !== many[1].id });
+  out.push({ name: '**빈칸이 많아도 쪼개지 않는다**', ok: many.length === 1,
+    detail: `${many.length}장 · 빈칸 ${many[0] ? many[0].answers.length : 0}개` });
+  out.push({ name: '답을 하나도 빠뜨리지 않는다',
+    ok: many.length === 1 && many[0].answers.length === 6, detail: many[0].answers.join(',') });
+
+  // 여러 문단을 한 번에 둘러도 한 장이다 — 문장마다 쪼개지 않는다
+  body.innerHTML = renderMarkdown(
+    '첫 문단에 **가나다 소견**이 있고 설명이 이어진다.\n\n둘째 문단에 **라마바 소견**이 있고 설명이 이어진다.');
+  const wide = cardsFromBox(body, whole(), meta);
+  out.push({ name: '**여러 문단을 둘러도 한 장**', ok: wide.length === 1, detail: `${wide.length}장` });
+  out.push({ name: '두 문단이 다 본문에 들어 있다',
+    ok: wide.length === 1 && /첫 문단/.test(wide[0].contextHtml) && /둘째 문단/.test(wide[0].contextHtml) });
+  out.push({ name: '두 문단의 빈칸이 다 잡힌다',
+    ok: wide.length === 1 && wide[0].answers.join(',') === '가나다 소견,라마바 소견',
+    detail: wide.length ? wide[0].answers.join(',') : '' });
+
+  // ── 무엇에 대한 물음인지 — 쪽수가 붙은 소제목도 잡는다 (2026-10-16 요청) ──
+  // "그 위에 있는 목차구조·소목차·그 문단의 핵심이 나와야 무슨 문제를 푸는지 알 수 있음."
+  // 노트의 소제목은 거의 다 `**병태생리** [슬라이드 p.139–142]` 꼴인데, 전에는
+  // "줄 전체가 굵지 않다"며 소제목으로 안 쳐서 카드에 아무 맥락도 안 붙었다.
+  document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  body.innerHTML = renderMarkdown([
+    '**병태생리** [슬라이드 p.139–142]', '',
+    '- 유기인계는 **cholinesterase 효소를 억제**한다고 알려져 있다.', '',
+  ].join('\n'));
+  await new Promise((r) => setTimeout(r, 60));
+  const ctxCard = cardsFromBox(body, whole(), { ...meta, heading: '7. 유기인계' })[0];
+  out.push({ name: '**쪽수가 붙은 소제목도 맥락으로 잡는다**',
+    ok: !!ctxCard && /병태생리/.test(ctxCard.topic || ''), detail: ctxCard ? ctxCard.topic : '없음' });
+  out.push({ name: '큰 제목(섹션)도 같이 붙는다',
+    ok: !!ctxCard && /유기인계/.test(ctxCard.topic || '') });
+
+  // 중간에 박힌 말 — 그 위 항목의 머리말이 따라붙어야 무엇에 대한 건지 안다
+  body.innerHTML = renderMarkdown([
+    '### 1. 해독제', '',
+    '- **2-PAM**', '  - 투여는 **aging 전**에 해야 효과가 있다고 알려져 있다.', '',
+  ].join('\n'));
+  await new Promise((r) => setTimeout(r, 60));
+  const deep = cardsFromBox(body, whole(), { ...meta, heading: '7. 유기인계' })
+    .find((c) => c.answers.includes('aging 전'));
+  out.push({ name: '**상위 항목의 머리말이 따라붙는다**',
+    ok: !!deep && /2-PAM/.test(deep.topic || ''), detail: deep ? deep.topic : '없음' });
 
   // ── 문맥 — 무슨 이야기인지 알아야 맞힌다 (2026-10-10) ──
   // "주로 ____에 호발하는 얕은 화농성 감염"만 떼어 놓으면 무슨 병인지 몰라 못 맞혔다.

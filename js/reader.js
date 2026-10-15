@@ -646,7 +646,7 @@ export function cardsFromBox(root, box, meta = {}) {
   const hits = emphasisIn(root, box);
   if (!hits.length) return [];
 
-  // 블록(문단·목록항목·표의 행) 단위로 묶는다
+  // 블록(문단·목록항목·표의 행) 단위로 묶는다 — 글이 걸친 자리를 알아야 서식을 살린다
   const groups = new Map();
   for (const el of hits) {
     const block = blockOf(el);
@@ -654,30 +654,53 @@ export function cardsFromBox(root, box, meta = {}) {
     if (!groups.has(block)) groups.set(block, []);
     groups.get(block).push(el);
   }
+  if (!groups.size) return [];
 
-  // SuperMemo의 "최소 정보 원칙" — 한 번에 묻는 게 많으면 카드가 아니라 시험이 된다.
-  // 한 블록에 빈칸이 많으면 여러 장으로 쪼개고, 나머지는 **보이게 남겨** 단서로 쓴다
-  // (Anki의 Cloze Overlapper가 열거를 다루는 방식).
-  const MAX_BLANKS = 4;
-  const split = [];
-  for (const [block, els] of groups) {
-    if (els.length <= MAX_BLANKS) { split.push([block, els]); continue; }
-    for (let i = 0; i < els.length; i += MAX_BLANKS) split.push([block, els.slice(i, i + MAX_BLANKS)]);
+  // ⚠️ **네모 친 범위는 통째로 한 장이다** (2026-10-15 요청:
+  //    "적어도 내가 선택한 범위는 그냥 다 보여지는 상태에서 일단 된 다음에 거기서
+  //     내가 고를 수 있게 해야함. 지금 보면 한 문장단위로 나와서 불편함").
+  //
+  //    전에는 문단마다 한 장씩 끊고, 한 문단에 강조가 다섯 개 넘으면 또 끊었다.
+  //    "한 번에 묻는 게 많으면 시험이 된다"는 원칙 자체는 맞지만, **그걸 만드는
+  //    순간에 강요하면** 내가 고른 범위가 조각나 버려서 무엇을 만들고 있는지 알 수가
+  //    없다. 원칙은 고르는 단계에서 지키면 된다 — 통째로 보여주고, 거기서 낱말을
+  //    눌러 빼면 된다(makeWordsTappable). 넓게 골라 한 문장씩 떼어내는 쓰임은
+  //    아직 없다고 했다.
+  // 그리는 단위로 다시 묶는다 — 표는 **행이 아니라 표 하나**가 단위다.
+  // (두 행을 골랐다고 표를 두 번 그리면 안 된다)
+  const units = [];
+  const unitOf = new Map();
+  for (const block of groups.keys()) {
+    const host = block.tagName === 'TR' ? (block.closest('table') || block) : block;
+    if (!unitOf.has(host)) { unitOf.set(host, []); units.push(host); }
+    unitOf.get(host).push(block);
   }
-  const cards = [];
-  let n = 0;
-  for (const [block, els] of split) {
-    const card = block.tagName === 'TR'
-      ? tableCard(block, els, meta, n, box)
-      : blockCard(block, els, meta, n, box);
-    if (!card) continue;
-    // 무슨 이야기인지 위로 거슬러 붙인다 — 이게 없으면 맞힐 수가 없다
-    card.trail = contextTrail(block.tagName === 'TR' ? (block.closest('table') || block) : block, root);
-    card.topic = [meta.heading, ...card.trail].filter(Boolean).join('  ›  ');
-    cards.push(card);
-    n++;
+
+  const answers = [];
+  const parts = [];
+  for (const host of units) {
+    const rows = unitOf.get(host);
+    const els = rows.flatMap((b) => groups.get(b));
+    const html = host.tagName === 'TABLE'
+      ? tableHtml(host, rows, els, answers)
+      : cloneWithBlanks(host, els, answers, box);
+    if (html) parts.push(html);
   }
-  return cards;
+  if (!answers.length || !parts.length) return [];
+
+  const anchor = units[0];
+  const trail = contextTrail(anchor, root);
+  return [{
+    id: `${meta.notePath || ''}#${meta.heading || ''}#b0#${answers.join('|').slice(0, 40)}`,
+    notePath: meta.notePath || '', noteTitle: meta.noteTitle || '',
+    heading: meta.heading || '',
+    contextHtml: tidyCardHtml(parts.join('\n')),
+    answers,
+    starred: [...groups.values()].flat().some((e) => e.tagName === 'MARK'),
+    kind: units.length === 1 && units[0].tagName === 'TABLE' ? 'table' : 'block',
+    trail,
+    topic: [meta.heading, ...trail].filter(Boolean).join('  ›  '),
+  }];
 }
 
 const EMPH_SEL = '.ask, mark, strong, b, em, i';
@@ -868,17 +891,54 @@ export function contextTrail(block, root) {
   let node = block;
   let guard = 0;
 
+  // 쪽수·출처 표시는 제목인지 아닌지 가릴 때 셈에서 뺀다.
+  // 노트의 소제목은 거의 다 `**병태생리** [슬라이드 p.139–142]` 꼴이라, 이걸 빼지 않으면
+  // "줄 전체가 굵지 않다"며 소제목으로 안 쳤다 — 그래서 카드에 **무엇에 대한 물음인지**가
+  // 안 붙었다(2026-10-16 지적: "그 위에 있는 목차구조·소목차·그 문단의 핵심이 나와야").
+  const bare = (x) => String(x)
+    .replace(/\[[^\]]*\]/g, ' ')          // [슬라이드 p.139–142]
+    .replace(/\([^)]*\)/g, ' ')            // (2026 기준)
+    .replace(/[^0-9A-Za-z가-힣]+/g, '')     // 별·이모지·기호·공백
+    .toLowerCase();
+
   const headingLevel = (el) => {
     const m = /^H([1-6])$/.exec(el.tagName);
     if (m) return Number(m[1]);
+    // 줄 전체가 굵은 목록 항목 = 그 아래 항목들의 머리말. `- **2-PAM**` 다음에
+    // 설명 항목이 딸려 오는 꼴이 노트에 흔한데, 마크다운이 들여쓰기를 접어버려
+    // **형제 항목**으로 나오므로 여기서 잡아야 한다(2026-10-16).
+    if (el.tagName === 'LI') {
+      const t = el.textContent.trim();
+      if (!t || t.length > 40) return 0;
+      const em = el.querySelector('strong, b, mark');
+      if (em && bare(em.textContent) && bare(t) === bare(em.textContent)) return 8;
+      return 0;
+    }
     // 줄 전체가 굵은 글씨인 문단 = 소제목. 제목보다 안쪽(7)으로 친다.
     if (/^(P|DIV)$/.test(el.tagName)) {
       const t = el.textContent.trim();
       if (!t || t.length > 60) return 0;
       const em = el.querySelector('strong, b, mark');
-      if (em && em.textContent.trim() === t) return 7;
+      if (!em) return 0;
+      const whole = bare(t);
+      const part = bare(em.textContent);
+      if (!part) return 0;
+      // 쪽수·기호를 걷어내고도 같으면 소제목이다
+      if (whole === part) return 7;
+      // 굵은 머리말이 줄 앞에 서고 남는 말이 짧으면 그것도 소제목으로 본다
+      if (t.startsWith(em.textContent.trim()) && whole.startsWith(part)
+          && whole.length - part.length <= 8) return 7;
     }
     return 0;
+  };
+
+  /** 목록 항목의 **머리말** — 하위 목록을 뺀 제 몫의 글만, 짧게. */
+  const liLead = (li) => {
+    const c = li.cloneNode(true);
+    c.querySelectorAll('ul, ol, table, pre, blockquote').forEach((x) => x.remove());
+    const t = c.textContent.replace(/\s+/g, ' ').trim();
+    if (!t || t.length < 2) return '';
+    return t.length > 48 ? `${t.slice(0, 47)}…` : t;
   };
 
   while (node && node !== root && guard++ < 400) {
@@ -893,8 +953,16 @@ export function contextTrail(block, root) {
       }
       prev = prev.previousElementSibling;
     }
-    // 목록 안이면 상위 항목도 문맥이다
+    // 목록 안이면 **상위 항목의 머리말**도 문맥이다 — 중간에 박힌 말이 무엇에 대한
+    // 것인지는 그 위 항목이 쥐고 있을 때가 많다
     const li = node.parentElement && node.parentElement.closest ? node.parentElement.closest('li') : null;
+    if (li && li !== node) {
+      const lead = liLead(li);
+      if (lead && !trail.includes(lead)) {
+        trail.push(lead);
+        if (trail.length >= 3) return trail.reverse();
+      }
+    }
     node = li || node.parentElement;
   }
   return trail.reverse();
@@ -913,59 +981,35 @@ function blockOf(el) {
   return null;
 }
 
-/** 보통 문단·목록 — 블록 하나를 빈칸 여럿짜리 카드 한 장으로. */
-function blockCard(block, els, meta, n, box) {
-  const answers = [];
-  const html = cloneWithBlanks(block, els, answers, box);
-  if (!answers.length) return null;
-  const plain = block.textContent.replace(/\s+/g, ' ').trim();
-  // 가린 글자가 문단의 거의 전부면 풀 수가 없다
-  const hidden = answers.join('').length;
-  // 가리고 남는 글이 거의 없으면 단서가 없어 못 푼다.
-  // (너무 빡빡하게 잡으면 "심인성쇼크는 ___이고 심장지수 ___이며 ___이다" 같은
-  //  **정상적인 조밀한 카드**까지 날아간다 — 라벨 자체는 위 isLabel에서 거른다.)
-  if (plain.length - hidden < 8) return null;
-  return {
-    id: `${meta.notePath || ''}#${meta.heading || ''}#b${n}#${answers.join('|').slice(0, 40)}`,
-    notePath: meta.notePath || '', noteTitle: meta.noteTitle || '',
-    heading: meta.heading || '',
-    contextHtml: tidyCardHtml(html),
-    answers,
-    starred: els.some((e) => e.tagName === 'MARK'),
-    kind: 'block',
-  };
-}
-
-/** 표 — 표 전체를 그대로 두고 그 행의 강조만 가린다. */
-function tableCard(tr, els, meta, n, box) {
-  const table = tr.closest('table');
-  if (!table) return blockCard(tr, els, meta, n, box);
-  const answers = [];
-  const rowIdx = [...table.querySelectorAll('tr')].indexOf(tr);
+/**
+ * 표 — 표를 **한 번만** 복제하고 고른 행들의 강조만 가린다.
+ * 행만 떼어내면 어느 칸이 무엇인지 알 수 없어서 머리글이 붙은 표째로 들고 간다.
+ */
+function tableHtml(table, rows, els, answers) {
+  const all = [...table.querySelectorAll('tr')];
   const clone = table.cloneNode(true);
-  const cloneRow = clone.querySelectorAll('tr')[rowIdx];
-  if (!cloneRow) return null;
-  // 원본 행과 복제 행의 강조를 같은 순서로 대응시킨다
-  const origEm = [...tr.querySelectorAll(EMPH_SEL)];
-  const cloneEm = [...cloneRow.querySelectorAll(EMPH_SEL)];
-  origEm.forEach((o, i) => {
-    if (!els.includes(o) || !cloneEm[i]) return;
-    answers.push(replaceWithCloze(cloneEm[i], o.textContent.trim()));
-  });
-  if (!answers.length) return null;
-  cloneRow.classList.add('card-row-focus');
+  const cloneRows = [...clone.querySelectorAll('tr')];
+  let made = 0;
+  for (const tr of rows) {
+    const idx = all.indexOf(tr);
+    const cloneRow = cloneRows[idx];
+    if (idx < 0 || !cloneRow) continue;
+    // 원본 행과 복제 행의 강조를 같은 순서로 대응시킨다
+    const origEm = [...tr.querySelectorAll(EMPH_SEL)];
+    const cloneEm = [...cloneRow.querySelectorAll(EMPH_SEL)];
+    let here = 0;
+    origEm.forEach((o, i) => {
+      if (!els.includes(o) || !cloneEm[i]) return;
+      answers.push(replaceWithCloze(cloneEm[i], o.textContent.trim()));
+      here++;
+    });
+    if (here) { cloneRow.classList.add('card-row-focus'); made += here; }
+  }
+  if (!made) return '';
   const wrap = document.createElement('div');
   wrap.className = 'tablewrap';
   wrap.appendChild(clone);
-  return {
-    id: `${meta.notePath || ''}#${meta.heading || ''}#t${n}#${answers.join('|').slice(0, 40)}`,
-    notePath: meta.notePath || '', noteTitle: meta.noteTitle || '',
-    heading: meta.heading || '',
-    contextHtml: tidyCardHtml(wrap.outerHTML),
-    answers,
-    starred: els.some((e) => e.tagName === 'MARK'),
-    kind: 'table',
-  };
+  return wrap.outerHTML;
 }
 
 /** 블록을 복제하면서 대상 강조만 빈칸으로 바꾼다. 나머지 서식은 그대로 둔다. */
