@@ -4660,6 +4660,53 @@ await run('떠 있는 돋보기', async () => {
   return out;
 });
 
+// ══════════ 들러보기 창의 그림 (2026-10-16 신고) ══════════
+// "검색으로 팝업으로 띄운 창에서는 왜 이미지 로드가 안됨?"
+// renderSection이 이미 그림을 불러오는데 그 뒤에 hydrateEmbeds를 **경로 문자열**로 또
+// 불렀다. 둘째 인자는 이름 → 주소 **함수**라 resolve(name)이 터지고, 그 catch가
+// 멀쩡히 뜨던 그림을 "불러오지 못했습니다"로 갈아치웠다.
+await run('들러보기 그림', async () => {
+  const out = [];
+  const md = await import('/js/markdown.js');
+  const app = await fetch('/js/app.js').then((x) => x.text());
+  const paint = (app.match(/function paintPeek\(\) \{[\s\S]*?\n}\n/) || [''])[0];
+  // 주석은 빼고 **실제로 도는 줄**만 본다 — 왜 그랬는지 적어둔 글까지 걸리면 안 된다
+  const code = paint.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  out.push({ name: 'paintPeek을 찾았다', ok: !!paint });
+  out.push({ name: '**그림을 두 번 불러오지 않는다**', ok: !/hydrateEmbeds/.test(code),
+    detail: (code.match(/hydrateEmbeds.*/) || [''])[0] });
+  out.push({ name: '읽기 화면과 같은 길로 그린다(renderSection)', ok: /renderSection\(body, sec\)/.test(paint) });
+
+  // 잘못 쓰면 **조용히 그림을 지우지 말고** 크게 터져야 한다
+  const probe = document.createElement('div');
+  probe.innerHTML = md.renderMarkdown('![[그림.png]]');
+  document.body.appendChild(probe);
+  let threw = '';
+  try { await md.hydrateEmbeds(probe, '02_Wiki/가/나.md'); } catch (e) { threw = e.message; }
+  out.push({ name: '**함수가 아닌 걸 넘기면 바로 터진다**', ok: /함수/.test(threw), detail: threw || '조용히 넘어감' });
+  out.push({ name: '터질지언정 그림을 지우지는 않는다',
+    ok: !/불러오지 못했습니다/.test(probe.textContent), detail: probe.textContent.slice(0, 40) });
+
+  // 제대로 넘기면 주소가 꽂힌다
+  const probe2 = document.createElement('div');
+  probe2.innerHTML = md.renderMarkdown('![[그림.png]]');
+  document.body.appendChild(probe2);
+  await md.hydrateEmbeds(probe2, async (name) => `blob:fake/${name}`);
+  const im = probe2.querySelector('img.embed');
+  out.push({ name: '함수를 넘기면 그림이 살아난다', ok: !!im && /blob:fake/.test(im.src),
+    detail: im ? im.src : '그림 없음' });
+
+  // 들러보기 본문도 읽기 화면과 같은 그림 규칙을 받는다
+  const peek = document.createElement('div');
+  peek.className = 'peek-body';
+  peek.innerHTML = '<img class="embed" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">';
+  document.body.appendChild(peek);
+  const cs = getComputedStyle(peek.querySelector('img'));
+  out.push({ name: '들러보기 그림도 창 밖으로 안 넘친다', ok: cs.maxWidth === '100%', detail: cs.maxWidth });
+  probe.remove(); probe2.remove(); peek.remove();
+  return out;
+});
+
 // ══════════ 이상한 입력에도 안 무너진다 (2026-10-16 점검) ══════════
 await run('이상한 입력', async () => {
   const out = [];

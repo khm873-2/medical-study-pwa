@@ -6666,8 +6666,11 @@ function paintPeek() {
   document.getElementById('pkWhere').textContent =
     `${secIdx + 1}/${note.sections.length}${sec.heading ? ` · ${sec.heading}` : ''}`;
   const body = document.getElementById('pkBody');
+  // ⚠️ renderSection이 **이미** 그림을 불러온다(reader.js). 여기서 또 부르면 안 된다 —
+  //    hydrateEmbeds의 둘째 인자는 경로가 아니라 **이름 → 주소 함수**라, 경로 문자열을
+  //    넘기면 resolve(name)이 터지고 그 catch가 멀쩡히 뜨던 그림을 "불러오지 못했습니다"로
+  //    갈아치웠다(2026-10-16 신고: "팝업으로 띄운 창에서는 왜 이미지 로드가 안됨?").
   renderSection(body, sec);
-  hydrateEmbeds(body, note.path);
   document.getElementById('pkPrev').disabled = secIdx === 0;
   document.getElementById('pkNext').disabled = secIdx >= note.sections.length - 1;
   // 걸린 말을 칠하고 그리로 굴린다 — 긴 장에서는 어디가 걸렸는지 안 보인다

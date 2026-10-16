@@ -341,6 +341,13 @@ function inline(s) {
  * 하나씩 기다리면 장마다 한 번씩 밀린다.
  */
 export async function hydrateEmbeds(root, resolve) {
+  // ⚠️ 둘째 인자는 **이름 → 주소 함수**다. 경로 문자열을 넘기면 아래 try가 그 실수를
+  //    삼켜 "이미지를 불러오지 못했습니다"로 바꿔 보여준다 — 코드가 틀린 건데 자료가
+  //    없는 것처럼 보인다(2026-10-16: 들러보기 창의 그림이 다 그렇게 됐다).
+  //    조용히 잘못 그리느니 **여기서 크게 터뜨린다**.
+  if (typeof resolve !== 'function') {
+    throw new TypeError('hydrateEmbeds: 둘째 인자는 (이름) => 주소 함수여야 합니다');
+  }
   const imgs = [...root.querySelectorAll('img.embed[data-embed]')];
   await Promise.all(imgs.map(async (im) => {
     const name = im.dataset.embed;

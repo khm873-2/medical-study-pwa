@@ -316,7 +316,8 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
 .wiki-body mark { background: #fde68a; color: #78350f; padding: 0 3px; border-radius: 3px; }
 .wiki-body code { background: var(--badge-bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 .wiki-body blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid var(--border); color: var(--sub); }
-.wiki-body img.embed {
+/* 들러보기 창도 같은 본문을 그린다 — 그림 규칙을 같이 받는다(2026-10-16) */
+.wiki-body img.embed, .peek-body img.embed {
   max-width: 100%; border-radius: 8px; border: 1px solid var(--border); margin: 8px 0;
   /* 비율을 아는 그림은 JS가 aspect-ratio를 미리 박아둔다(markdown.js) — 그때 폭이
      정해져 있어야 높이가 잡히고, 그래야 뜨면서 아래 글을 안 민다(2026-10-14). */
@@ -2739,11 +2740,12 @@ li.task.done .task-box { color: var(--accent); }
 
 /* 그림 자리 — 한 번 본 그림은 뜨기 전에 **자리부터** 잡는다(2026-10-14).
    src가 없는 <img>는 본디 크기가 없어 혼자서는 자리를 못 잡으므로 바깥 상자를 쓴다. */
-.wiki-body .embed-box {
+.wiki-body .embed-box, .peek-body .embed-box {
   display: block; width: 100%; margin: 8px 0;
   background: var(--badge-bg); border-radius: 8px;
 }
-.wiki-body .embed-box img.embed { width: 100%; height: 100%; object-fit: contain; margin: 0; }
+.wiki-body .embed-box img.embed,
+.peek-body .embed-box img.embed { width: 100%; height: 100%; object-fit: contain; margin: 0; }
 
 /* ── 손으로 만드는 빈칸 카드 (2026-10-14) ──
    긁은 글이 낱말 칩으로 뜨고, 눌러서 가릴 것을 고른다. 이어진 것은 한 빈칸으로 묶인다. */
