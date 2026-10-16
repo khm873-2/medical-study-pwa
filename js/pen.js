@@ -222,6 +222,10 @@ export class PenLayer {
    */
   _up(e, cancelled = false) {
     this._activeId = null;
+    // 아직 안 그려진 다시 그리기가 남아 있으면 지금 취소한다 — 손을 뗀 뒤에 돌면
+    // `_cur`가 없는 채로 다시 재서 확정값을 덮는다
+    if (this._liveRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this._liveRaf);
+    this._liveRaf = 0;
     if (this._isErasing) { this._isErasing = false; this.onChange(); return; }
     if (!this._cur) return;
     const stroke = this._cur;
@@ -297,6 +301,11 @@ export class PenLayer {
    * 보이는 것과 잘리는 것이 어긋나면 안 된다.
    */
   _showCropBox() {
+    // ⚠️ 손을 뗀 뒤 **늦게 도착한 다시 그리기**가 확정값을 덮으면 안 된다.
+    //    `_cur`가 없으면 모서리 자(누른 자리↔지금 자리)를 쓸 수 없어 자취 전체로
+    //    되돌아가는데, 그 값이 _lastLive를 덮으면 확정될 때 네모가 **팍 튄다**
+    //    (2026-10-16: 보여준 건 100px인데 잘린 건 250px이었다).
+    if (!this._cur && this._lastLive) { this.redraw(); return; }
     // ⚠️ 글 고르기와 **다른 자를 써야 한다**.
     //    고르기는 "시작점↔현재점"으로 재야 되돌리기가 되는데, 네모 치기는 그러면
     //    손으로 한 바퀴 둘러 그릴 때 끝점이 시작점으로 돌아와 상자가 사그라든다.
@@ -305,7 +314,13 @@ export class PenLayer {
     //    여기서는 **지나온 자취 전체**를 감싼다 — 그으면 커지기만 하므로 튈 일이 없다.
     const parts = [...(this._pending || [])];
     if (this._cur) parts.push(this._cur);
-    const raw = boundsOf(parts) || this._liveBounds();
+    const all = boundsOf(parts);
+    // ⚠️ 자취 전체를 감싸면 **커지기만 하고 줄지 않는다** — 한 번 크게 벌렸다가 다시
+    //    좁히면 네모가 안 따라온다(2026-10-16 신고: "한번 커진다음에 작은 방향으로
+    //    움직이면 캡쳐범위가 잘 안따라옴"). 네모 치기는 모서리를 잡아 끄는 손짓이라
+    //    **누른 자리↔지금 자리**로 재는 게 맞다. 둘러 그린 획(끝이 시작으로 돌아온 것)
+    //    일 때만 자취 전체를 쓴다 — 그때는 시작↔끝이 0에 가까워 상자가 사그라든다.
+    const raw = this._cornerBox(all) || all || this._liveBounds();
     this._previewKind = this.capturing ? 'crop' : 'card';
     this._previewBox = raw && (raw.r - raw.l) > 0 && (raw.b - raw.t) > 0 ? raw : null;
     this._lastLive = raw;
@@ -315,6 +330,37 @@ export class PenLayer {
     this._coveredLines = (this.carding && this._previewBox)
       ? this._emphasisIn(this._previewBox) : null;
     this.redraw();
+  }
+
+  /**
+   * 모서리를 잡아 끄는 네모 — **누른 자리↔지금 자리**.
+   *
+   * 둘러 그린 획이면 null을 돌려준다(그때는 부른 쪽이 자취 전체를 쓴다).
+   *
+   * 가르는 기준은 "끝이 시작 가까이 왔나"가 **아니다**. 크게 벌렸다가 많이 되돌리면
+   * 그것도 시작 가까이 오기 때문이다 — 그래서 되돌리기가 안 먹었다(2026-10-16).
+   * 대신 **자취가 a→z 선에서 얼마나 벗어났나**를 본다. 모서리를 끄는 손짓은
+   * 지나치든 되돌리든 그 선 위를 오가고, 둘러 그린 획은 선에서 크게 벗어난다.
+   */
+  _cornerBox(all) {
+    const cur = this._cur;
+    // 끊어 그은 뒤라면(손을 뗐다 다시) 자취 전체가 맞다 — 이어 그리는 중이다
+    if (!cur || cur.pts.length < 2 || (this._pending && this._pending.length)) return null;
+    const a = cur.pts[0];
+    const z = cur.pts[cur.pts.length - 1];
+    const dx = z.x - a.x;
+    const dy = z.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 8) return null;                       // 제자리로 돌아왔다 = 둘러 그린 것
+    const diag = all ? Math.hypot(all.r - all.l, all.b - all.t) : len;
+    let perp = 0;
+    for (const q of cur.pts) {
+      perp = Math.max(perp, Math.abs((q.x - a.x) * dy - (q.y - a.y) * dx) / len);
+    }
+    if (perp > Math.max(24, diag * 0.25)) return null;   // 선에서 크게 벗어났다 = 둘러 그린 것
+    const box = { l: Math.min(a.x, z.x), r: Math.max(a.x, z.x),
+      t: Math.min(a.y, z.y), b: Math.max(a.y, z.y) };
+    return (box.r - box.l) > 2 && (box.b - box.t) > 2 ? box : null;
   }
 
   /** 네모에 걸린 **강조된 말**의 자리. 획 하나 동안 캐시한다(토큰과 같은 이유). */

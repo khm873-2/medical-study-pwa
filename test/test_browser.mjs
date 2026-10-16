@@ -4660,6 +4660,82 @@ await run('떠 있는 돋보기', async () => {
   return out;
 });
 
+// ══════════ 캡처 네모가 손을 따라온다 (2026-10-16 신고) ══════════
+// "한번 커진다음에 작은 방향으로 움직이거나 하면 캡쳐범위가 잘 안따라옴."
+// 자취 전체를 감싸고 있어서 **커지기만 하고 줄지 않았다**. 모서리를 끄는 손짓은
+// 누른 자리↔지금 자리로 재야 한다 — 다만 둘러 그린 획은 그러면 사그라든다.
+await run('캡처 네모', async () => {
+  const out = [];
+  const { PenLayer } = await import('/js/pen.js');
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:0;top:0;width:800px;height:600px;z-index:-1';
+  document.body.appendChild(host);
+  const pen = new PenLayer(host, {});
+  pen.setTool('shot');
+  const ev = (t, x, y) => document.dispatchEvent(new PointerEvent(t,
+    { pointerId: 9, pointerType: 'pen', clientX: x, clientY: y, bubbles: true, cancelable: true, buttons: 1 }));
+  const size = () => { const b = pen._previewBox;
+    return b ? { w: Math.round(b.r - b.l), h: Math.round(b.b - b.t) } : null; };
+  const paint = () => pen._refreshPreview();
+  const reset = () => { pen._pending = null; pen._cur = null; pen._previewBox = null; };
+
+  ev('pointerdown', 100, 100);
+  for (const [x, y] of [[200, 180], [320, 280], [440, 380]]) { ev('pointermove', x, y); paint(); }
+  const big = size();
+  for (const [x, y] of [[360, 300], [260, 220], [180, 160]]) { ev('pointermove', x, y); paint(); }
+  const small = size();
+  ev('pointerup', 180, 160);
+  out.push({ name: '크게 끌면 커진다', ok: !!big && big.w >= 300, detail: JSON.stringify(big) });
+  out.push({ name: '**되돌리면 따라서 작아진다**', ok: !!small && !!big && small.w <= big.w - 200,
+    detail: `${big ? big.w : '?'} → ${small ? small.w : '?'}px` });
+  out.push({ name: '되돌린 네모가 손 자리와 맞는다',
+    ok: !!small && Math.abs(small.w - 80) <= 6 && Math.abs(small.h - 60) <= 6,
+    detail: JSON.stringify(small) });
+
+  // 둘러 그린 획은 사그라들지 않는다 — 예전에 이걸 고치려다 위 동작이 막혔다
+  reset();
+  ev('pointerdown', 100, 100);
+  for (const [x, y] of [[300, 100], [300, 250], [100, 250], [100, 110]]) {
+    for (let i = 0; i < 6; i++) ev('pointermove', x, y);
+    paint();
+  }
+  const looped = size();
+  ev('pointerup', 100, 110);
+  out.push({ name: '둘러 그린 네모는 사그라들지 않는다',
+    ok: !!looped && looped.w >= 180 && looped.h >= 140, detail: JSON.stringify(looped) });
+
+  // 손 떨림으로는 "둘러 그렸다"로 넘어가지 않는다
+  reset();
+  ev('pointerdown', 120, 120);
+  for (let i = 1; i <= 10; i++) {
+    ev('pointermove', 120 + i * 20, 120 + i * 15 + (i % 2 ? 6 : -6));
+    paint();
+  }
+  const shaky = size();
+  ev('pointerup', 320, 270);
+  out.push({ name: '떨면서 끌어도 모서리 네모로 친다',
+    ok: !!shaky && Math.abs(shaky.w - 200) <= 12, detail: JSON.stringify(shaky) });
+
+  // 손을 뗀 뒤 확정된 네모가 보여주던 것과 같아야 한다(예전에 "팍 튀었다")
+  pen.destroy();                 // 두 겹이 같은 포인터를 받지 않게 먼저 치운다
+  let got = null;
+  const pen2 = new PenLayer(host, { onCapture: (b) => { got = b; } });
+  pen2.setTool('shot');
+  ev('pointerdown', 150, 150);
+  for (const [x, y] of [[400, 400], [300, 300], [250, 250]]) {
+    ev('pointermove', x, y);
+    pen2._refreshPreview();
+  }
+  const shown = pen2._previewBox ? Math.round(pen2._previewBox.r - pen2._previewBox.l) : null;
+  ev('pointerup', 250, 250);
+  await new Promise((r) => setTimeout(r, 450));
+  out.push({ name: '**확정된 네모가 보여주던 것과 같다**',
+    ok: !!got && shown != null && Math.abs(Math.round(got.r - got.l) - shown) <= 2,
+    detail: `보임 ${shown} · 확정 ${got ? Math.round(got.r - got.l) : '없음'}` });
+  pen2.destroy(); host.remove();
+  return out;
+});
+
 // ══════════ 들러보기 창의 그림 (2026-10-16 신고) ══════════
 // "검색으로 팝업으로 띄운 창에서는 왜 이미지 로드가 안됨?"
 // renderSection이 이미 그림을 불러오는데 그 뒤에 hydrateEmbeds를 **경로 문자열**로 또
