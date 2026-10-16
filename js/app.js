@@ -6823,8 +6823,12 @@ function initPeek() {
     def: { w: Math.min(620, innerWidth * 0.94), h: Math.min(520, innerHeight * 0.64) },
   });
   document.getElementById('pkClose').onclick = closePeek;
-  document.getElementById('pkPrev').onclick = () => movePeek(-1);
-  document.getElementById('pkNext').onclick = () => movePeek(1);
+  const step = (d) => {
+    if (peekState && (peekState.hits || []).length > 1) movePeekHit(d);
+    else movePeek(d);
+  };
+  document.getElementById('pkPrev').onclick = () => step(-1);
+  document.getElementById('pkNext').onclick = () => step(1);
   document.getElementById('pkOpen').onclick = () => {
     if (!peekState) return;
     const { note, secIdx } = peekState;
@@ -6911,8 +6915,43 @@ function showPeek(note, secIdx, needle, title) {
   document.getElementById('peekFloat').classList.remove('hidden');
   if (peekFloat) peekFloat.place();
   document.getElementById('pkTitle').textContent = title || note.title || '들러보기';
-  peekState = { note, secIdx: Math.max(0, Math.min(secIdx || 0, note.sections.length - 1)),
-    needle: needle || '' };
+  const at = Math.max(0, Math.min(secIdx || 0, note.sections.length - 1));
+  // 찾던 말이 **이 문서 전체에 몇 군데** 있는지 미리 센다 — 한 장만 보고 끝낼 일이 아니다
+  // (2026-10-17 요청: "몇개 중에 몇번째 찾는건지? 다음 검색 이전검색 되게 해줘").
+  const hits = peekHits(note, needle);
+  // 열어준 장에 걸린 자리부터 보여준다 — 누른 그 자리에서 시작해야 말이 된다
+  let hitAt = hits.findIndex((h) => h.sec === at);
+  if (hitAt < 0) hitAt = hits.length ? 0 : -1;
+  peekState = { note, secIdx: hitAt >= 0 ? hits[hitAt].sec : at, needle: needle || '', hits, hitAt };
+  paintPeek();
+}
+
+/** 문서 전체에서 그 말이 나오는 자리 — [{sec, ord}] (ord는 그 장 안에서 몇 번째인가). */
+function peekHits(note, needle) {
+  const want = String(needle || '').normalize('NFC').trim();
+  if (want.length < 1) return [];
+  const out = [];
+  note.sections.forEach((sec, si) => {
+    const hay = String(sec.text || '').normalize('NFC');
+    let from = 0;
+    let ord = 0;
+    for (;;) {
+      const i = hay.indexOf(want, from);
+      if (i < 0) break;
+      out.push({ sec: si, ord });
+      ord++;
+      from = i + want.length;
+    }
+  });
+  return out;
+}
+
+/** 찾은 자리 사이를 오간다. 끝에서 넘기면 처음으로 돌아온다(문서 안 찾기와 같다). */
+function movePeekHit(d) {
+  if (!peekState || !peekState.hits.length) return;
+  const n = peekState.hits.length;
+  peekState.hitAt = ((peekState.hitAt + d) % n + n) % n;
+  peekState.secIdx = peekState.hits[peekState.hitAt].sec;
   paintPeek();
 }
 
@@ -6928,34 +6967,70 @@ function paintPeek() {
   //    넘기면 resolve(name)이 터지고 그 catch가 멀쩡히 뜨던 그림을 "불러오지 못했습니다"로
   //    갈아치웠다(2026-10-16 신고: "팝업으로 띄운 창에서는 왜 이미지 로드가 안됨?").
   renderSection(body, sec);
-  document.getElementById('pkPrev').disabled = secIdx === 0;
-  document.getElementById('pkNext').disabled = secIdx >= note.sections.length - 1;
-  // 걸린 말을 칠하고 그리로 굴린다 — 긴 장에서는 어디가 걸렸는지 안 보인다
-  const needle = peekState.needle;
-  if (needle && needle.length >= 1) {
-    const mark = markFirst(body, needle);
-    if (mark) requestAnimationFrame(() => mark.scrollIntoView({ block: 'center' }));
+
+  // 걸린 자리가 있으면 ‹/›는 **자리 사이**를 오간다(장을 넘나든다). 없으면 장을 넘긴다.
+  const hits = peekState.hits || [];
+  const many = hits.length > 1;
+  const prev = document.getElementById('pkPrev');
+  const next = document.getElementById('pkNext');
+  prev.disabled = many ? false : secIdx === 0;
+  next.disabled = many ? false : secIdx >= note.sections.length - 1;
+  prev.textContent = many ? '‹ 이전' : '‹ 앞';
+  next.textContent = many ? '다음 ›' : '뒤 ›';
+  prev.title = many ? '이전으로 찾은 곳' : '앞 장';
+  next.title = many ? '다음으로 찾은 곳' : '뒤 장';
+
+  // 몇 개 중 몇 번째인지 — 이게 없으면 더 있는지조차 모른다
+  const where = `${secIdx + 1}/${note.sections.length}장${sec.heading ? ` · ${sec.heading}` : ''}`;
+  document.getElementById('pkWhere').textContent = hits.length
+    ? `찾은 곳 ${peekState.hitAt + 1}/${hits.length} · ${where}`
+    : where;
+
+  // 걸린 말을 **이 장에서 전부** 칠하고 지금 자리만 진하게 — 어디어디 있는지 보이게
+  if (peekState.needle) {
+    const cur = hits[peekState.hitAt];
+    const ord = cur && cur.sec === secIdx ? cur.ord : 0;
+    const active = markAllIn(body, peekState.needle, ord);
+    if (active) requestAnimationFrame(() => active.scrollIntoView({ block: 'center' }));
+    else body.scrollTop = 0;
   } else body.scrollTop = 0;
 }
 
-/** 본문에서 그 말이 처음 나오는 자리를 노랗게 칠한다. 없으면 null. */
-function markFirst(root, needle) {
+/**
+ * 본문에서 그 말이 나오는 자리를 **전부** 칠한다. `ord`번째가 지금 자리(.on).
+ * @returns 지금 자리의 요소(없으면 null)
+ */
+function markAllIn(root, needle, ord = 0) {
   const want = String(needle).normalize('NFC');
   if (!want.trim()) return null;
+  // 뒤에서부터 바꾼다 — 앞을 먼저 바꾸면 뒤쪽 자리 번호가 밀린다
+  const jobs = [];
   const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let n;
-  while ((n = walk.nextNode())) {
-    const i = n.nodeValue.normalize('NFC').indexOf(want);
-    if (i < 0) continue;
-    const after = n.splitText(i);
-    after.splitText(want.length);
-    const m = document.createElement('mark');
-    m.className = 'peek-hit';
-    after.replaceWith(m);
-    m.textContent = want;
-    return m;
+  let node;
+  while ((node = walk.nextNode())) {
+    const v = node.nodeValue.normalize('NFC');
+    let from = 0;
+    for (;;) {
+      const i = v.indexOf(want, from);
+      if (i < 0) break;
+      jobs.push({ node, i });
+      from = i + want.length;
+    }
   }
-  return null;
+  let active = null;
+  for (let k = jobs.length - 1; k >= 0; k--) {
+    const { node: n, i } = jobs[k];
+    try {
+      const after = n.splitText(i);
+      after.splitText(want.length);
+      const m = document.createElement('mark');
+      m.className = `peek-hit${k === ord ? ' on' : ''}`;
+      after.replaceWith(m);
+      m.textContent = want;
+      if (k === ord) active = m;
+    } catch { /* 태그를 가로지르는 자리는 건너뛴다 */ }
+  }
+  return active;
 }
 
 /**
@@ -8284,6 +8359,15 @@ function nextSection() { document.getElementById('readNext').click(); }
 document.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   const typing = typingNow(e.target);
+
+  // 들러보기 창이 떠 있으면 Enter로 다음 찾은 곳, Shift+Enter로 이전 —
+  // 문서 안 찾기와 같은 손놀림이라 따로 외울 게 없다(2026-10-17 요청)
+  if (!typing && e.key === 'Enter' && peekState && (peekState.hits || []).length > 1
+      && !document.getElementById('peekFloat').classList.contains('hidden')) {
+    e.preventDefault();
+    movePeekHit(e.shiftKey ? -1 : 1);
+    return;
+  }
 
   // Esc는 어디서든 — 지금 열려 있는 것 하나를 닫는다
   if (e.key === 'Escape') {

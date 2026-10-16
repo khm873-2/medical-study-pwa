@@ -4520,15 +4520,21 @@ await run('들러보기', async () => {
   f.style.cssText = '--af-w:600px;--af-h:420px;--af-x:40px;--af-y:40px';
   const body = document.getElementById('pkBody');
   body.innerHTML = '<p>' + '앞말 '.repeat(200) + '<b>doxycycline</b> 뒷말</p>';
-  const markFirst = new Function('root', 'needle', `
-    ${(app.match(/function markFirst\(root, needle\) \{[\s\S]*?\n}\n/) || [''])[0]}
-    return markFirst(root, needle);`);
-  const m = markFirst(body, 'doxycycline');
-  out.push({ name: '**걸린 말이 노랗게 칠해진다**', ok: !!m && m.className === 'peek-hit',
+  const markAllIn = new Function('root', 'needle', 'ord', `
+    ${(app.match(/function markAllIn\(root, needle, ord = 0\) \{[\s\S]*?\n}\n/) || [''])[0]}
+    return markAllIn(root, needle, ord);`);
+  const m = markAllIn(body, 'doxycycline', 0);
+  out.push({ name: '**걸린 말이 칠해진다**', ok: !!m && /peek-hit/.test(m.className),
     detail: m ? m.textContent : '못 칠함' });
   if (m) {
     const bg = getComputedStyle(m).backgroundColor;
     out.push({ name: '칠한 자리가 눈에 띈다', ok: bg !== 'rgba(0, 0, 0, 0)', detail: bg });
+    // 파란 강조색을 옅게 깔면 어두움 모드에서 글자가 묻힌다(2026-10-17 신고)
+    out.push({ name: '**칠한 색이 강조색(파랑) 계열이 아니다**',
+      ok: !/rgba?\(1?\d?\d, 1[0-9]\d, 2\d\d/.test(bg), detail: bg });
+    out.push({ name: '칠한 자리는 글자색을 스스로 정한다',
+      ok: getComputedStyle(m).color !== getComputedStyle(body).color,
+      detail: getComputedStyle(m).color });
   }
   out.push({ name: '본문이 제 스크롤 상자다(창 안에서만 움직인다)',
     ok: getComputedStyle(body).overflowY === 'auto', detail: getComputedStyle(body).overflowY });
@@ -4887,6 +4893,70 @@ await run('긁으면 복사', async () => {
     ok: !/autoCopy\(full\)[\s\S]{0,220}toast\(/.test(src) });
   out.push({ name: '복사 단추도 같은 길을 쓴다(따로 놀지 않게)',
     ok: /toast\(await autoCopy\(t\)/.test(src) });
+  return out;
+});
+
+// ══════════ 들러보기 — 몇 개 중 몇 번째, 다음·이전 (2026-10-17 요청) ══════════
+// "한 문서여도 여러개 찾을 수 있을 것 같은데 몇개 중에 몇번째 찾는건지?
+//  다음 다음 검색 이전검색 이런거 되게 해줘"
+await run('들러보기 찾아가기', async () => {
+  const out = [];
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  if (typeof window.__showPeek !== 'function') {
+    out.push({ name: '들러보기를 열 수 있다', ok: false, detail: '통로가 없다' });
+    return out;
+  }
+  const note = { title: 'ATLS', path: 'x.md', sections: [
+    { heading: '1. 앞장', text: '여기에 rocuronium 이 한 번 나온다.' },
+    { heading: '2. 약물', text: 'rocuronium 1mg/kg 투여. 이어서 rocuronium 을 추가. 끝에 또 rocuronium.' },
+    { heading: '3. 끝장', text: '관계없는 내용이다.' },
+  ] };
+  window.__showPeek(note, 1, 'rocuronium', 'ATLS');
+  await wait(220);
+  const where = () => document.getElementById('pkWhere').textContent;
+  const marks = () => [...document.querySelectorAll('#pkBody mark.peek-hit')];
+
+  out.push({ name: '**몇 개 중 몇 번째인지 나온다**', ok: /찾은 곳 \d+\/4/.test(where()), detail: where() });
+  out.push({ name: '누른 장에서 시작한다', ok: /2\/3장/.test(where()), detail: where() });
+  out.push({ name: '이 장에 걸린 자리를 전부 칠한다', ok: marks().length === 3,
+    detail: `${marks().length}군데` });
+  out.push({ name: '지금 자리만 진하다',
+    ok: marks().filter((m) => m.classList.contains('on')).length === 1 });
+
+  const next = document.getElementById('pkNext');
+  const prev = document.getElementById('pkPrev');
+  out.push({ name: '단추가 "다음/이전"으로 바뀐다',
+    ok: /다음/.test(next.textContent) && /이전/.test(prev.textContent),
+    detail: `${prev.textContent} / ${next.textContent}` });
+  next.click(); await wait(140);
+  out.push({ name: '**다음을 누르면 번호가 올라간다**', ok: /찾은 곳 3\/4/.test(where()), detail: where() });
+  next.click(); await wait(140);
+  next.click(); await wait(140);
+  out.push({ name: '끝에서 처음으로 돌아오고 장도 넘어간다',
+    ok: /찾은 곳 1\/4/.test(where()) && /1\/3장/.test(where()), detail: where() });
+  prev.click(); await wait(140);
+  out.push({ name: '이전은 거꾸로 돈다', ok: /찾은 곳 4\/4/.test(where()), detail: where() });
+
+  // Enter / Shift+Enter — 문서 안 찾기와 같은 손놀림
+  const cur = () => (where().match(/찾은 곳 (\d+)/) || [])[1];
+  const was = cur();
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await wait(140);
+  out.push({ name: '**Enter로 다음 자리**', ok: cur() !== was, detail: `${was} → ${cur()}` });
+  const mid = cur();
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
+  await wait(140);
+  out.push({ name: 'Shift+Enter로 이전 자리', ok: cur() === was, detail: `${mid} → ${cur()}` });
+
+  // 찾는 말이 없으면 장 넘기기로 돌아간다
+  window.__showPeek(note, 0, '', 'ATLS');
+  await wait(160);
+  out.push({ name: '찾는 말이 없으면 장 넘기기',
+    ok: !/찾은 곳/.test(where()) && /앞|뒤/.test(document.getElementById('pkNext').textContent),
+    detail: `${where()} | ${document.getElementById('pkNext').textContent}` });
+  document.getElementById('pkNext').click(); await wait(140);
+  out.push({ name: '장이 넘어간다', ok: /2\/3장/.test(where()), detail: where() });
+  document.getElementById('pkClose').click();
   return out;
 });
 

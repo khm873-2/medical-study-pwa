@@ -2015,11 +2015,30 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
 .peek-body th, .peek-body td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; }
 .peek-body th { background: var(--badge-bg); }
 .peek-body img { max-width: 100%; height: auto; }
-/* 걸린 말 — 들어오자마자 눈에 띄어야 한다 */
+/* 걸린 말 — 들어오자마자 눈에 띄어야 한다.
+   전에는 **강조색(파랑)을 옅게 깔았다**. 어두움 모드에서 흰 글씨 밑에 흐린 파랑이라
+   글자가 묻혀 안 보였다(2026-10-17 신고: "rocuronium 봐봐 잘 안보이지?").
+   문서 안 찾기(find-mark)와 **같은 호박색**으로 맞춘다 — 글자색까지 못박아
+   물려받은 색에 좌우되지 않게 한다. 여러 군데면 지금 자리만 진하다. */
 mark.peek-hit {
-  background: color-mix(in srgb, var(--accent) 34%, transparent);
-  border-radius: 3px; padding: 0 2px; color: inherit;
+  background: color-mix(in srgb, #fde68a 60%, transparent); color: #3b2a06;
+  border-radius: 3px; padding: 0 2px;
 }
+mark.peek-hit.on {
+  background: #fde68a; color: #3b2a06;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) mark.peek-hit {
+    background: color-mix(in srgb, #b8790d 60%, transparent); color: #fff;
+  }
+  /* 진한 호박 위에는 **어두운 글씨**가 읽힌다 — 흰 글씨는 3.6:1로 모자란다 */
+  :root:not([data-theme="light"]) mark.peek-hit.on { background: #b8790d; color: #1b1203; }
+}
+:root[data-theme="dark"] mark.peek-hit {
+  background: color-mix(in srgb, #b8790d 60%, transparent); color: #fff;
+}
+:root[data-theme="dark"] mark.peek-hit.on { background: #b8790d; color: #1b1203; }
 #peekFloat .af-foot .btn { flex: 0 1 auto; }
 #peekFloat .af-foot .btn:disabled { opacity: .35; }
 
