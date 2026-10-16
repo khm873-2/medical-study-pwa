@@ -1602,6 +1602,37 @@ function selPreview(text, head = 70, tail = 45) {
   return tail > 0 ? `${t.slice(0, head)} … ${t.slice(-tail)}` : `${t.slice(0, head)}…`;
 }
 
+/**
+ * 긁은 글을 클립보드에 담는다. 되면 true.
+ *
+ * 사파리는 "사용자가 방금 손을 뗀 그 언저리"에만 클립보드 쓰기를 허용한다. 긁기는 손을
+ * 뗀 뒤 0.4초쯤 지나 확정되므로 보통은 아직 창이 열려 있지만, 닫혀 있을 때를 대비해
+ * **옛 방식(execCommand)도 한 번 더** 시도한다 — 그쪽은 활성화 조건이 느슨하다.
+ * 실패해도 조용히 넘어간다. 팝업의 "복사" 단추로 다시 하면 된다.
+ */
+async function autoCopy(text) {
+  const t = String(text || '');
+  if (!t) return false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(t);
+      return true;
+    }
+  } catch { /* 아래 옛 방식으로 */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = t;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, t.length);
+    const done = document.execCommand && document.execCommand('copy');
+    ta.remove();
+    return !!done;
+  } catch { return false; }
+}
+
 /** 선택한 자리 근처에 팝업을 띄운다. */
 function showSelPop(text, box) {
   const pop = document.getElementById('selPop');
@@ -1609,8 +1640,17 @@ function showSelPop(text, box) {
   const body = document.getElementById('selPopText');
   body.textContent = selPreview(full);
   body.title = full;                       // 길게 누르면 전문
-  document.getElementById('selPopCount').textContent = `${full.length}자`;
+  const count = document.getElementById('selPopCount');
+  count.textContent = `${full.length}자`;
   pop.classList.remove('hidden');
+  // 긁자마자 **클립보드에 담는다** (2026-10-16 요청: "긁기를 하면 그냥 복사가 자동으로
+  // 되는걸로 바꾸자. 복사 엄청많이 쓰네. 클립보드야 그냥 버리면 되는거니까").
+  // 담겼는지는 글자 수 옆에 조용히 적는다 — 토스트까지 띄우면 긁을 때마다 시끄럽다.
+  autoCopy(full).then((done) => {
+    if (done && count.textContent === `${full.length}자`) {
+      count.textContent = `${full.length}자 · 복사됨`;
+    }
+  });
 
   // 선택 영역 바로 아래에 두되 화면 밖으로 나가지 않게
   pop.style.visibility = 'hidden';
@@ -1650,10 +1690,12 @@ document.getElementById('selAsk').onclick = () => {
 };
 document.getElementById('selSend').onclick = () => { hideSelPop(); if (selTerm()) fillAskSheet(selTerm()); };
 document.getElementById('selCopy').onclick = async () => {
+  const t = selTerm();
   hideSelPop();
-  if (!selTerm()) return;
-  try { await navigator.clipboard.writeText(selTerm()); toast('📋 복사했습니다.'); }
-  catch { toast('복사에 실패했습니다.'); }
+  if (!t) return;
+  // 긁을 때 이미 담았지만, 그때 막혔을 수도 있으니 다시 한 번 — 여기서는 눌러서
+  // 하는 일이라 결과를 말해준다
+  toast(await autoCopy(t) ? '📋 복사했습니다.' : '복사에 실패했습니다.');
 };
 // 긁은 글을 **모아두기**로 — 어느 화면에서든 같은 곳으로 간다(2026-10-14).
 // 전에는 퀴즈에서만 되는 "메모"였고 아이콘도 필기와 같은 ✎라 뭘 하는 건지 알 수 없었다.

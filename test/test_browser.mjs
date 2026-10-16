@@ -4660,6 +4660,54 @@ await run('떠 있는 돋보기', async () => {
   return out;
 });
 
+// ══════════ 긁으면 바로 복사된다 (2026-10-16 요청) ══════════
+// "긁기를 하면 그냥 복사가 자동으로 되는걸로 바꾸자. 복사 엄청많이 쓰네."
+await run('긁으면 복사', async () => {
+  const out = [];
+  const src = await fetch('/js/app.js').then((x) => x.text());
+  const grab = src.match(/async function autoCopy\(text\) \{[\s\S]*?\n}\n/);
+  out.push({ name: 'autoCopy가 있다', ok: !!grab });
+  if (!grab) return out;
+  const autoCopy = new Function(`${grab[0]}; return autoCopy;`)();
+
+  // 진짜 클립보드는 헤드리스에서 막혀 있다 — 가짜를 끼워 **우리 쪽 흐름**만 본다
+  const realCb = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  const realExec = document.execCommand;
+  let wrote = null;
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true, value: { writeText: async (t) => { wrote = t; } },
+  });
+  out.push({ name: '**긁은 글이 클립보드로 간다**',
+    ok: (await autoCopy('긁은 글입니다')) === true && wrote === '긁은 글입니다', detail: String(wrote) });
+  out.push({ name: '빈 글·null은 담지 않는다',
+    ok: (await autoCopy('')) === false && (await autoCopy(null)) === false });
+
+  // 비동기 API가 막히면 옛 방식으로 — 사파리는 손 뗀 뒤 시간이 지나면 막는다
+  let legacy = 0;
+  document.execCommand = (c) => { if (c === 'copy') { legacy++; return true; } return false; };
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true, value: { writeText: () => Promise.reject(new Error('막힘')) },
+  });
+  const fb = await autoCopy('되돌이 길');
+  out.push({ name: '비동기가 막히면 옛 방식으로 담는다', ok: fb === true && legacy === 1,
+    detail: `${fb} · ${legacy}번` });
+  out.push({ name: '되돌이 길이 숨은 칸을 안 남긴다',
+    ok: !document.querySelector('textarea[readonly][style*="-9999"]') });
+  document.execCommand = () => false;
+  out.push({ name: '둘 다 막히면 조용히 실패(앱이 안 멈춘다)', ok: (await autoCopy('x')) === false });
+
+  document.execCommand = realExec;
+  if (realCb) Object.defineProperty(navigator, 'clipboard', realCb);
+
+  out.push({ name: '긁자마자 담는다(팝업이 뜰 때)', ok: /autoCopy\(full\)/.test(src) });
+  out.push({ name: '담겼다고 팝업에 조용히 적는다', ok: /복사됨/.test(src) });
+  out.push({ name: '긁을 때마다 토스트를 띄우진 않는다',
+    ok: !/autoCopy\(full\)[\s\S]{0,220}toast\(/.test(src) });
+  out.push({ name: '복사 단추도 같은 길을 쓴다(따로 놀지 않게)',
+    ok: /toast\(await autoCopy\(t\)/.test(src) });
+  return out;
+});
+
 // ══════════ 캡처 네모가 손을 따라온다 (2026-10-16 신고) ══════════
 // "한번 커진다음에 작은 방향으로 움직이거나 하면 캡쳐범위가 잘 안따라옴."
 // 자취 전체를 감싸고 있어서 **커지기만 하고 줄지 않았다**. 모서리를 끄는 손짓은
