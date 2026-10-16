@@ -144,6 +144,31 @@ for (const tok of ['--bg', '--text', '--card', '--border', '--accent', '--sub', 
   }
 }
 
+// 본문을 그리는 면은 **하이라이트 색을 스스로 정해야** 한다 (2026-10-16).
+// 안 정하면 브라우저 기본 <mark>이 나오는데, 크롬은 글자색까지 알아서 맞춰주지만
+// 사파리는 **물려받은 색 그대로** 쓴다 — 어두움 모드에서 흰 글씨에 샛노란 바탕이 되어
+// 글자가 안 보였다. 크롬으로 재는 대비 점검으로는 못 잡으니 여기서 규칙으로 막는다.
+{
+  const SURFACES = ['.wiki-body', '.peek-body', '.card-context', '.cf-q', '.cf-row-q', '.deck-q'];
+  const missing = [];
+  const noColor = [];
+  for (const sel of SURFACES) {
+    // `<면> mark { … }` 가 어딘가에 있어야 하고, 배경과 글자색을 **둘 다** 정해야 한다
+    const re = new RegExp(`${sel.replace('.', '\\.')}\\s+mark\\b[^{]*\\{([^}]*)\\}`, 'g');
+    const bodies = [...css.matchAll(re)].map((m) => m[1]);
+    if (!bodies.length) { missing.push(sel); continue; }
+    const all = bodies.join(' ');
+    if (!/background/.test(all) || !/(^|[^-])color:/.test(all)) noColor.push(sel);
+  }
+  ok('본문을 그리는 면마다 하이라이트 규칙이 있다', !missing.length, missing.join(', '));
+  ok('하이라이트는 바탕과 글자색을 **둘 다** 정한다', !noColor.length, noColor.join(', '));
+
+  // 어두움 모드에서도 같이 덮어야 한다 — 한쪽만 바꾸면 흰 글씨가 그대로 남는다
+  const darkMarks = [...css.matchAll(/mark\b[^{]*\{[^}]*\}/g)]
+    .filter((m) => /#6b4408|#ffe9ad/.test(m[0])).length;
+  ok('어두움 모드 하이라이트 규칙이 있다', darkMarks >= 2, `${darkMarks}곳`);
+}
+
 console.log(`test_css.mjs  ${fail.length ? '❌' : '✅'} ${pass}개 통과${fail.length ? `, ${fail.length}개 실패` : ''}`);
 fail.forEach((f) => console.log('   ✗ ' + f));
 process.exit(fail.length ? 1 : 0);

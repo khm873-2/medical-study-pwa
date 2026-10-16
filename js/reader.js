@@ -644,7 +644,6 @@ async function reacquire() {
  */
 export function cardsFromBox(root, box, meta = {}) {
   const hits = emphasisIn(root, box);
-  if (!hits.length) return [];
 
   // 블록(문단·목록항목·표의 행) 단위로 묶는다 — 글이 걸친 자리를 알아야 서식을 살린다
   const groups = new Map();
@@ -654,7 +653,29 @@ export function cardsFromBox(root, box, meta = {}) {
     if (!groups.has(block)) groups.set(block, []);
     groups.get(block).push(el);
   }
-  if (!groups.size) return [];
+
+  // 강조가 하나도 없으면 **글에서 직접 고른다** (2026-10-16 지적:
+  // "너무 하이라이트랑 볼드만 잡아내고있음"). 굵게·하이라이트가 안 쳐진 줄글에서는
+  // 네모를 쳐도 "강조된 말이 없습니다"로 끝나서, 수치도 영문 용어도 카드가 안 됐다.
+  // 긁어서 만들 때 쓰는 점수(숫자 > 영문 용어 > 명사구)를 그대로 쓴다.
+  let plain = null;
+  // ⚠️ "강조가 없다"와 "강조는 있었는데 **일부러 걸러냈다**"는 전혀 다르다.
+  //    라벨("병태생리:"), 족보 정답, 케이스 별명, 번호 매김은 emphasisIn이 뜻을 갖고
+  //    버린 것이다 — 그걸 못 봤다고 글에서 다시 주우면 버린 뜻이 사라진다.
+  //    강조가 **아예 없던** 범위에서만 글에서 고른다.
+  if (!groups.size && !sawEmphasis(root, box)) {
+    const blocks = blocksIn(root, box);
+    if (!blocks.length) return [];
+    plain = plainPicks(blocks);
+    if (!plain.length) return [];
+    for (const b of blocks) if (!groups.has(b)) groups.set(b, []);
+  }
+
+  // 그림은 **걸친 만큼** 따라온다(2026-10-16 요청: "10% 넘게 높이 들어가면 그 카드에
+  // 포함하라고 했잖음"). 그림만 있는 문단은 글이 없어 위 모으기에서 빠지므로 여기서
+  // 따로 넣는다. ⚠️ 물어볼 말을 고른 **뒤에** 넣어야 한다 — 먼저 넣으면 groups가
+  // 비어 있지 않게 되어 "글에서 고르기" 길로 아예 안 들어간다.
+  for (const el of imageBlocksIn(root, box)) if (!groups.has(el)) groups.set(el, []);
 
   // ⚠️ **네모 친 범위는 통째로 한 장이다** (2026-10-15 요청:
   //    "적어도 내가 선택한 범위는 그냥 다 보여지는 상태에서 일단 된 다음에 거기서
@@ -675,6 +696,14 @@ export function cardsFromBox(root, box, meta = {}) {
     if (!unitOf.has(host)) { unitOf.set(host, []); units.push(host); }
     unitOf.get(host).push(block);
   }
+  // 글에 나온 차례대로 — 그림 블록을 나중에 끼워 넣어도 제자리에 서게 한다
+  units.sort((a, b) => {
+    const rel = a.compareDocumentPosition(b);
+    // eslint-disable-next-line no-bitwise
+    if (rel & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    // eslint-disable-next-line no-bitwise
+    return (rel & Node.DOCUMENT_POSITION_PRECEDING) ? 1 : 0;
+  });
   // 한 단위가 다른 단위를 품고 있으면(목록 항목 안의 표 따위) 안쪽은 뺀다 —
   // 그냥 두면 같은 글이 카드에 두 번 실린다. 바깥 것이 안쪽 것을 이미 담고 있다.
   for (let i = units.length - 1; i >= 0; i--) {
@@ -694,7 +723,7 @@ export function cardsFromBox(root, box, meta = {}) {
     const els = rows.flatMap((b) => groups.get(b));
     const html = host.tagName === 'TABLE'
       ? tableHtml(host, rows, els, answers)
-      : cloneWithBlanks(host, els, answers, box);
+      : cloneWithBlanks(host, els, answers, box, plain);
     if (html) parts.push(html);
   }
   if (!answers.length || !parts.length) return [];
@@ -1037,7 +1066,7 @@ export function imgOverlap(rect, box) {
 
 const IMG_KEEP = 0.1;      // 10% — 설명만 긁었는데 그림이 통째로 따라오지 않게
 
-function cloneWithBlanks(block, els, answers, box) {
+function cloneWithBlanks(block, els, answers, box, plain) {
   const clone = block.cloneNode(true);
   const orig = [...block.querySelectorAll(EMPH_SEL)];
   const copy = [...clone.querySelectorAll(EMPH_SEL)];
@@ -1045,6 +1074,13 @@ function cloneWithBlanks(block, els, answers, box) {
     if (!els.includes(o) || !copy[i]) return;
     answers.push(replaceWithCloze(copy[i], o.textContent.trim()));
   });
+  // 강조가 없어 글에서 고른 경우 — 그 말을 찾아 가린다
+  if (plain) {
+    for (const w of plain) {
+      if (w.block !== block) continue;
+      if (blankTextIn(clone, w.t)) answers.push(w.t);
+    }
+  }
   // 그림은 **걸친 만큼** 따라온다(2026-10-14 요청).
   // 그림 설명만 긁었는데 그림이 통째로 딸려오면 카드가 화면을 다 먹는다.
   // 높이의 10%라도 네모에 들어왔으면 뜻이 있다고 보고 남긴다.
@@ -1057,6 +1093,97 @@ function cloneWithBlanks(block, els, answers, box) {
     });
   }
   return clone.outerHTML;
+}
+
+/** 네모 안에 강조가 **하나라도 있었나**(걸러지기 전 기준). */
+function sawEmphasis(root, box) {
+  for (const el of root.querySelectorAll(EMPH_SEL)) {
+    if (el.querySelector(EMPH_SEL)) continue;
+    const t = el.textContent.trim();
+    if (t.length < 2) continue;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    if (r.right < box.l || r.left > box.r || r.bottom < box.t || r.top > box.b) continue;
+    return true;
+  }
+  return false;
+}
+
+/** 네모에 걸친 블록들 — 강조가 없을 때 글을 직접 들여다보려고 모은다. */
+function blocksIn(root, box) {
+  const out = [];
+  root.querySelectorAll('p, li, tr, blockquote, dd').forEach((el) => {
+    if (el.querySelector('p, li, tr, blockquote')) return;    // 가장 안쪽만
+    const t = el.textContent.replace(/\s+/g, ' ').trim();
+    if (t.length < 6) return;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    if (r.right < box.l || r.left > box.r || r.bottom < box.t || r.top > box.b) return;
+    if (isQuizBlock(el)) return;                              // 족보 문제·해설은 제외
+    out.push(el);
+  });
+  return out;
+}
+
+/** 네모가 그림을 충분히(IMG_KEEP) 덮은 블록들 — 글이 없어도 카드에 따라온다. */
+function imageBlocksIn(root, box) {
+  const out = [];
+  root.querySelectorAll('img').forEach((im) => {
+    if (imgOverlap(im.getBoundingClientRect(), box) < IMG_KEEP) return;
+    const r = im.getBoundingClientRect();
+    if (r.right < box.l || r.left > box.r) return;            // 가로로도 걸쳐야 한다
+    const block = blockOf(im) || (im.closest ? im.closest('p, li, figure, div') : null);
+    if (block && root.contains(block) && !out.includes(block)) out.push(block);
+  });
+  return out;
+}
+
+/**
+ * 강조가 없는 범위에서 **물어볼 만한 말**을 고른다.
+ *
+ * 긁어서 만들 때 쓰는 점수를 그대로 쓴다 — 숫자(5점) > 영문 용어(3점) > 명사구(2점),
+ * 조사·서술 끝맺음은 0점. 가장 값진 등급만 고르고, 넷을 넘으면 거기서 끊는다.
+ */
+function plainPicks(blocks, limit = 4) {
+  const seen = new Set();
+  const all = [];
+  for (const block of blocks) {
+    const text = block.textContent.replace(/\s+/g, ' ').trim();
+    for (const w of text.split(' ')) {
+      for (const piece of splitWord(w)) {
+        const t = piece.trim();
+        if (t.length < 2 || seen.has(t)) continue;
+        const sc = wordScore(t);
+        if (sc <= 1) continue;                 // 괄호·한 글자 따위는 뺀다
+        if (isLabel(block, t)) continue;
+        seen.add(t);
+        all.push({ t, s: sc, block });
+      }
+    }
+  }
+  if (!all.length) return [];
+  const top = Math.max(...all.map((x) => x.s));
+  // 숫자·영문 용어처럼 값진 것은 여럿 가려도 되지만, 평범한 명사(2점)뿐이면 **하나만**
+  // 가린다 — 넷을 다 가리면 "___ ___ ___ 오고"가 되어 물음이 사라진다.
+  return all.filter((x) => x.s === top).slice(0, top <= 2 ? 1 : limit);
+}
+
+/** 사본에서 그 말을 찾아 빈칸으로. 찾으면 true. */
+function blankTextIn(root, want) {
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement && n.parentElement.closest('.cloze'))
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  let n;
+  while ((n = walk.nextNode())) {
+    const i = n.nodeValue.indexOf(want);
+    if (i < 0) continue;
+    const after = n.splitText(i);
+    after.splitText(want.length);
+    after.replaceWith(blankNode(want));
+    return true;
+  }
+  return false;
 }
 
 /**

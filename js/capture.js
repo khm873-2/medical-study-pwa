@@ -31,21 +31,55 @@ function inlineStyles(src, dst) {
   for (let i = 0; i < sk.length && i < dk.length; i++) inlineStyles(sk[i], dk[i]);
 }
 
-/** <img>를 data: URL로 바꾼다 — 외부 주소는 SVG 안에서 못 불러온다. */
-async function inlineImages(root) {
-  const imgs = [...root.querySelectorAll('img')];
-  await Promise.all(imgs.map(async (im) => {
-    if (im.src.startsWith('data:')) return;
-    try {
-      const blob = await fetch(im.src).then((r) => r.blob());
-      im.src = await new Promise((res, rej) => {
-        const fr = new FileReader();
-        fr.onload = () => res(fr.result);
-        fr.onerror = rej;
-        fr.readAsDataURL(blob);
-      });
-    } catch { im.remove(); }      // 못 가져오면 빼고 나머지라도 살린다
-  }));
+// 자리만 차지하고 아무것도 안 그리는 1x1 투명 그림
+const BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+/**
+ * 그림은 **SVG 안에 넣지 않는다** — 캔버스에 직접 그린다.
+ *
+ * 왜(2026-10-16 신고: "왜 캡쳐하면 그림은 안들어감?"): `<foreignObject>` 안의 `<img>`는
+ * 그려지지 않는다. data: URL로 바꿔 넣어도 마찬가지다(크롬에서도 재현 — 그림 자리가
+ * 흰색으로 남는다). 보안 제약이라 우회할 길이 없다.
+ *
+ * 그래서 **글과 그림을 따로 굽는다**: 복제본에서는 그림을 투명한 자리지기로 바꿔
+ * 레이아웃만 지키게 하고(빼버리면 글이 밀린다), 글을 다 그린 뒤 **살아 있는 그림을
+ * 캔버스에 그대로 올린다**. 화면에 보이는 그 픽셀이 그대로 들어간다.
+ *
+ * @returns {Array<{el:HTMLImageElement, box:DOMRect}>} 나중에 캔버스에 올릴 그림들
+ */
+function stubImages(host, clone, rect) {
+  const live = [...host.querySelectorAll('img')];
+  const copy = [...clone.querySelectorAll('img')];
+  const draw = [];
+  live.forEach((im, i) => {
+    const c = copy[i];
+    const b = im.getBoundingClientRect();
+    const seen = b.width > 0 && b.height > 0
+      && b.right > rect.left && b.left < rect.left + rect.width
+      && b.bottom > rect.top && b.top < rect.top + rect.height;
+    if (c) {
+      // 자리는 그대로 두고 그림만 비운다 — 빼면 글이 밀려 보이는 것과 달라진다
+      c.src = BLANK;
+      c.style.width = `${b.width}px`;
+      c.style.height = `${b.height}px`;
+      c.style.objectFit = 'fill';
+    }
+    if (seen && im.complete && im.naturalWidth) draw.push({ el: im, box: b });
+  });
+  return draw;
+}
+
+/** `object-fit: contain`으로 줄인 실제 그림 자리. 그 밖의 값은 상자를 그대로 쓴다. */
+function fitBox(im, box) {
+  const fit = getComputedStyle(im).objectFit;
+  const nw = im.naturalWidth;
+  const nh = im.naturalHeight;
+  if (fit !== 'contain' || !nw || !nh) return box;
+  const k = Math.min(box.width / nw, box.height / nh);
+  const w = nw * k;
+  const h = nh * k;
+  return { left: box.left + (box.width - w) / 2, top: box.top + (box.height - h) / 2,
+    width: w, height: h };
 }
 
 /**
@@ -74,9 +108,11 @@ export async function captureRect(rect) {
   const hb = host.getBoundingClientRect();
 
   const clone = host.cloneNode(true);
-  clone.querySelectorAll('canvas, .penlayer, #selPop, .toc-scrim, script').forEach((n) => n.remove());
   inlineStyles(host, clone);
-  await inlineImages(clone);
+  // ⚠️ 그림 짝짓기는 **지우기 전에** 한다 — 원본과 복제본을 차례로 맞춰 보는데,
+  //    복제본에서 먼저 뭔가를 들어내면 그 안에 그림이 있었을 때 차례가 어긋난다.
+  const pictures = stubImages(host, clone, rect);
+  clone.querySelectorAll('canvas, .penlayer, #selPop, .toc-scrim, script').forEach((n) => n.remove());
 
   // 잘라낼 위치만큼 밀어 넣는다
   const wrap = document.createElement('div');
@@ -111,6 +147,15 @@ export async function captureRect(rect) {
   cx.fillRect(0, 0, cv.width, cv.height);
   cx.setTransform(scale, 0, 0, scale, 0, 0);
   cx.drawImage(img, 0, 0);
+
+  // 글을 다 그린 뒤 **그림을 그 위에 올린다**(위 stubImages 참고).
+  // 화면 좌표를 자른 자리 기준으로 옮겨서, 보이는 그대로의 위치·크기로 들어간다.
+  for (const { el, box } of pictures) {
+    const f = fitBox(el, box);
+    try {
+      cx.drawImage(el, f.left - rect.left, f.top - rect.top, f.width, f.height);
+    } catch { /* 한 장이 안 그려져도 나머지는 살린다 */ }
+  }
   return cv;
 }
 

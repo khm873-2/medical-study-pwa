@@ -4660,6 +4660,134 @@ await run('떠 있는 돋보기', async () => {
   return out;
 });
 
+// ══════════ 카드: 그림·강조 없는 줄글 (2026-10-16 신고) ══════════
+// "카드만들기도 그림이 안들어감" / "너무 하이라이트랑 볼드만 잡아내고있음"
+await run('카드 그림·줄글', async () => {
+  const out = [];
+  const R = await import('/js/reader.js');
+  const { renderMarkdown } = await import('/js/markdown.js');
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  const body = document.getElementById('readBody');
+  const meta = { notePath: 'x.md', noteTitle: '노트', heading: '1. 장' };
+  const make = async (md) => {
+    body.innerHTML = renderMarkdown(md);
+    await new Promise((r) => setTimeout(r, 70));
+    const b = body.getBoundingClientRect();
+    return R.cardsFromBox(body, { l: b.left, t: b.top, r: b.right, b: b.bottom }, meta);
+  };
+
+  // ── 강조가 없어도 카드가 된다 ──
+  const num = await make('치료 농도는 50~100 µg/mL이고 800 이상에서 혼수가 올 수 있다.');
+  out.push({ name: '**강조 없는 줄글도 카드가 된다**', ok: num.length === 1,
+    detail: `${num.length}장` });
+  out.push({ name: '숫자를 물어본다', ok: num.length === 1 && num[0].answers.some((a) => /\d/.test(a)),
+    detail: num.length ? num[0].answers.join(' / ') : '' });
+
+  const eng = await make('Endoluminal biofilm 은 튜브 내강에 형성되는 생물막이다.');
+  out.push({ name: '영문 용어도 물어본다',
+    ok: eng.length === 1 && eng[0].answers.some((a) => /[A-Za-z]/.test(a)),
+    detail: eng.length ? eng[0].answers.join(' / ') : '' });
+
+  // 평범한 명사뿐이면 **하나만** 가린다 — 넷을 다 가리면 못 푼다
+  const noun = await make('설명 문장이 먼저 오고 그림이 뒤따른다고 적혀 있다.');
+  out.push({ name: '평범한 말뿐이면 한 개만 가린다',
+    ok: noun.length === 1 && noun[0].answers.length === 1,
+    detail: noun.length ? noun[0].answers.join(' / ') : '0장' });
+
+  // ── 일부러 거른 것은 되살아나지 않는다 ──
+  // 강조가 **있었는데** 라벨·족보 정답이라 버린 경우까지 글에서 다시 주우면 안 된다
+  out.push({ name: '"병태생리" 라벨은 여전히 카드가 안 된다',
+    ok: (await make('**병태생리**: 전부하가 **증가**한다.')).length === 0 });
+  out.push({ name: '족보 정답 번호도 여전히 안 된다',
+    ok: (await make('**정답: 1, 5**(연도별로 1개만 고르시오형이면 1번만)')).length === 0 });
+
+  // ── 그림이 네모에 걸치면 따라온다 ──
+  const RED = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGO4o6FBU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAIahsD2ItTF0AAAAAElFTkSuQmCC';
+  body.innerHTML = `<p>설명 문장이 앞에 온다.</p><p><img class="embed" src="${RED}" `
+    + 'style="width:120px;height:80px"></p>';
+  await new Promise((r) => setTimeout(r, 90));
+  const wb = body.getBoundingClientRect();
+  const withImg = R.cardsFromBox(body, { l: wb.left, t: wb.top, r: wb.right, b: wb.bottom }, meta);
+  out.push({ name: '**그림이 카드 본문에 들어간다**',
+    ok: withImg.length === 1 && /<img/.test(withImg[0].contextHtml),
+    detail: withImg.length ? withImg[0].contextHtml.slice(0, 60) : '0장' });
+
+  // 살짝만 걸친 그림은 안 따라온다(10% 기준)
+  const im = body.querySelector('img');
+  const ib = im.getBoundingClientRect();
+  const graze = R.cardsFromBox(body,
+    { l: wb.left, t: wb.top, r: wb.right, b: ib.top + ib.height * 0.03 }, meta);
+  out.push({ name: '살짝만 걸친 그림은 안 따라온다',
+    ok: !graze.length || !/<img/.test(graze[0].contextHtml),
+    detail: graze.length ? '들어옴' : '카드 없음' });
+
+  // ── 카드를 그릴 때 그림의 주소를 채운다 ──
+  const app = await fetch('/js/app.js').then((x) => x.text());
+  out.push({ name: '카드 본문을 그리는 길이 하나다', ok: /function setCardBody\(el, html\)/.test(app) });
+  out.push({ name: '**거기서 그림 주소를 채운다**',
+    ok: /function setCardBody[\s\S]{0,260}hydrateEmbeds/.test(app) });
+  out.push({ name: '카드 그리는 데가 전부 그 길을 쓴다',
+    ok: (app.match(/setCardBody\(/g) || []).length >= 5,
+    detail: `${(app.match(/setCardBody\(/g) || []).length}곳` });
+
+  body.innerHTML = '';
+  return out;
+});
+
+// ══════════ 캡처에 그림이 들어간다 (2026-10-16 신고) ══════════
+// "왜 캡쳐하면 그림은 안들어감? 그냥 내가 보는 화면 그대로 캡쳐하면 되는데..."
+// `<foreignObject>` 안의 `<img>`는 사파리에서 안 그려진다. 그래서 글과 그림을 **따로**
+// 굽는다 — 복제본에서는 투명한 자리지기로 바꿔 레이아웃만 지키고, 다 그린 뒤 살아 있는
+// 그림을 캔버스에 직접 올린다.
+await run('캡처 속 그림', async () => {
+  const out = [];
+  const { captureRect } = await import('/js/capture.js');
+  const RED = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGO4o6FBU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAIahsD2ItTF0AAAAAElFTkSuQmCC';
+  const blob = URL.createObjectURL(await (await fetch(RED)).blob());
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:20px;top:20px;width:400px;height:240px;'
+    + 'background:#fff;color:#000;padding:10px;z-index:9999';
+  host.innerHTML = `<p id="pTop">글자 위</p>`
+    + `<img id="iA" src="${RED}" style="width:60px;height:60px">`
+    + `<img id="iB" src="${blob}" style="width:60px;height:60px">`
+    + `<img id="iC" src="${RED}" style="width:80px;height:40px;object-fit:contain">`
+    + `<p id="pBot">글자 아래</p>`;
+  document.body.appendChild(host);
+  await Promise.all([...host.querySelectorAll('img')].map((im) => (im.complete
+    ? Promise.resolve() : new Promise((r) => { im.onload = r; im.onerror = r; }))));
+  await new Promise((r) => setTimeout(r, 60));
+
+  const before = document.getElementById('pBot').getBoundingClientRect().top;
+  const r = host.getBoundingClientRect();
+  const cv = await captureRect({ left: r.left, top: r.top, width: r.width, height: r.height });
+  const after = document.getElementById('pBot').getBoundingClientRect().top;
+  const cx = cv.getContext('2d');
+  const sc = cv.width / r.width;
+  const at = (id) => {
+    const b = document.getElementById(id).getBoundingClientRect();
+    const d = cx.getImageData(Math.round((b.left - r.left + b.width / 2) * sc),
+      Math.round((b.top - r.top + b.height / 2) * sc), 1, 1).data;
+    return `${d[0]},${d[1]},${d[2]}`;
+  };
+  out.push({ name: '**data: 그림이 들어간다**', ok: at('iA') === '220,40,40', detail: at('iA') });
+  out.push({ name: '**blob: 그림도 들어간다**(vault 그림이 이 꼴이다)',
+    ok: at('iB') === '220,40,40', detail: at('iB') });
+  out.push({ name: 'object-fit 줄인 그림도 제자리에', ok: at('iC') === '220,40,40', detail: at('iC') });
+  out.push({ name: '캡처하느라 화면이 밀리지 않는다', ok: Math.abs(after - before) < 1,
+    detail: `${Math.round(before)} → ${Math.round(after)}` });
+  // 그림 **바깥**은 흰 바탕 그대로여야 한다 — 통째로 칠해버린 게 아님을 확인
+  const edge = cx.getImageData(Math.round(390 * sc), Math.round(8 * sc), 1, 1).data;
+  out.push({ name: '그림이 엉뚱한 데까지 번지지 않는다', ok: edge[0] > 200 && edge[1] > 200,
+    detail: `${edge[0]},${edge[1]},${edge[2]}` });
+  out.push({ name: '캔버스가 오염되지 않는다(저장할 수 있다)',
+    ok: await new Promise((res) => { try { cv.toBlob((b) => res(!!b)); } catch { res(false); } }) });
+  URL.revokeObjectURL(blob);
+  host.remove();
+  return out;
+});
+
 // ══════════ "이 문서" 찾기 — 눌러서 가고, 걸린 자리가 다 보인다 (2026-10-16) ══════════
 // "해당 문서에서도 찾으면 눌렀을 때 그 쪽으로 가야지...... 그리고 찾은것들은
 //  좀 하이라이트를 일시적이라도 띄워줘야 금방찾겠지"
@@ -4769,8 +4897,12 @@ await run('긁으면 복사', async () => {
 await run('캡처 네모', async () => {
   const out = [];
   const { PenLayer } = await import('/js/pen.js');
+  // 앞 검사가 남긴 화면이 포인터를 가로채면 안 된다 — 펜은 UI 위에서는 평범한
+  // 포인터로 동작하므로, 받침을 **맨 위에** 올려 깨끗한 자리에서 잰다
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.body.dataset.screen = 'listScreen';
   const host = document.createElement('div');
-  host.style.cssText = 'position:fixed;left:0;top:0;width:800px;height:600px;z-index:-1';
+  host.style.cssText = 'position:fixed;left:0;top:0;width:800px;height:600px;z-index:5000;background:#fff';
   document.body.appendChild(host);
   const pen = new PenLayer(host, {});
   pen.setTool('shot');

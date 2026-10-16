@@ -4405,6 +4405,20 @@ function cleanPickHtml(root) {
 }
 
 /**
+ * 카드 본문을 그린다 — 정돈하고 **그림까지 불러온다**.
+ *
+ * 카드 HTML에는 `<img class="embed" data-embed="파일명">`이 src 없이 들어 있다
+ * (markdown.js가 그렇게 찍고, 나중에 채우는 구조다). 그런데 카드를 그리는 네 군데가
+ * 전부 innerHTML만 꽂고 끝냈다 — 그래서 **카드에 그림이 영영 안 떴다**
+ * (2026-10-16 신고: "카드만들기도 그림이 안들어감"). 한 곳으로 모아 같이 처리한다.
+ */
+function setCardBody(el, html) {
+  el.innerHTML = tidyCardHtml(html || '');
+  hydrateEmbeds(el, (name) => getBlobUrl(`attachments/${name}`)).catch(() => {});
+  return el;
+}
+
+/**
  * 고친 화면을 카드에 반영한다 — **답은 본문에서 읽어온다**.
  *
  * 전에는 답 목록을 따로 더하고 뺐는데, 빼는 쪽이 `filter(x => x !== ans)` 였다.
@@ -4508,7 +4522,7 @@ function renderCfNew() {
   }
   const q = document.createElement('div');
   q.className = 'cf-q cf-pick';
-  q.innerHTML = tidyCardHtml(c.contextHtml || '');
+  setCardBody(q, c.contextHtml);
   // 옛 카드에 껍데기가 묻어 있을 수 있다 — 씌우기 전에 한 번 벗긴다
   q.querySelectorAll('span.cf-w').forEach((el) => el.replaceWith(...el.childNodes));
   q.normalize();
@@ -4560,7 +4574,7 @@ function renderCfList() {
     top.textContent = c.topic || c.heading || '';
     const q = document.createElement('div');
     q.className = 'cf-row-q';
-    q.innerHTML = tidyCardHtml(c.contextHtml || '');
+    setCardBody(q, c.contextHtml);
     paintCloze(q, false);
     main.append(top, q);
     // 고르는 중이면 누르는 건 **고르기**, 아니면 답 들추기
@@ -5517,7 +5531,7 @@ function renderCard() {
 
   const ctx = document.getElementById('cardContext');
   // 그려줄 때마다 정돈한다 — **이미 만들어둔 카드의 틀어진 띄어쓰기도 여기서 낫는다**
-  if (c.contextHtml) ctx.innerHTML = tidyCardHtml(c.contextHtml);   // 표·서식은 그대로 살린다
+  if (c.contextHtml) setCardBody(ctx, c.contextHtml);               // 표·서식·그림을 그대로 살린다
   else ctx.textContent = c.context || '';
   // 노트에서 가져온 Q&A는 빈칸이 아니라 문장형 질문이라 왼쪽 정렬이 읽기 쉽다
   ctx.classList.toggle('qa-q', c.kind === 'qa');
@@ -6318,7 +6332,7 @@ function deckCard(c, srs, idx = 0) {
 
   const q = document.createElement('div');
   q.className = 'deck-q';
-  q.innerHTML = tidyCardHtml(c.contextHtml || '');
+  setCardBody(q, c.contextHtml);
   q.querySelectorAll('.cloze').forEach((el) => { el.textContent = '____'; });
 
   const a = document.createElement('div');

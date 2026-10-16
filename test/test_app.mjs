@@ -384,9 +384,16 @@ check('retryWrong: 답안 비워짐', q2.order.every((i) => q2.answers[i] === nu
           try { parsed = parseExamHtml(readFileSync(`${root}/${sub}/${raw}`, 'utf8')); } catch { continue; }
           seen++;
           const t = examTitle(parsed, prettyExamName(file));
-          if (t !== (parsed.titles[0] || prettyExamName(file))) {
+          // ⚠️ "머리말을 그대로 쓰는가"를 묻지 않는다 — 머리말이 베껴온 것이면
+          //    **버리는 게 맞다**. vault에 그런 파일이 계속 생기므로(새로 만들 때 앞
+          //    파일을 복사한다) 그걸 실패로 세면 안전장치가 일할 때마다 빨간불이 된다.
+          //    물을 것은 "나온 제목이 그 강의와 맞느냐"다.
+          // examTitle과 **같은 기준 둘**로 본다(강의명·파일 이름). 하나만 보면,
+          // 강의명에 과목이 붙은 파일("근골격계 골관절염")에서 멀쩡한 제목이 걸린다.
+          const anchors = [(parsed.lectureName || '').trim(), prettyExamName(file)].filter(Boolean);
+          if (!anchors.some((a) => nameSimilarity(t, a) >= 0.3)) {
             dropped++;
-            check(`제 머리말이 버려졌다: ${file}`, false, t);
+            check(`제목이 그 강의와 안 맞는다: ${file}`, false, `${t} ↔ ${anchors.join(' / ')}`);
           }
           // 베껴온 PBLS 머리말이 되살아나면 바로 잡는다
           if (/소아기본소생술/.test(t)) {
@@ -395,7 +402,7 @@ check('retryWrong: 답안 비워짐', q2.order.every((i) => q2.answers[i] === nu
         }
       }
     }
-    if (seen) check(`vault 시험 ${seen}개 모두 제 제목을 쓴다`, dropped === 0, `${dropped}개 버려짐`);
+    if (seen) check(`vault 시험 ${seen}개 모두 제 강의 이름을 보여준다`, dropped === 0, `${dropped}개 어긋남`);
 
     // 머리말을 다시 베껴 넣으면 걸러내는지 — 고친 파일이 또 틀어졌을 때의 안전망
     const 각론 = `${VAULT}/05_퀴즈/응급_중환자/261013_윤성현_임상독성학각론_퀴즈.html`;

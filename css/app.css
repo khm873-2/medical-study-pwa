@@ -354,11 +354,18 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
 .wiki-body p { margin: 8px 0; }
 .wiki-body ul, .wiki-body ol { margin: 8px 0; padding-left: 22px; }
 .wiki-body li { margin: 4px 0; }
-.wiki-body mark { background: #fde68a; color: #78350f; padding: 0 3px; border-radius: 3px; }
+/* 하이라이트 — **본문을 그리는 모든 면**에 같은 색을 준다.
+   전에는 .wiki-body 와 .set-preview 에만 걸려 있어서, 카드·들러보기 본문의 ==강조==는
+   브라우저 기본 노랑(#ff0)에 물려받은 글자색이 얹혔다. 어두움 모드에서는 **흰 글씨에
+   샛노란 바탕**이 되어 글자가 안 보였다(2026-10-16 신고). */
+.wiki-body mark, .peek-body mark, .card-context mark, .cf-q mark, .cf-row-q mark, .deck-q mark, .set-preview mark {
+  background: #fde68a; color: #78350f; padding: 0 3px; border-radius: 3px;
+}
 .wiki-body code { background: var(--badge-bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 .wiki-body blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid var(--border); color: var(--sub); }
-/* 들러보기 창도 같은 본문을 그린다 — 그림 규칙을 같이 받는다(2026-10-16) */
-.wiki-body img.embed, .peek-body img.embed {
+/* 들러보기 창과 **카드 본문**도 같은 본문을 그린다 — 그림 규칙을 같이 받는다(2026-10-16) */
+.wiki-body img.embed, .peek-body img.embed,
+.card-context img.embed, .cf-q img.embed, .cf-row-q img.embed, .deck-q img.embed {
   max-width: 100%; border-radius: 8px; border: 1px solid var(--border); margin: 8px 0;
   /* 비율을 아는 그림은 JS가 aspect-ratio를 미리 박아둔다(markdown.js) — 그때 폭이
      정해져 있어야 높이가 잡히고, 그래야 뜨면서 아래 글을 안 민다(2026-10-14). */
@@ -383,10 +390,9 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
 .wiki-body .cal-example { border-color: var(--accent); }
 .wiki-body .cal-warning { border-color: var(--warn); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .wiki-body mark { background: #6b4408; color: #ffe9ad; }
+  :root:not([data-theme="light"]) .wiki-body mark, :root:not([data-theme="light"]) .peek-body mark, :root:not([data-theme="light"]) .card-context mark, :root:not([data-theme="light"]) .cf-q mark, :root:not([data-theme="light"]) .cf-row-q mark, :root:not([data-theme="light"]) .deck-q mark, :root:not([data-theme="light"]) .set-preview mark { background: #6b4408; color: #ffe9ad; }
 }
-:root[data-theme="dark"] .wiki-body mark { background: #6b4408; color: #ffe9ad; }
-
+:root[data-theme="dark"] .wiki-body mark, :root[data-theme="dark"] .peek-body mark, :root[data-theme="dark"] .card-context mark, :root[data-theme="dark"] .cf-q mark, :root[data-theme="dark"] .cf-row-q mark, :root[data-theme="dark"] .deck-q mark, 
 /* 가로모드에서는 문제와 노트를 나란히 */
 @media (orientation: landscape) and (min-width: 860px) {
 }
@@ -2051,9 +2057,7 @@ mark.peek-hit {
   background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-2);
   font-size: calc(17px * var(--ui-scale)); line-height: var(--read-line); word-break: keep-all;
 }
-.set-preview mark { background: #fde68a; color: #78350f; padding: 0 3px; border-radius: 3px; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .set-preview mark { background: #6b4408; color: #ffe9ad; }
 }
 :root[data-theme="dark"] .set-preview mark { background: #6b4408; color: #ffe9ad; }
 
@@ -2805,7 +2809,12 @@ li.task.done .task-box { color: var(--accent); }
 
 /* 그림 자리 — 한 번 본 그림은 뜨기 전에 **자리부터** 잡는다(2026-10-14).
    src가 없는 <img>는 본디 크기가 없어 혼자서는 자리를 못 잡으므로 바깥 상자를 쓴다. */
-.wiki-body .embed-box, .peek-body .embed-box {
+/* 카드 안의 그림은 화면을 다 먹지 않게 높이를 묶는다 — 카드는 한눈에 들어와야 한다 */
+.cf-row-q img.embed { max-height: 120px; object-fit: contain; }
+.deck-q img.embed { max-height: 90px; object-fit: contain; }
+.card-context img.embed, .cf-q img.embed { max-height: 38vh; object-fit: contain; }
+.wiki-body .embed-box, .peek-body .embed-box,
+.card-context .embed-box, .cf-q .embed-box, .cf-row-q .embed-box, .deck-q .embed-box {
   display: block; width: 100%; margin: 8px 0;
   background: var(--badge-bg); border-radius: 8px;
 }
