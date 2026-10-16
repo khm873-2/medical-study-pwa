@@ -442,6 +442,119 @@ check('retryWrong: 답안 비워짐', q2.order.every((i) => q2.answers[i] === nu
     /chip\('📗 실강노트', \(\) => openNoteByName\(l\.wiki/.test(src));
 }
 
+// ---------- 정답이 한 칸 밀리지 않는가 (2026-10-16 신고) ----------
+// "퀴즈가 답이 하나씩 밀려있음." 실제로 그랬다. `ans`는 **0부터 세는 자리 번호**인데
+// 다섯 파일이 1부터 세어 적어뒀다. 선지 해설에서 "정답."으로 시작하는 칸이 진짜 답이므로
+// 그걸 기준으로 vault 전체를 대조한다 — 앞으로 같은 파일이 또 들어와도 여기서 걸린다.
+{
+  const MARK = /^\s*[✅⭕○◎▶]?\s*정답\s*([.\-—:·,)]|$)/;
+  let checked = 0;
+  let wrong = 0;
+  let ox = 0;
+  let oxWrong = 0;
+  let dropped = 0;
+  let total = 0;
+  for (const root of ['05_퀴즈', '06_모의고사']) {
+    let subs = [];
+    try { subs = readdirSync(`${VAULT}/${root}`); } catch { continue; }
+    for (const sub of subs) {
+      let files = [];
+      try { files = readdirSync(`${VAULT}/${root}/${sub}`); } catch { continue; }
+      for (const f of files) {
+        if (!f.endsWith('.html')) continue;
+        let p;
+        try { p = parseExamHtml(readFileSync(`${VAULT}/${root}/${sub}/${f}`, 'utf8')); } catch { continue; }
+        dropped += p.dropped || 0;
+        total += p.questions.length;
+        for (const q of p.questions) {
+          // ① 자리를 벗어난 답은 있을 수 없다
+          if (!(q.ans >= 0 && q.ans < q.opts.length)) {
+            wrong++;
+            check(`답이 선지 밖: ${f.normalize('NFC')} #${q.num}`, false, `ans=${q.ans}/${q.opts.length}`);
+            continue;
+          }
+          // ② 선지 해설이 정답을 가리키면 그것과 맞아야 한다
+          const opt = q.opt || [];
+          if (opt.length !== q.opts.length) continue;
+          const idx = opt.findIndex((t) => MARK.test(String(t)));
+          if (idx < 0) continue;
+          checked++;
+          if (q.type === 'ox') ox++;
+          if (q.ans !== idx) {
+            wrong++;
+            if (q.type === 'ox') oxWrong++;
+            if (wrong <= 3) {
+              check(`답이 한 칸 밀렸다: ${f.normalize('NFC')} #${q.num}`, false,
+                `ans=${q.ans} 표시=${idx}`);
+            }
+          }
+        }
+      }
+    }
+  }
+  if (checked) {
+    check(`vault 문항 ${checked}개의 답이 해설과 맞는다 (OX ${ox}개 포함)`, wrong === 0,
+      `${wrong}개 어긋남${oxWrong ? ` (OX ${oxWrong})` : ''}`);
+  }
+  // ③ 읽다가 조용히 버리는 문항이 없어야 한다 — OX를 못 알아봐서 216개를 버리고 있었다
+  check(`버려지는 문항이 없다 (전체 ${total}문항)`, dropped === 0, `${dropped}개 버림`);
+}
+
+// ---------- 답 번호를 1부터 적은 파일을 바로잡는가 ----------
+{
+  const { fixOneBased } = await import(`${PWA}/js/parser.js`);
+  const q = (ans, right) => ({
+    type: 'mc', ans, opts: ['가', '나', '다', '라', '마'],
+    opt: ['가 설명', '나 설명', '다 설명', '라 설명', '마 설명']
+      .map((t, i) => (i === right ? '정답. 이것이다.' : t)),
+  });
+  // 파일 전체가 한 칸씩 밀렸으면 내린다
+  const shifted = [q(2, 1), q(3, 2), q(1, 0), q(5, 4)];
+  check('한 칸 밀린 파일을 바로잡는다', fixOneBased(shifted) === true);
+  check('바로잡으면 해설과 맞는다', shifted.every((x, i) => x.ans === [1, 2, 0, 4][i]),
+    shifted.map((x) => x.ans).join(','));
+  // 멀쩡한 파일은 건드리지 않는다
+  const fine = [q(1, 1), q(2, 2), q(0, 0), q(4, 4)];
+  check('멀쩡한 파일은 안 건드린다', fixOneBased(fine) === false
+    && fine.map((x) => x.ans).join(',') === '1,2,0,4', fine.map((x) => x.ans).join(','));
+  // **한 문항만 어긋난 것은 옮기지 않는다** — 해설 표시가 잘못 붙은 파일이 따로 있다
+  const oneOff = [q(0, 0), q(1, 1), q(2, 2), q(3, 3), q(2, 1)];
+  check('한 문항만 어긋나면 안 옮긴다(해설이 잘못 붙은 경우)',
+    fixOneBased(oneOff) === false, oneOff.map((x) => x.ans).join(','));
+  // OX는 손대지 않는다 — 0=O, 1=X 라서 내리면 뜻이 뒤집힌다
+  const withOx = [q(2, 1), q(3, 2), q(1, 0), { type: 'ox', ans: 1, opts: ['O', 'X'] }];
+  fixOneBased(withOx);
+  check('OX 답은 안 내린다', withOx[3].ans === 1, String(withOx[3].ans));
+}
+
+// ---------- OX 답이 어떤 꼴로 적혀 있든 읽는가 ----------
+{
+  // OX를 못 알아보면 "읽을 수 있는 문항이 없다"며 **던진다** — 검사가 거기서 죽지 않고
+  // 무엇이 사라졌는지 말하게 한다
+  const one = (raw) => {
+    const html = `<script>const QUESTIONS = ${JSON.stringify([raw])};</script>`;
+    try { return parseExamHtml(html).questions[0] || null; } catch { return null; }
+  };
+  const cases = [
+    ['참·거짓 true', { type: 'ox', q: '문장이다.', ans: true }, 0],
+    ['참·거짓 false', { type: 'ox', q: '문장이다.', ans: false }, 1],
+    ['번호 0', { type: 'ox', q: '문장이다.', correct: 0 }, 0],
+    ['번호 1', { type: 'ox', q: '문장이다.', correct: 1 }, 1],
+    ['글자 "O"', { type: 'ox', q: '문장이다.', ans: 'O' }, 0],
+    ['글자 "X"', { type: 'ox', q: '문장이다.', ans: 'X' }, 1],
+    ['글자 "거짓"', { type: 'ox', q: '문장이다.', ans: '거짓' }, 1],
+  ];
+  for (const [label, raw, want] of cases) {
+    const got = one(raw);
+    check(`OX ${label} → ${want === 0 ? 'O' : 'X'}`, got && got.ans === want && got.type === 'ox',
+      got ? `ans=${got.ans} type=${got.type}` : '문항이 사라졌다');
+  }
+  // 선지가 따로 없어도 OX는 O·X 두 칸으로 선다 — 전에는 선지가 없다며 버렸다
+  const ox = one({ type: 'ox', q: '문장이다.', correct: 1 });
+  check('OX 문항이 버려지지 않는다', !!ox && ox.opts.join('') === 'OX',
+    ox ? ox.opts.join('') : '사라짐');
+}
+
 // ---------- 결과 ----------
 console.log(`\n통과 ${pass}건`);
 if (fail.length) {

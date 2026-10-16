@@ -4399,7 +4399,13 @@ function renderCardFloat() {
 function cleanPickHtml(root) {
   const c = root.cloneNode(true);
   c.querySelectorAll('span.cf-w').forEach((el) => el.replaceWith(...el.childNodes));
-  c.querySelectorAll('.cloze').forEach((el) => el.classList.remove('pickable'));
+  // 편집 중에만 쓰는 표시는 **전부** 턴다. 하나라도 남으면 다음에 그릴 때 "이미 손잡이를
+  // 걸어뒀다"고 잘못 읽어 네모를 못 지우게 된다(2026-10-16에 실제로 그랬다).
+  c.querySelectorAll('.pickable, .drawing').forEach((el) => {
+    el.classList.remove('pickable', 'drawing');
+  });
+  c.querySelectorAll('[data-io-ready]').forEach((el) => el.removeAttribute('data-io-ready'));
+  c.querySelectorAll('.io-word').forEach((el) => el.remove());   // 글자 추천 칸은 편집 중에만
   c.normalize();
   return c.innerHTML;
 }
@@ -4431,9 +4437,152 @@ function syncCardFromDom(root, card) {
   card.answers = [...root.querySelectorAll('.cloze')]
     .map((el) => el.dataset.answer || '')
     .filter(Boolean);
+  // 그림을 가린 네모는 **글 답이 아니다** — 답 목록에 넣으면 "(그림)"만 늘어선다.
+  // 대신 개수를 들고 있어 "물어볼 게 있는 카드인가"를 판단할 때 센다.
+  card.masks = root.querySelectorAll('.io-mask').length;
+}
+
+/**
+ * 그림 위에 네모를 쳐서 가린다 — 이른바 image occlusion (2026-10-16 요청).
+ *
+ * 왜 글자 인식(OCR)보다 이게 먼저인가: vault 그림을 24장 표본으로 재어 보니 **17장이
+ * 글자가 아예 없었다**(사진·x-ray·해부 그림). 그런 그림에서 OCR은 할 일이 없지만
+ * 네모는 전부 통한다. 해부·영상 카드가 원래 이 꼴이다.
+ *
+ * 자리는 **비율**로 적는다(0~100%). 화면 폭이 바뀌거나 그림이 줄어도 그대로 따라간다.
+ * 가린 자리는 글 빈칸과 **같은 상태**를 쓴다(.filled) — "답 보기"가 둘을 같이 벗긴다.
+ */
+// ── 그림 속 글자 (애플 Vision 곁다리 · 2026-10-16) ──
+//
+// 맥에서 `tools/ocr/run.sh`가 미리 읽어 `attachments/.ocr/<이름>.json`에 적어둔 것을
+// 그대로 쓴다. **앱은 글자 인식을 하지 않는다** — 그래서 앱이 하나도 안 무거워진다.
+// (Tesseract.js는 한글 학습데이터만 15MB라 뺐고, 애플 Live Text는 웹에서 부를 길이 없다.)
+//
+// vault 1,307장을 돌려보니 79%에서 믿을 만한 글자가 나왔다(14,585줄). 다만 빽빽한
+// 도표는 엉뚱하게 읽으므로 **conf 0.9 미만은 숨긴다**.
+const OCR_MIN = 0.9;
+const ocrCache = new Map();
+function loadOcr(name) {
+  if (ocrCache.has(name)) return ocrCache.get(name);
+  const task = getText(`attachments/.ocr/${name}.json`)
+    .then((t) => {
+      const d = JSON.parse(t);
+      return (d.lines || []).filter((l) => l.conf >= OCR_MIN && String(l.t).trim());
+    })
+    .catch(() => []);            // 곁다리가 없으면 조용히 넘어간다(손으로 네모 치면 된다)
+  ocrCache.set(name, task);
+  return task;
+}
+
+/** 그림 위에 **눌러서 가릴 수 있는 글자 칸**을 얹는다. 곁다리가 있을 때만. */
+async function addOcrWords(wrap, im, root, card) {
+  const name = im.dataset.embed;
+  if (!name) return;
+  const lines = await loadOcr(name);
+  if (!lines.length || !wrap.isConnected) return;
+  for (const l of lines) {
+    const w = document.createElement('span');
+    w.className = 'io-word';
+    w.style.left = `${(l.x * 100).toFixed(2)}%`;
+    w.style.top = `${(l.y * 100).toFixed(2)}%`;
+    w.style.width = `${(l.w * 100).toFixed(2)}%`;
+    w.style.height = `${(l.h * 100).toFixed(2)}%`;
+    w.title = l.t;
+    w.onclick = (e) => {
+      e.stopPropagation();
+      const m = document.createElement('span');
+      m.className = 'io-mask';
+      m.dataset.answer = l.t;          // 읽어낸 글이 곧 답이다
+      for (const k of ['left', 'top', 'width', 'height']) m.style[k] = w.style[k];
+      w.replaceWith(m);
+      bindMask(m, wrap, card);
+      syncCardFromDom(root, card);
+      renderCfNew();
+    };
+    wrap.appendChild(w);
+  }
+}
+
+const ioBound = new WeakSet();     // 손잡이를 건 상자 — HTML에 적지 않는다
+function makeImagesOccludable(root, card) {
+  for (const im of root.querySelectorAll('img')) {
+    const wrap = ensureOcclusionWrap(im);
+    if (!wrap || ioBound.has(wrap)) continue;
+    ioBound.add(wrap);
+
+    // 이미 쳐둔 네모 — 누르면 지운다
+    wrap.querySelectorAll('.io-mask').forEach((m) => bindMask(m, wrap, card));
+    // 맥에서 읽어둔 글자가 있으면 **눌러서 가릴 수 있게** 얹는다(없으면 조용히 넘어간다)
+    addOcrWords(wrap, im, root, card).catch(() => {});
+
+    let box = null;
+    let from = null;
+    const pos = (e) => {
+      const r = im.getBoundingClientRect();
+      return { x: ((e.clientX - r.left) / r.width) * 100, y: ((e.clientY - r.top) / r.height) * 100 };
+    };
+    const clamp = (v) => Math.max(0, Math.min(100, v));
+
+    wrap.addEventListener('pointerdown', (e) => {
+      if (e.target.classList && e.target.classList.contains('io-mask')) return;  // 지우려는 것
+      if (e.button > 0) return;
+      from = pos(e);
+      box = document.createElement('span');
+      box.className = 'io-mask drawing';
+      wrap.appendChild(box);
+      try { wrap.setPointerCapture(e.pointerId); } catch { /* 안 되는 기기도 있다 */ }
+      e.preventDefault();
+    });
+    wrap.addEventListener('pointermove', (e) => {
+      if (!box || !from) return;
+      const p = pos(e);
+      box.style.left = `${clamp(Math.min(from.x, p.x))}%`;
+      box.style.top = `${clamp(Math.min(from.y, p.y))}%`;
+      box.style.width = `${Math.abs(clamp(p.x) - clamp(from.x))}%`;
+      box.style.height = `${Math.abs(clamp(p.y) - clamp(from.y))}%`;
+      e.preventDefault();
+    });
+    const done = () => {
+      if (!box) return;
+      const w = parseFloat(box.style.width) || 0;
+      const h = parseFloat(box.style.height) || 0;
+      box.classList.remove('drawing');
+      // 손가락이 미끄러진 정도는 네모가 아니다
+      if (w < 2 || h < 2) box.remove();
+      else { bindMask(box, wrap, card); syncCardFromDom(root, card); renderCfNew(); }
+      box = null;
+      from = null;
+    };
+    for (const t of ['pointerup', 'pointercancel', 'pointerleave']) wrap.addEventListener(t, done);
+  }
+}
+
+/** 그림을 네모 담는 상자로 감싼다(이미 감싸져 있으면 그대로). */
+function ensureOcclusionWrap(im) {
+  const had = im.parentElement;
+  if (had && had.classList && had.classList.contains('io-wrap')) return had;
+  if (!im.parentElement) return null;
+  const wrap = document.createElement('span');
+  wrap.className = 'io-wrap';
+  im.replaceWith(wrap);
+  wrap.appendChild(im);
+  return wrap;
+}
+
+/** 네모 하나 — 누르면 지운다. */
+function bindMask(m, wrap, card) {
+  m.classList.add('pickable');
+  m.onclick = (e) => {
+    e.stopPropagation();
+    const root = wrap.closest('.cf-q') || wrap.parentElement;
+    m.remove();
+    syncCardFromDom(root, card);
+    renderCfNew();
+  };
 }
 
 function makeWordsTappable(root, card) {
+  makeImagesOccludable(root, card);
   // ① 이미 빈칸인 것 — 누르면 되돌린다
   root.querySelectorAll('.cloze').forEach((el) => {
     el.classList.add('pickable');
@@ -4488,6 +4637,8 @@ function paintCloze(root, shown) {
     fixOldBlank(el);
     el.classList.toggle('filled', !!shown);
   });
+  // 그림을 가린 네모도 같이 벗긴다 — 글 빈칸과 한 손짓으로 열려야 한다
+  root.querySelectorAll('.io-mask').forEach((el) => el.classList.toggle('filled', !!shown));
 }
 
 /** 옛 카드의 빈칸(공백만 든 것)을 지금 모양으로 바꾼다 — 폭이 안 변하게. */
@@ -4531,7 +4682,9 @@ function renderCfNew() {
   body.appendChild(q);
   const hint = document.createElement('div');
   hint.className = 'cf-hint muted';
-  hint.textContent = '낱말을 눌러 직접 가릴 수 있습니다 — 빈칸을 누르면 다시 보입니다.';
+  hint.textContent = q.querySelector('img')
+    ? '낱말을 눌러 가립니다 · 그림은 끌어서 네모로 가립니다 — 누르면 다시 보입니다.'
+    : '낱말을 눌러 직접 가릴 수 있습니다 — 빈칸을 누르면 다시 보입니다.';
   body.appendChild(hint);
   if (shown && (c.answers || []).length) {
     const a = document.createElement('div');
@@ -4652,6 +4805,9 @@ function initCardFloat() {
     def: { w: Math.min(560, innerWidth * 0.92), h: Math.min(470, innerHeight * 0.6) },
   });
   document.getElementById('cfClose').onclick = closeCardFloat;
+  // 읽기 화면을 거치지 않고도 검사가 카드 창을 열 수 있게 — 펜이 설 때(ensureReaderPen)만
+  // 걸어두면 "노트를 먼저 열어야만" 검사가 된다
+  window.__openCardFloat = openCardFloat;
   document.getElementById('cfTabNew').onclick = () => { cfTab = 'new'; cfSel.clear(); renderCardFloat(); };
   document.getElementById('cfTabAll').onclick = () => { cfTab = 'all'; refreshCardFloat(); };
 
@@ -5553,6 +5709,13 @@ function renderCard() {
     row.appendChild(t);
     ans.appendChild(row);
   });
+  // 그림만 가린 카드는 적을 답이 없다 — 답 칸이 비면 "답 보기"가 허탕으로 보인다
+  if (!list.length) {
+    const row = document.createElement('div');
+    row.className = 'ans-row muted';
+    row.textContent = '그림에서 가린 곳을 벗겼습니다.';
+    ans.appendChild(row);
+  }
   ans.classList.add('hidden');
   document.getElementById('cardPre').classList.remove('hidden');
   document.getElementById('cardGrade').classList.add('hidden');

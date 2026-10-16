@@ -49,17 +49,42 @@ function readLiteral(text) {
 }
 
 /** 여러 형식을 하나로 맞춘다. */
+/**
+ * OX 답을 자리 번호로 — 0이 O, 1이 X.
+ *
+ * 글자로 적힌 꼴(`ans:"X"`)을 놓치면 `Number("X")`가 NaN이 되어 **전부 O로** 읽힌다.
+ * 그러면 X가 답인 문항을 풀 때마다 맞는 걸 틀렸다고 한다(2026-10-16 점검에서 드러남).
+ */
+function oxIndex(v) {
+  if (typeof v === 'boolean') return v ? 0 : 1;
+  if (typeof v === 'number') return v ? 1 : 0;
+  const t = String(v ?? '').trim().toUpperCase();
+  if (/^(O|ⓞ|TRUE|T|참|예|Y|YES)$/.test(t)) return 0;
+  if (/^(X|✕|✗|FALSE|F|거짓|아니오|N|NO)$/.test(t)) return 1;
+  return Number(t) ? 1 : 0;        // "0"·"1"처럼 숫자를 글자로 적은 것
+}
+
 function normalize(raw, i, forcedType) {
   const q = raw.q ?? raw.t ?? '';
   const opts = raw.opts ?? raw.options ?? raw.choices ?? raw.o ?? null;
-  const isOx = forcedType === 'ox' || typeof (raw.ans ?? raw.correct ?? raw.answer ?? raw.a) === 'boolean';
   const rawAns = raw.ans ?? raw.correct ?? raw.answer ?? raw.a;
+  // ⚠️ `type: "ox"`도 OX로 쳐야 한다. 전에는 **참·거짓(boolean)으로 적힌 것만** OX로 봤는데,
+  //    vault의 OX 문항은 대부분 `{"type":"ox","correct":1}`처럼 **번호로** 적혀 있다.
+  //    그러면 선지가 없는 객관식으로 읽혀 `opts`가 빈 배열이 되고, 아래 거르개가
+  //    "읽을 수 없는 문항"이라며 조용히 버렸다 — **vault 전체에서 216문항이 그렇게
+  //    사라지고 있었다**(2026-10-16 점검). 퀴즈마다 끝의 OX 열 문항이 통째로 안 나왔다.
+  const isOx = forcedType === 'ox' || raw.type === 'ox' || typeof rawAns === 'boolean';
+  // OX의 답은 vault에 **세 가지 꼴**로 적혀 있다(2026-10-16 실측):
+  //   참·거짓  {ans:true}      → 참이 O(자리 0)
+  //   번호     {correct:1}     → 그 번호가 곧 자리 (0=O, 1=X)
+  //   글자     {ans:"X"}       → ← 이걸 놓쳐서 Number("X")=NaN → 전부 O로 읽혔다
+  const oxAns = oxIndex(rawAns);
   return {
     num: raw.num ?? i + 1,
-    type: isOx ? 'ox' : (raw.type === 'ox' ? 'ox' : 'mc'),
+    type: isOx ? 'ox' : 'mc',
     q: String(q),
     opts: isOx ? ['O', 'X'] : (Array.isArray(opts) ? opts.map(String) : []),
-    ans: isOx ? (rawAns === true ? 0 : 1) : Number(rawAns ?? 0),
+    ans: isOx ? oxAns : Number(rawAns ?? 0),
     explain: raw.explain ?? raw.exp ?? '',
     opt: raw.opt ?? raw.optExplain ?? raw.optExp ?? [],
     summary: raw.summary ?? raw.sum ?? '',
@@ -69,6 +94,65 @@ function normalize(raw, i, forcedType) {
     ...(raw.source ? { source: raw.source } : {}),
     ...(raw.wikiRefs ? { wikiRefs: raw.wikiRefs } : {}),
   };
+}
+
+/**
+ * 정답 번호를 **1부터 세어 적어둔 파일**을 바로잡는다.
+ *
+ * 2026-10-16 신고: "퀴즈가 답이 하나씩 밀려있음." 실제로 그랬다. `ans`는 **0부터 세는
+ * 자리 번호**인데(파일 안의 채점 코드도 `i === q.ans`로 0부터 센다), 다섯 파일이
+ * 1부터 세어 적어뒀다 — `ans: 2`인데 정답은 두 번째(자리 0 기준 1)였다. 그 파일들은
+ * 브라우저에서 바로 열어도 틀리게 채점된다. **파일이 틀린 것이지 앱이 틀린 게 아니다.**
+ *
+ * 그래도 앱이 바로잡는다. 앞으로 만들 파일에서 또 그럴 수 있고, 공부하다 틀린 답을
+ * 외우는 건 되돌릴 수 없는 손해다.
+ *
+ * 어떻게 아는가: 선지 해설(`opt`)에서 **"정답."으로 시작하는 칸**이 진짜 정답 자리다.
+ * 그 자리와 `ans`를 견줘 파일 전체가 한 칸씩 밀렸는지 센다.
+ *
+ * ⚠️ **한 문항만 보고 고치지 않는다.** `opt` 표시가 어긋난 파일이 따로 있다
+ * (천경아 영상의학 18번 — 해설은 ans와 맞는데 opt만 밀려 있다). 한 문항씩 믿으면
+ * 그런 데서 멀쩡한 답을 망가뜨린다. **파일 전체가 한 목소리일 때만** 옮긴다.
+ */
+// "정답." "정답 —" "정답:" 은 정답 표시. "정답의 반대" "정답과 반대"는 정답을 가리키는
+// 말이 아니라 **참조**다 — 조사가 붙으면 뺀다.
+const ANS_MARK = /^\s*[✅⭕○◎▶]?\s*정답\s*([.\-—:·,)]|$)/;
+const SHIFT_MIN = 3;            // 이만큼은 모여야 "파일이 그렇다"고 본다
+const SHIFT_RATIO = 0.8;        // 이 비율 넘게 한 목소리여야 한다
+
+export function fixOneBased(items) {
+  let zero = 0;
+  let one = 0;
+  for (const q of items) {
+    const opt = Array.isArray(q.opt) ? q.opt : [];
+    if (!q.opts || opt.length !== q.opts.length) continue;
+    const idx = opt.findIndex((t) => ANS_MARK.test(String(t)));
+    if (idx < 0) continue;
+    if (q.ans === idx) zero++;
+    else if (q.ans === idx + 1) one++;
+  }
+  const seen = zero + one;
+  if (one >= SHIFT_MIN && seen && one / seen >= SHIFT_RATIO) {
+    for (const q of items) {
+      if (q.type !== 'ox' && Number.isInteger(q.ans) && q.ans > 0) q.ans -= 1;
+    }
+    return true;
+  }
+  // 표시가 아예 없는 파일을 위한 안전망 — **자리를 벗어난 답**은 1부터 센 것이 확실하다
+  // (선지가 5개인데 ans가 5면 0부터 세는 자리로는 있을 수 없다). 전에는 이런 문항을
+  // "읽을 수 없다"며 조용히 버렸다.
+  if (!seen && items.length) {
+    const over = items.filter((q) => q.type !== 'ox' && q.opts && q.opts.length
+      && Number.isInteger(q.ans) && q.ans >= q.opts.length);
+    const zeroish = items.some((q) => q.type !== 'ox' && q.ans === 0);
+    if (over.length && !zeroish) {
+      for (const q of items) {
+        if (q.type !== 'ox' && Number.isInteger(q.ans) && q.ans > 0) q.ans -= 1;
+      }
+      return true;
+    }
+  }
+  return false;
 }
 
 export function parseExamHtml(html) {
@@ -90,6 +174,7 @@ export function parseExamHtml(html) {
     items.forEach((q, i) => { q.num = i + 1; });
   }
   if (!items.length) throw new Error('문항 데이터를 찾지 못했습니다.');
+  fixOneBased(items);
 
   // 쓸 수 없는 문항(선지가 없거나 정답 번호가 범위를 벗어남)은 버린다 — 조용히 깨지는 것보다 낫다
   const good = items.filter((q) => q.q && q.opts.length >= 2

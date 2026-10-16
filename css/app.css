@@ -2843,6 +2843,27 @@ li.task.done .task-box { color: var(--accent); }
 .cf-w:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .cloze.pickable { cursor: pointer; }
 .cloze.pickable:hover { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+/* ── 그림 가리기 (image occlusion · 2026-10-16) ──
+   그림 위에 네모를 쳐서 가린다. 자리는 비율(%)이라 화면이 바뀌어도 따라간다.
+   "답 보기"를 누르면 글 빈칸과 **같은 상태**(.filled)로 함께 벗겨진다. */
+.io-wrap { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
+.io-wrap img { display: block; max-width: 100%; height: auto; }
+.io-mask {
+  position: absolute; border-radius: 4px;
+  background: var(--accent); border: 2px solid color-mix(in srgb, #fff 55%, var(--accent));
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
+}
+/* 벗긴 상태 — 그림이 보이되 **어디였는지는 남는다** */
+.io-mask.filled {
+  background: none; border-color: var(--correct);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--correct) 45%, transparent);
+}
+.io-mask.drawing { opacity: .6; }
+.io-mask.pickable { cursor: pointer; }
+.io-mask.pickable:hover { outline: 2px solid color-mix(in srgb, var(--wrong) 65%, transparent); }
+/* 고르는 중에는 그림 위 끌기가 스크롤로 새지 않아야 한다 */
+.cf-pick .io-wrap { touch-action: none; cursor: crosshair; }
+
 /* 고르는 중에는 빈칸이 **낱말과 똑같은 자리**를 차지해야 한다 (2026-10-16 지적:
    "그냥 자기 위치에 있으면서 가려졌다가 다시 취소해서 누른다고 해도 그 자리에 있어야지").
    읽을 때 쓰는 넓은 빈칸(min-width·굵게)을 여기서 그대로 쓰면, 누를 때마다 글이 밀려
