@@ -9,6 +9,8 @@
      어두움 모드에서만 갈라진다: 글자용 파랑은 밝아야 읽히고, 단추 바탕은
      흰 글씨가 얹히므로 더 진해야 한다(2026-10-16 대비 실측). */
   --accent-fill: #3159e6;
+  /* 글을 길게 읽는 면. 밝은 모드에서는 카드와 같고, 어두움 모드에서만 **더 깊게** 간다. */
+  --page: #ffffff;
 
   /* 그림자는 한 겹이면 평평해 보인다 — 가까운 그림자와 먼 그림자를 겹친다 */
   --sh-1: 0 1px 2px rgba(20, 26, 44, .05), 0 1px 1px rgba(20, 26, 44, .03);
@@ -40,6 +42,11 @@
     /* 단추 바탕은 흰 글씨가 얹히므로 더 진하게 — 밝은 파랑에 흰 글씨는 2.9:1로
        읽히지 않았다(전부터 그랬다). 이 값이면 4.73:1로 기준(4.5)을 넘긴다. */
     --accent-fill: #3769f0;
+    /* 글을 길게 읽는 면은 **카드보다 더 깊게** 간다 (2026-10-16 요청:
+       "교수의 출제예고 이쪽이 글씨가 훨씬 잘 보이지 않음?"). 그 콜아웃이 바로
+       바탕색(--bg)을 깔고 있어서 더 또렷했던 것이다 — 글자 대비가 15.4:1에서
+       16.9:1로 오르고, 밝은 면이 주는 눈부심도 준다. 가장자리는 테두리가 맡는다. */
+    --page: #0a0e16;
     /* 어두운 배경에선 그림자가 안 보인다 — 더 깊게 깔고 테두리가 윤곽을 맡는다 */
     --sh-1: 0 1px 2px rgba(0, 0, 0, .34);
     --sh-2: 0 2px 6px rgba(0, 0, 0, .4), 0 8px 20px rgba(0, 0, 0, .3);
@@ -60,6 +67,11 @@
   /* 단추 바탕은 흰 글씨가 얹히므로 더 진하게 — 밝은 파랑에 흰 글씨는 2.9:1로
      읽히지 않았다(전부터 그랬다). 이 값이면 4.73:1로 기준(4.5)을 넘긴다. */
   --accent-fill: #3769f0;
+  /* 글을 길게 읽는 면은 **카드보다 더 깊게** 간다 (2026-10-16 요청:
+     "교수의 출제예고 이쪽이 글씨가 훨씬 잘 보이지 않음?"). 그 콜아웃이 바로
+     바탕색(--bg)을 깔고 있어서 더 또렷했던 것이다 — 글자 대비가 15.4 → 17.1:1로
+     오르고, 밝은 면이 주는 눈부심도 준다. 가장자리는 테두리가 맡는다. */
+  --page: #0a0e16;
   --sh-1: 0 1px 2px rgba(0, 0, 0, .34);
   --sh-2: 0 2px 6px rgba(0, 0, 0, .4), 0 8px 20px rgba(0, 0, 0, .3);
   --sh-3: 0 6px 16px rgba(0, 0, 0, .46), 0 22px 44px rgba(0, 0, 0, .38);
@@ -359,7 +371,12 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
 .wiki-body th, .wiki-body td { border: 1px solid var(--border); padding: 7px 9px; text-align: left; vertical-align: top; }
 .wiki-body th { background: var(--badge-bg); font-weight: 700; white-space: nowrap; }
 /* 콜아웃 */
-.wiki-body .cal { margin: 10px 0; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--bg); }
+/* 콜아웃은 읽는 면보다 **한 단 위**다. 전에는 바탕색(--bg)을 깔았는데, 읽는 면을
+   그만큼 깊게 내린 뒤로는 둘이 같은 색이라 상자가 사라진다. 카드색으로 띄운다. */
+.wiki-body .cal {
+  margin: 10px 0; border: 1px solid var(--border); border-radius: 9px;
+  overflow: hidden; background: var(--card);
+}
 .wiki-body .cal summary { padding: 9px 12px; cursor: pointer; font-weight: 600; font-size: 14px; background: var(--badge-bg); }
 .wiki-body .cal-body { padding: 10px 12px; }
 .wiki-body .cal-success { border-color: var(--correct); }
@@ -416,7 +433,8 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
 .tab.active { background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 
 /* ---- 읽기 모드 ---- */
-.read-card { position: relative; }   /* id가 창을 따라 옮겨다니므로 class로 잡는다 */
+/* id가 창을 따라 옮겨다니므로 class로 잡는다 */
+.read-card { position: relative; background: var(--page); }
 .read-heading { font-size: 17px; font-weight: 700; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 .read-body {
   max-height: none; padding: 0;

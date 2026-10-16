@@ -106,8 +106,8 @@ for (const tok of ['--bg', '--text', '--card', '--border', '--accent', '--sub', 
   for (const [label, b] of [['어두움', dark], ['밝음', light]]) {
     const T = (n) => tok(b, n);
     ok(`${label}: 색 토큰이 다 있다`,
-      ['bg', 'card', 'text', 'sub', 'accent', 'accent-fill', 'border'].every(T),
-      ['bg', 'card', 'text', 'sub', 'accent', 'accent-fill', 'border'].filter((n) => !T(n)).join(','));
+      ['bg', 'card', 'page', 'text', 'sub', 'accent', 'accent-fill', 'border'].every(T),
+      ['bg', 'card', 'page', 'text', 'sub', 'accent', 'accent-fill', 'border'].filter((n) => !T(n)).join(','));
     if (!T('card')) continue;
     ok(`${label}: 본문 글자가 또렷하다 (7:1)`, ratio(T('text'), T('card')) >= 7,
       `${ratio(T('text'), T('card')).toFixed(2)}:1`);
@@ -127,6 +127,20 @@ for (const tok of ['--bg', '--text', '--card', '--border', '--accent', '--sub', 
     ok(`${label}: 테두리가 보인다 (ΔL* 4 이상)`,
       Math.abs(Lstar(T('border')) - Lstar(T('card'))) >= 4,
       `ΔL* ${Math.abs(Lstar(T('border')) - Lstar(T('card'))).toFixed(1)}`);
+
+    // 글을 길게 읽는 면 — 어두움 모드에서는 카드보다 깊게 가서 글자가 더 또렷하다.
+    // 바탕과 가까워지므로 **가장자리는 테두리가 맡아야** 한다.
+    ok(`${label}: 읽는 면의 글자가 또렷하다 (7:1)`, ratio(T('text'), T('page')) >= 7,
+      `${ratio(T('text'), T('page')).toFixed(2)}:1`);
+    ok(`${label}: 읽는 면이 카드보다 어둡지 밝지는 않다`,
+      Lstar(T('page')) <= Lstar(T('card')) + 0.5,
+      `읽는 면 L* ${Lstar(T('page')).toFixed(1)} · 카드 L* ${Lstar(T('card')).toFixed(1)}`);
+    // 어두움 모드는 읽는 면이 바탕과 가까워 테두리가 **유일한** 가장자리 단서다.
+    // 밝은 모드는 바탕(#f4f5f9)과 흰 면의 차이가 이미 있어서 테두리는 거들기만 한다.
+    const needEdge = label === '어두움' ? 8 : 5;
+    ok(`${label}: 읽는 면의 가장자리가 보인다 (ΔL* ${needEdge} 이상)`,
+      Math.abs(Lstar(T('border')) - Lstar(T('page'))) >= needEdge,
+      `ΔL* ${Math.abs(Lstar(T('border')) - Lstar(T('page'))).toFixed(1)}`);
   }
 }
 
