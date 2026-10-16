@@ -2200,7 +2200,8 @@ mark.peek-hit.on {
 /* position:relative — 떨구기 미리보기(.drop-split::after)가 이 상자를 기준으로 선다 */
 .read-panes { flex: 1 1 auto; min-width: 0; display: flex; gap: 0; position: relative; }
 .read-panes.two { --split: var(--pane-split, 50%); }
-.read-pane { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+/* position:relative — 떨굴 창 표시(.drop-into::after)가 이 상자를 기준으로 선다 */
+.read-pane { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .read-panes.two > .read-pane:first-child { flex: 0 0 calc(var(--split) - 5px); }
 /* 손잡이는 DOM에서 이미 두 창 사이에 있다 — order로 옮기지 않는다(그러면
    `:last-child`가 손잡이를 가리켜 폭 규칙이 빗나간다, 2026-10-13). */
@@ -2248,6 +2249,17 @@ mark.peek-hit.on {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 7%, var(--card));
 }
+/* 떨굴 창을 **또렷이** 표시한다. 테두리 색만으로는 서랍이 비치는 자리에서 안 보인다
+   (2026-10-17). 창이 갈라져 있을 때는 이게 오른쪽 창을 겨누는 유일한 표시다. */
+.read-pane.drop-into::after {
+  content: '여기에 놓기';
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 2px dashed var(--accent); border-radius: var(--r-3);
+  color: var(--accent); font-size: 14px; font-weight: 800;
+  pointer-events: none;
+}
 .read-panes.drop-split { outline-color: var(--accent); }
 .read-panes.drop-split::after {
   content: '여기에 놓으면 화면이 갈라집니다';
@@ -2261,7 +2273,15 @@ mark.peek-hit.on {
 
 /* 끄는 동안 — 가림막이 창을 덮고 있으면 dragover가 창에 닿지 않는다 */
 body.dragging-doc .dd-scrim { pointer-events: none; opacity: 0; }
-body.dragging-doc .doc-drawer { opacity: .55; }
+/* ⚠️ 서랍 **자신도** 비켜줘야 한다. 서랍은 오른쪽 360px를 덮는데, 창이 둘로 갈라져
+   있으면 **오른쪽 창이 바로 그 밑**이라 거기로는 떨굴 수가 없었다(2026-10-17 신고:
+   "그 노트가 열려있는 오른쪽으로 배치할 수가 없는 문제"). 재어 보니 오른쪽 창
+   444px 중 360px이 가려져 쓸 수 있는 자리가 84px뿐이었다.
+   opacity만 낮추는 걸로는 안 된다 — **포인터를 안 받아야** dragover가 창에 닿는다. */
+body.dragging-doc .doc-drawer {
+  pointer-events: none; opacity: .16;
+}
+
 
 /* ── 문서 목록 서랍 ── */
 .doc-drawer {
@@ -2271,6 +2291,7 @@ body.dragging-doc .doc-drawer { opacity: .55; }
   background: var(--card); border-left: 1px solid var(--border);
   box-shadow: var(--sh-3);
   padding-top: env(safe-area-inset-top);
+  transition: opacity .14s;              /* 끌 때 비켜주는 움직임이 부드럽게 */
 }
 .dd-scrim { position: fixed; inset: 0; z-index: 105; background: rgba(0,0,0,.35); }
 .dd-head { display: flex; gap: 8px; align-items: center; padding: 12px 10px 8px 14px; }

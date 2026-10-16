@@ -3027,11 +3027,21 @@ document.getElementById('readTocScrim').onclick = () => tocOpen(false);
 // 서랍에서 바로 열고, **끌어서 오른쪽에 놓으면 화면이 갈라진다.**
 
 let docDragNote = null;      // 지금 끌고 있는 노트
+// 끌어다 놓기는 사람이 손으로 하는 일이라 검사가 흉내 내기 어렵다 — 들어오는 길만 열어둔다
+window.__setDocDrag = (n) => { docDragNote = n; };
 
 async function openDocDrawer() {
   const dd = document.getElementById('docDrawer');
   dd.classList.remove('hidden');
   document.getElementById('docScrim').classList.remove('hidden');
+  // 안내는 **지금 상태에 맞게** — 이미 갈라져 있으면 "오른쪽에 놓으면 갈라진다"는
+  // 틀린 말이다(갈라질 게 없다). 그때는 어느 창에나 놓을 수 있다고 알려준다.
+  const hint = dd.querySelector('.dd-hint');
+  if (hint) {
+    hint.textContent = paneCount() >= 2
+      ? '끌어서 왼쪽·오른쪽 어느 창에나 놓을 수 있습니다 — 끄는 동안 이 목록은 비켜납니다'
+      : '끌어서 오른쪽에 놓으면 화면이 갈라집니다';
+  }
   const list = document.getElementById('docList');
   // 목록은 한 번만 받아오지만 **그릴 때마다 다시 그린다** — 맨 위의 "지금 문서의 짝"과
   // 과목 순서가 지금 열어둔 노트에 달려 있어서, 한 번 그려두면 옛 노트 기준으로 굳는다.

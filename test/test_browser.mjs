@@ -4896,6 +4896,86 @@ await run('긁으면 복사', async () => {
   return out;
 });
 
+// ══════════ 서랍에서 오른쪽 창으로 떨구기 (2026-10-17 신고) ══════════
+// "오른쪽에서 노트 열었을 때 스플릿 뷰로 보려고 오래 누르기 하면 그 노트가 열려있는
+//  오른쪽으로 배치할 수가 없는 문제가 있음."
+// 서랍이 오른쪽 360px를 덮는데 **오른쪽 창이 바로 그 밑**이라 거기로는 떨굴 수 없었다.
+await run('서랍에서 떨구기', async () => {
+  const out = [];
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const app = await fetch('/js/app.js').then((x) => x.text());
+  const css = await fetch('/css/app.css').then((x) => x.text());
+
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  const host = document.getElementById('readPanes');
+  const keep = host.innerHTML;
+  const keepCls = host.className;
+  host.classList.add('two');
+  host.innerHTML = '<div class="read-pane" data-pane="0" style="flex:1">'
+    + '<div class="read-card" style="height:300px">왼쪽</div></div>'
+    + '<div class="pane-split-resizer"></div>'
+    + '<div class="read-pane" data-pane="1" style="flex:1">'
+    + '<div class="read-card" style="height:300px">오른쪽</div></div>';
+  const dd = document.getElementById('docDrawer');
+  const wasHidden = dd.classList.contains('hidden');
+  dd.classList.remove('hidden');
+  document.body.classList.add('dragging-doc');
+  await wait(90);
+
+  const ddr = dd.getBoundingClientRect();
+  const panes = [...document.querySelectorAll('#readPanes .read-pane')]
+    .map((p) => p.getBoundingClientRect());
+  const cx = (panes[1].left + panes[1].right) / 2;
+  const cy = (panes[1].top + panes[1].bottom) / 2;
+
+  out.push({ name: '서랍이 오른쪽 창을 덮고 있다(이 상황이 문제였다)',
+    ok: ddr.left < panes[1].right, detail: `서랍 ${Math.round(ddr.left)}~ · 오른창 ~${Math.round(panes[1].right)}` });
+  const hit = document.elementFromPoint(cx, cy);
+  out.push({ name: '**끄는 동안 오른쪽 창에 손이 닿는다**',
+    ok: !(hit && hit.closest && hit.closest('#docDrawer')),
+    detail: hit ? (hit.className || hit.tagName) : '없음' });
+  out.push({ name: '끄는 동안 서랍이 포인터를 안 받는다',
+    ok: getComputedStyle(dd).pointerEvents === 'none', detail: getComputedStyle(dd).pointerEvents });
+  out.push({ name: '끄는 동안 서랍이 거의 투명해진다',
+    ok: Number(getComputedStyle(dd).opacity) <= 0.35, detail: getComputedStyle(dd).opacity });
+  out.push({ name: '끌지 않을 때는 서랍이 멀쩡하다', ok: /\.doc-drawer \{[^}]*opacity/.test(css) === false
+    || !/^\s*\.doc-drawer \{[^}]*pointer-events:\s*none/m.test(css) });
+
+  // 어느 창을 겨눴는지 정하는 셈을 그대로 떼어 본다
+  const two = new Function('panes', 'activePane', `
+    ${(app.match(/function paneAtPoint[\s\S]*?\n}\n/) || [''])[0]}
+    ${(app.match(/function dropPlan[\s\S]*?\n}\n/) || [''])[0]}
+    ${(app.match(/function paintDropHint[\s\S]*?\n}\n/) || [''])[0]}
+    return { dropPlan, paintDropHint };`)([{}, {}], 0);
+  const markedAt = (px, py) => {
+    two.paintDropHint(two.dropPlan(px, py));
+    return [...document.querySelectorAll('#readPanes .read-pane')]
+      .findIndex((p) => p.classList.contains('drop-into'));
+  };
+  out.push({ name: '**오른쪽 창이 표적으로 잡힌다**', ok: markedAt(cx, cy) === 1,
+    detail: `${markedAt(cx, cy)}번 창` });
+  const lx = (panes[0].left + panes[0].right) / 2;
+  const ly = (panes[0].top + panes[0].bottom) / 2;
+  out.push({ name: '왼쪽 창도 표적이 된다', ok: markedAt(lx, ly) === 0, detail: `${markedAt(lx, ly)}번 창` });
+  out.push({ name: '겨눈 창에 글씨로 알려준다', ok: /\.read-pane\.drop-into::after/.test(css) });
+
+  // 창이 하나일 때 "갈라서 열기"도 그대로여야 한다
+  const one = new Function('panes', 'activePane', `
+    ${(app.match(/function paneAtPoint[\s\S]*?\n}\n/) || [''])[0]}
+    ${(app.match(/function dropPlan[\s\S]*?\n}\n/) || [''])[0]}
+    return dropPlan;`)([{}], 0);
+  out.push({ name: '창이 하나면 오른쪽은 갈라서 열기', ok: one(cx, cy).split === true });
+  out.push({ name: '창이 하나면 왼쪽은 그 자리에 열기', ok: one(lx, ly).split === false });
+
+  document.body.classList.remove('dragging-doc');
+  if (wasHidden) dd.classList.add('hidden');
+  host.className = keepCls;
+  host.innerHTML = keep;
+  return out;
+});
+
 // ══════════ 들러보기 — 몇 개 중 몇 번째, 다음·이전 (2026-10-17 요청) ══════════
 // "한 문서여도 여러개 찾을 수 있을 것 같은데 몇개 중에 몇번째 찾는건지?
 //  다음 다음 검색 이전검색 이런거 되게 해줘"
