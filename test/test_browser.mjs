@@ -4660,6 +4660,60 @@ await run('떠 있는 돋보기', async () => {
   return out;
 });
 
+// ══════════ "이 문서" 찾기 — 눌러서 가고, 걸린 자리가 다 보인다 (2026-10-16) ══════════
+// "해당 문서에서도 찾으면 눌렀을 때 그 쪽으로 가야지...... 그리고 찾은것들은
+//  좀 하이라이트를 일시적이라도 띄워줘야 금방찾겠지"
+await run('이 문서 찾기', async () => {
+  const out = [];
+  const src = await fetch('/js/app.js').then((x) => x.text());
+  const mark = (src.match(/function markDocHit\(h\) \{[\s\S]*?\n}\n/) || [''])[0];
+  out.push({ name: '보이는 장의 걸린 자리를 전부 모은다',
+    ok: /docHits\.filter\(\(x\) => x\.sec === h\.sec\)/.test(mark) });
+  out.push({ name: '지금 자리만 더 진하게', ok: /hit === h \? ' on' : ''/.test(mark) });
+  out.push({ name: '뒤에서부터 감싼다(앞을 바꾸면 뒤 자리가 밀린다)',
+    ok: /j = jobs\.length - 1/.test(mark) });
+  out.push({ name: '**줄을 누르면 창을 닫고 그리로 간다**',
+    ok: /closeSearch\(\{ keepMarks: true \}\)/.test(src) });
+  out.push({ name: 'Enter로 훑을 때는 창을 안 닫는다',
+    ok: !/function stepDocHit[\s\S]{0,220}closeSearch/.test(src) });
+  out.push({ name: '칠한 자리는 잠깐 남았다 스르르 사라진다',
+    ok: /function fadeDocMarks/.test(src) && /fading/.test(src) });
+
+  // 실제로 여러 군데가 칠해지는가 — markDocHit을 그대로 떼어 돌린다
+  const body = document.getElementById('readBody');
+  const keep = body.innerHTML;
+  body.innerHTML = '<p>아트로핀을 주고, 다시 아트로핀을 더 주고, 마지막에 아트로핀으로 마친다.</p>';
+  document.body.dataset.screen = 'readScreen';
+  const text = body.textContent;
+  const hits = [];
+  for (let i = text.indexOf('아트로핀'); i >= 0; i = text.indexOf('아트로핀', i + 1)) {
+    hits.push({ sec: 0, at: i, len: 4 });
+  }
+  const run2 = new Function('docHits', 'currentDoc', 'clearDocMarks', `
+    ${mark}
+    return markDocHit;`)(hits,
+    () => ({ title: 't', path: 'p', sections: [{ heading: 'h', text }] }),
+    () => document.querySelectorAll('mark.find-mark').forEach((m) => m.replaceWith(m.textContent)));
+  run2(hits[1]);
+  const marks = [...body.querySelectorAll('mark.find-mark')];
+  out.push({ name: '**걸린 자리가 세 군데 다 칠해진다**', ok: marks.length === 3,
+    detail: `${marks.length}군데` });
+  out.push({ name: '지금 자리 하나만 진하다',
+    ok: marks.filter((m) => m.classList.contains('on')).length === 1,
+    detail: `${marks.filter((m) => m.classList.contains('on')).length}개` });
+  out.push({ name: '진한 자리가 눌린 그 자리다',
+    ok: marks[1] && marks[1].classList.contains('on') });
+  out.push({ name: '칠하면서 글자를 먹지 않는다',
+    ok: body.textContent === text, detail: body.textContent.slice(0, 30) });
+  const cs = marks[0] ? getComputedStyle(marks[0]) : null;
+  const csOn = marks[1] ? getComputedStyle(marks[1]) : null;
+  out.push({ name: '진한 자리와 흐린 자리가 눈에 다르다',
+    ok: !!cs && !!csOn && cs.backgroundColor !== csOn.backgroundColor,
+    detail: `${cs && cs.backgroundColor} vs ${csOn && csOn.backgroundColor}` });
+  body.innerHTML = keep;
+  return out;
+});
+
 // ══════════ 긁으면 바로 복사된다 (2026-10-16 요청) ══════════
 // "긁기를 하면 그냥 복사가 자동으로 되는걸로 바꾸자. 복사 엄청많이 쓰네."
 await run('긁으면 복사', async () => {
@@ -4828,6 +4882,43 @@ await run('들러보기 그림', async () => {
   const cs = getComputedStyle(peek.querySelector('img'));
   out.push({ name: '들러보기 그림도 창 밖으로 안 넘친다', ok: cs.maxWidth === '100%', detail: cs.maxWidth });
   probe.remove(); probe2.remove(); peek.remove();
+
+  // ── "이 문서" 범위에서도 들러볼 수 있다 (2026-10-16 신고) ──
+  // "찾기에서 이 문서에서 검색하면 오래 눌러도 해당 창이 안보이네?"
+  // 전체 검색 쪽에만 오래 누르기를 달아뒀었다.
+  out.push({ name: '"이 문서" 결과에도 오래 누르기가 달렸다',
+    ok: /longPress\(b, \(\) => showPeek\(doc, h\.sec/.test(app) });
+  out.push({ name: '이미 들고 있는 문서는 다시 받지 않는다',
+    ok: /function showPeek\(note, secIdx, needle, title\)/.test(app)
+      && !/function showPeek[\s\S]{0,260}loadNote/.test(app) });
+
+  if (typeof window.__showPeek === 'function') {
+    const note = { title: '시험용 노트', path: 'x.md', sections: [
+      { heading: '1. 앞장', text: '앞장 내용이다.' },
+      { heading: '2. 뒷장', text: '여기에 doxycycline 이 나온다. 뒤로 더 이어진다.' },
+    ] };
+    window.__showPeek(note, 1, 'doxycycline', '시험용 노트');
+    await new Promise((r) => setTimeout(r, 160));
+    const f2 = document.getElementById('peekFloat');
+    out.push({ name: '**오래 누르면 그 장이 창에 뜬다**',
+      ok: !f2.classList.contains('hidden')
+        && /doxycycline/.test(document.getElementById('pkBody').textContent),
+      detail: document.getElementById('pkBody').textContent.slice(0, 40) });
+    out.push({ name: '몇 번째 장인지 알려준다',
+      ok: /2\/2/.test(document.getElementById('pkWhere').textContent),
+      detail: document.getElementById('pkWhere').textContent });
+    out.push({ name: '걸린 말이 칠해진다',
+      ok: !!document.querySelector('#pkBody mark.peek-hit') });
+    out.push({ name: '앞 장으로 넘겨볼 수 있다', ok: !document.getElementById('pkPrev').disabled });
+    document.getElementById('pkPrev').click();
+    await new Promise((r) => setTimeout(r, 120));
+    out.push({ name: '넘기면 앞 장이 보인다',
+      ok: /앞장 내용/.test(document.getElementById('pkBody').textContent)
+        && /1\/2/.test(document.getElementById('pkWhere').textContent),
+      detail: document.getElementById('pkWhere').textContent });
+    document.getElementById('pkClose').click();
+    out.push({ name: '닫으면 사라진다', ok: f2.classList.contains('hidden') });
+  }
   return out;
 });
 

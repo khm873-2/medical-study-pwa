@@ -2561,8 +2561,26 @@ body.dragging-doc .doc-drawer { opacity: .55; }
   border-top: 1px solid var(--border); margin-top: 4px;
 }
 .sh-group:first-child { border-top: 0; margin-top: 0; }
-mark.find-mark { background: #fde68a; color: inherit; border-radius: 2px; padding: 0 1px; }
-:root[data-theme="dark"] mark.find-mark { background: #92610a; color: #fff; }
+/* 찾은 자리 — 보이는 장의 것을 **전부** 칠하고, 지금 자리만 진하게 (2026-10-16 요청).
+   결과를 눌러 그리로 가면 창이 닫히므로, 잠깐 남겨뒀다가 스르르 지운다. */
+mark.find-mark {
+  background: color-mix(in srgb, #fde68a 55%, transparent); color: inherit;
+  border-radius: 2px; padding: 0 1px; transition: opacity .55s, background .25s;
+}
+mark.find-mark.on {
+  background: #fde68a; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+mark.find-mark.fading { opacity: 0; }
+/* 시스템이 어두움일 때(테마를 따로 안 고른 경우)도 같이 받아야 한다 —
+   전에는 [data-theme="dark"] 에만 걸려 있어서 자동 어두움에서는 밝은 노랑 그대로였다. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) mark.find-mark {
+    background: color-mix(in srgb, #b8790d 55%, transparent); color: #fff;
+  }
+  :root:not([data-theme="light"]) mark.find-mark.on { background: #b8790d; }
+}
+:root[data-theme="dark"] mark.find-mark { background: color-mix(in srgb, #b8790d 55%, transparent); color: #fff; }
+:root[data-theme="dark"] mark.find-mark.on { background: #b8790d; }
 
 /* ── 단축키 안내 ── */
 .key-help { font-size: 13.5px; }

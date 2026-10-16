@@ -1677,6 +1677,10 @@ function showSelPop(text, box) {
 
 function hideSelPop() { document.getElementById('selPop').classList.add('hidden'); }
 
+// 들러보기를 테스트가 직접 열어볼 수 있게 — "이 문서" 검색은 열린 문서가 있어야 하는데
+// 검사 하네스에서는 진짜 노트를 받을 수 없다
+window.__showPeek = (note, secIdx, needle, title) => showPeek(note, secIdx, needle, title);
+
 document.getElementById('selCancel').onclick = hideSelPop;
 // 팝업 버튼들은 askCtx(긁은 내용)가 있어야 의미가 있다 — 없으면 조용히 닫는다.
 const selTerm = () => (askCtx && askCtx.term) || '';
@@ -6468,11 +6472,29 @@ function openSearch(scope) {
   inp.focus();
   inp.select();
 }
-function closeSearch() {
+/**
+ * 찾기 창을 닫는다.
+ * @param {{keepMarks?:boolean}} [opt] 칠해둔 자리를 잠깐 남길지 —
+ *        결과를 눌러 그리로 갈 때는 남겨야 눈이 따라간다. 잠시 뒤 스스로 사라진다.
+ */
+function closeSearch({ keepMarks = false } = {}) {
   sEl('searchSheet').classList.add('hidden');
   document.body.classList.remove('finding');
-  clearDocMarks();
+  if (keepMarks) fadeDocMarks(); else clearDocMarks();
   paintFindFab();
+}
+
+const MARK_LINGER = 4000;      // 칠해둔 자리를 이만큼 두고 지운다
+let markTimer = 0;
+/** 칠해둔 자리를 잠깐 두었다가 스르르 지운다. */
+function fadeDocMarks() {
+  clearTimeout(markTimer);
+  const marks = [...document.querySelectorAll('mark.find-mark')];
+  if (!marks.length) return;
+  markTimer = setTimeout(() => {
+    marks.forEach((m) => m.classList.add('fading'));
+    markTimer = setTimeout(clearDocMarks, 600);
+  }, MARK_LINGER);
 }
 sEl('searchBtn').onclick = () => openSearch();
 document.getElementById('toolFind').onclick = () => openSearch();
@@ -6668,8 +6690,7 @@ function movePeek(d) {
   const i = Math.max(0, Math.min(n.sections.length - 1, peekState.secIdx + d));
   if (i === peekState.secIdx) return;
   peekState.secIdx = i;
-  peekState.at = null;              // 다른 장이면 칠할 자리가 없다
-  paintPeek();
+  paintPeek();                      // 찾던 말이 그 장에도 있으면 거기서도 칠해진다
 }
 
 /**
@@ -6686,19 +6707,36 @@ async function openPeek(hit) {
     const note = await loadNote(hit.path);
     // 걸린 글자가 몇 번째 장에 있는지 — jumpToOffset과 같은 셈법
     let secIdx = 0;
-    let within = hit.at || 0;
     let seen = 0;
     for (let i = 0; i < note.sections.length; i++) {
       const len = note.sections[i].text.length + 1;
-      if ((hit.at || 0) < seen + len) { secIdx = i; within = (hit.at || 0) - seen; break; }
+      if ((hit.at || 0) < seen + len) { secIdx = i; break; }
       seen += len;
     }
-    peekState = { note, secIdx, at: hit.at == null ? null : within, len: hit.len || 0,
-      needle: hit.snippet ? hit.snippet.match : '' };
-    paintPeek();
+    showPeek(note, secIdx, hit.snippet ? hit.snippet.match : '', hit.title);
   } catch (e) {
     body.innerHTML = `<p class="muted">열지 못했습니다: ${escapeHtml(e.message)}</p>`;
   }
+}
+
+/**
+ * 이미 들고 있는 문서를 그 자리에서 들러본다 — 다시 받지 않는다.
+ *
+ * "이 문서" 범위로 찾을 때 쓴다. 그 범위는 **지금 열려 있는 문서** 안에서 찾는 것이라
+ * 경로로 다시 불러올 이유가 없다(2026-10-16 신고: "이 문서에서 검색하면 오래 눌러도
+ * 해당 창이 안보이네?" — 전체 검색 쪽에만 들러보기를 달아뒀었다).
+ *
+ * @param {{title,path,sections}} note
+ * @param {number} secIdx  보여줄 장
+ * @param {string} needle  노랗게 칠할 말
+ */
+function showPeek(note, secIdx, needle, title) {
+  document.getElementById('peekFloat').classList.remove('hidden');
+  if (peekFloat) peekFloat.place();
+  document.getElementById('pkTitle').textContent = title || note.title || '들러보기';
+  peekState = { note, secIdx: Math.max(0, Math.min(secIdx || 0, note.sections.length - 1)),
+    needle: needle || '' };
+  paintPeek();
 }
 
 function paintPeek() {
@@ -6797,7 +6835,14 @@ function runDocSearch(q) {
     mk.textContent = sec.text.slice(h.at, h.at + h.len);
     s.append(mk, sec.text.slice(h.at + h.len, h.at + h.len + 60).replace(/\n+/g, ' ') + '…');
     b.append(s);
-    b.onclick = () => goDocHit(idx);
+    // 줄을 누르면 **그리로 가고 창을 닫는다**. 찾기 창은 화면의 3/4를 덮으므로
+    // 열어둔 채로 보내면 간 자리가 창 뒤에 숨는다(2026-10-16 지적: "눌렀을 때 그 쪽으로
+    // 가야지"). 칠해둔 자리는 잠깐 남겨 눈이 따라가게 한다.
+    // 이어서 다음 자리로 넘길 때(Enter)는 창을 그대로 둔다 — 그건 훑는 손짓이다.
+    b.onclick = () => { goDocHit(idx, { keepFocus: true }); closeSearch({ keepMarks: true }); };
+    // 오래 누르면 **옮겨가지 않고** 그 장을 들러본다 — 전체 검색 쪽과 같은 손짓
+    b.title = '길게 누르면 옮겨가지 않고 들러봅니다';
+    longPress(b, () => showPeek(doc, h.sec, sec.text.slice(h.at, h.at + h.len), doc.title));
     box.appendChild(b);
   });
   goDocHit(0, { keepFocus: true });
@@ -6835,6 +6880,13 @@ function stepDocHit(d) {
 }
 
 /** 본문에서 그 자리를 노랗게 칠한다. 읽기 화면이면 본문, 퀴즈면 옆 위키 패널. */
+/**
+ * 걸린 자리를 칠한다 — **보이는 장의 것을 전부**, 지금 자리는 더 진하게.
+ *
+ * 전에는 지금 자리 하나만 칠하고 끝냈다(찾자마자 `break`). 그러면 한 장에 여러 군데가
+ * 걸려도 눈에는 하나뿐이라, 어디어디 있는지 훑어볼 수가 없었다(2026-10-16 요청:
+ * "찾은것들은 좀 하이라이트를 일시적이라도 띄워줘야 금방찾겠지").
+ */
 function markDocHit(h) {
   clearDocMarks();
   const body = document.body.dataset.screen === 'readScreen'
@@ -6843,25 +6895,53 @@ function markDocHit(h) {
   const doc = currentDoc();
   if (!body || !doc) return;
   const sec = doc.sections[h.sec];
-  const target = sec.text.slice(h.at, h.at + h.len).replace(/\s+/g, '');
-  if (!target) return;
+  if (!sec) return;
+
+  // 같은 장에 걸린 자리들을 **글 안에서의 차례대로** 모은다
+  const here = docHits.filter((x) => x.sec === h.sec).sort((a, b) => a.at - b.at);
+  const wanted = here.map((x) => ({
+    hit: x,
+    text: sec.text.slice(x.at, x.at + x.len).replace(/\s+/g, ''),
+  })).filter((x) => x.text);
+  if (!wanted.length) return;
+
+  let active = null;
+  let k = 0;                                  // 몇 번째 자리를 찾는 중인가
   const walk = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
-  let node, first = null;
-  while ((node = walk.nextNode())) {
-    const i = node.nodeValue.indexOf(target.slice(0, Math.min(target.length, 12)));
-    if (i < 0) continue;
-    const r = document.createRange();
-    r.setStart(node, i);
-    r.setEnd(node, Math.min(node.nodeValue.length, i + target.length));
-    const mk = document.createElement('mark');
-    mk.className = 'find-mark';
-    try { r.surroundContents(mk); } catch { continue; }
-    if (!first) first = mk;
-    break;
+  const jobs = [];
+  let node;
+  while ((node = walk.nextNode()) && k < wanted.length) {
+    let from = 0;
+    while (k < wanted.length) {
+      const want = wanted[k].text;
+      const probe = want.slice(0, Math.min(want.length, 12));
+      const i = node.nodeValue.indexOf(probe, from);
+      if (i < 0) break;
+      jobs.push({ node, i, len: Math.min(node.nodeValue.length - i, want.length), hit: wanted[k].hit });
+      from = i + Math.max(1, probe.length);
+      k++;
+    }
   }
-  if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  // 뒤에서부터 감싼다 — 앞에서 바꾸면 뒤쪽 자리 번호가 밀린다
+  for (let j = jobs.length - 1; j >= 0; j--) {
+    const { node: n, i, len, hit } = jobs[j];
+    const r = document.createRange();
+    try {
+      r.setStart(n, i);
+      r.setEnd(n, i + len);
+      const mk = document.createElement('mark');
+      mk.className = `find-mark${hit === h ? ' on' : ''}`;
+      r.surroundContents(mk);
+      if (hit === h) active = mk;
+    } catch { /* 태그를 가로지르는 자리는 건너뛴다 */ }
+  }
+  (active || document.querySelector('mark.find-mark'))
+    ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
+
 function clearDocMarks() {
+  clearTimeout(markTimer);
+  markTimer = 0;
   document.querySelectorAll('mark.find-mark').forEach((m) => {
     const t = document.createTextNode(m.textContent);
     m.replaceWith(t);
