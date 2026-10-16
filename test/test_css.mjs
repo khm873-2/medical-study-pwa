@@ -87,6 +87,49 @@ for (const tok of ['--bg', '--text', '--card', '--border', '--accent', '--sub', 
   ok('막힌 띠의 단추도 읽힌다', /color:\s*#fff|color:\s*white/.test(btn), btn.trim().slice(0, 60));
 }
 
+// 색을 바꿀 때 **글자가 안 읽히게 되는 일**을 막는다 (2026-10-16).
+// "좀 더 어두워도 될것같음" 요청으로 어두움 모드를 다시 잡으면서, 재어 보니
+// 흰 글씨를 얹는 파란 단추가 전부터 2.9:1(기준 4.5)이었다 — 눈으로는 못 잡는다.
+{
+  const lin = (c) => { const x = c / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+  const Y = (h) => { const m = h.replace('#', '').match(/../g).map((v) => parseInt(v, 16));
+    return 0.2126 * lin(m[0]) + 0.7152 * lin(m[1]) + 0.0722 * lin(m[2]); };
+  const ratio = (a, b) => { const x = Y(a), y = Y(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+  const Lstar = (h) => { const y = Y(h); return y > 0.008856 ? 116 * y ** (1 / 3) - 16 : 903.3 * y; };
+  const tok = (block, name) => {
+    const m = block.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{3,8})`));
+    return m ? m[1] : null;
+  };
+  const dark = (css.match(/:root\[data-theme="dark"\]\s*\{([\s\S]*?)\n\}/) || [])[1] || '';
+  const light = (css.match(/^:root\s*\{([\s\S]*?)\n\}/m) || [])[1] || '';
+  for (const [label, b] of [['어두움', dark], ['밝음', light]]) {
+    const T = (n) => tok(b, n);
+    ok(`${label}: 색 토큰이 다 있다`,
+      ['bg', 'card', 'text', 'sub', 'accent', 'accent-fill', 'border'].every(T),
+      ['bg', 'card', 'text', 'sub', 'accent', 'accent-fill', 'border'].filter((n) => !T(n)).join(','));
+    if (!T('card')) continue;
+    ok(`${label}: 본문 글자가 또렷하다 (7:1)`, ratio(T('text'), T('card')) >= 7,
+      `${ratio(T('text'), T('card')).toFixed(2)}:1`);
+    ok(`${label}: 보조 글자도 읽힌다 (4.5:1)`, ratio(T('sub'), T('card')) >= 4.5,
+      `${ratio(T('sub'), T('card')).toFixed(2)}:1`);
+    ok(`${label}: 강조색이 읽힌다 (4.5:1)`, ratio(T('accent'), T('card')) >= 4.5,
+      `${ratio(T('accent'), T('card')).toFixed(2)}:1`);
+    ok(`${label}: **파란 단추의 흰 글씨가 읽힌다** (4.5:1)`, ratio('#ffffff', T('accent-fill')) >= 4.5,
+      `${ratio('#ffffff', T('accent-fill')).toFixed(2)}:1`);
+    // 바탕과 읽는 면이 **눈에 구분되어야** 한다 — 대비비는 어두운 쪽에서 무뎌서 L*로 본다.
+    // 밝은 모드는 그림자가 윤곽을 맡아주므로 적게 벌어져도 되지만, 어두운 모드는
+    // 그림자가 안 보여서 밝기 차이가 유일한 단서다 — 거기서 모자라 "쨍하지 않다"가 됐다.
+    const needStep = label === '어두움' ? 6 : 2;
+    ok(`${label}: 읽는 면이 바탕 위에 떠 보인다 (ΔL* ${needStep} 이상)`,
+      Math.abs(Lstar(T('card')) - Lstar(T('bg'))) >= needStep,
+      `ΔL* ${Math.abs(Lstar(T('card')) - Lstar(T('bg'))).toFixed(1)}`);
+    ok(`${label}: 테두리가 보인다 (ΔL* 4 이상)`,
+      Math.abs(Lstar(T('border')) - Lstar(T('card'))) >= 4,
+      `ΔL* ${Math.abs(Lstar(T('border')) - Lstar(T('card'))).toFixed(1)}`);
+  }
+}
+
 console.log(`test_css.mjs  ${fail.length ? '❌' : '✅'} ${pass}개 통과${fail.length ? `, ${fail.length}개 실패` : ''}`);
 fail.forEach((f) => console.log('   ✗ ' + f));
 process.exit(fail.length ? 1 : 0);

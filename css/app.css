@@ -2,9 +2,13 @@
    아이패드용(큰 터치 타깃 · 가로모드 · 다크모드 · safe-area)으로 확장했다. */
 
 :root {
-  --bg: #f4f5f9; --card: #ffffff; --text: #1b2130; --sub: #6b7484;
+  --bg: #f4f5f9; --card: #ffffff; --text: #1b2130; --sub: #5f6878;
   --accent: #3159e6; --correct: #11a06a; --wrong: #e03b3b; --border: #e6e8ef;
   --badge-bg: #eef1f7; --warn: #b45309; --warn-bg: #fffbeb;
+  /* 글씨를 얹는 "채운" 강조면 — 밝은 모드에서는 강조색과 같다.
+     어두움 모드에서만 갈라진다: 글자용 파랑은 밝아야 읽히고, 단추 바탕은
+     흰 글씨가 얹히므로 더 진해야 한다(2026-10-16 대비 실측). */
+  --accent-fill: #3159e6;
 
   /* 그림자는 한 겹이면 평평해 보인다 — 가까운 그림자와 먼 그림자를 겹친다 */
   --sh-1: 0 1px 2px rgba(20, 26, 44, .05), 0 1px 1px rgba(20, 26, 44, .03);
@@ -24,9 +28,18 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0f1218; --card: #181d27; --text: #e9ebf0; --sub: #98a2b3;
-    --accent: #6d93ff; --correct: #2bc98a; --wrong: #f2635f; --border: #272e3c;
-    --badge-bg: #212836; --warn: #fbbf24; --warn-bg: #2a2416;
+    /* ── 어두움 모드 (2026-10-16 재조정) ──
+       "좀 더 어두워도 될것같음 뭔가 쨍한느낌이 안드네."
+       재어 보니 글자 대비는 이미 14:1로 넉넉했다. 문제는 **바탕과 카드가 거의 같은
+       밝기**(ΔL* 5.3)여서 화면 전체가 한 덩어리 잿빛으로 보인 것이었다. 카드(읽는 면)는
+       그대로 두고 **바탕을 검정 가까이 내린다** — ΔL*가 8.5로 벌어져 글 읽는 면이
+       바탕 위에 떠 보인다. 테두리도 또렷하게(ΔL* 14) 해서 경계가 손에 잡히게 했다. */
+    --bg: #06080d; --card: #171d29; --text: #eef1f7; --sub: #a3aec1;
+    --accent: #7aa2ff; --correct: #35d9a0; --wrong: #ff6b66; --border: #303b4e;
+    --badge-bg: #222b3b; --warn: #fcc33f; --warn-bg: #2e2410;
+    /* 단추 바탕은 흰 글씨가 얹히므로 더 진하게 — 밝은 파랑에 흰 글씨는 2.9:1로
+       읽히지 않았다(전부터 그랬다). 이 값이면 4.73:1로 기준(4.5)을 넘긴다. */
+    --accent-fill: #3769f0;
     /* 어두운 배경에선 그림자가 안 보인다 — 더 깊게 깔고 테두리가 윤곽을 맡는다 */
     --sh-1: 0 1px 2px rgba(0, 0, 0, .34);
     --sh-2: 0 2px 6px rgba(0, 0, 0, .4), 0 8px 20px rgba(0, 0, 0, .3);
@@ -35,9 +48,18 @@
   }
 }
 :root[data-theme="dark"] {
-  --bg: #0f1218; --card: #181d27; --text: #e9ebf0; --sub: #98a2b3;
-  --accent: #6d93ff; --correct: #2bc98a; --wrong: #f2635f; --border: #272e3c;
-  --badge-bg: #212836; --warn: #fbbf24; --warn-bg: #2a2416;
+  /* ── 어두움 모드 (2026-10-16 재조정) ──
+     "좀 더 어두워도 될것같음 뭔가 쨍한느낌이 안드네."
+     재어 보니 글자 대비는 이미 14:1로 넉넉했다. 문제는 **바탕과 카드가 거의 같은
+     밝기**(ΔL* 5.3)여서 화면 전체가 한 덩어리 잿빛으로 보인 것이었다. 카드(읽는 면)는
+     그대로 두고 **바탕을 검정 가까이 내린다** — ΔL*가 8.5로 벌어져 글 읽는 면이
+     바탕 위에 떠 보인다. 테두리도 또렷하게(ΔL* 14) 해서 경계가 손에 잡히게 했다. */
+  --bg: #06080d; --card: #171d29; --text: #eef1f7; --sub: #a3aec1;
+  --accent: #7aa2ff; --correct: #35d9a0; --wrong: #ff6b66; --border: #303b4e;
+  --badge-bg: #222b3b; --warn: #fcc33f; --warn-bg: #2e2410;
+  /* 단추 바탕은 흰 글씨가 얹히므로 더 진하게 — 밝은 파랑에 흰 글씨는 2.9:1로
+     읽히지 않았다(전부터 그랬다). 이 값이면 4.73:1로 기준(4.5)을 넘긴다. */
+  --accent-fill: #3769f0;
   --sh-1: 0 1px 2px rgba(0, 0, 0, .34);
   --sh-2: 0 2px 6px rgba(0, 0, 0, .4), 0 8px 20px rgba(0, 0, 0, .3);
   --sh-3: 0 6px 16px rgba(0, 0, 0, .46), 0 22px 44px rgba(0, 0, 0, .38);
@@ -85,9 +107,11 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 }
 .btn:active { background: var(--badge-bg); }
 .btn.primary {
-  color: #fff; border-color: var(--accent);
+  /* 흰 글씨가 얹히므로 **채움용 파랑**을 쓴다 — 어두움 모드의 밝은 파랑에 흰 글씨를
+     올리면 2.9:1로 안 읽힌다(2026-10-16 실측). */
+  color: #fff; border-color: var(--accent-fill);
   background: linear-gradient(180deg,
-    color-mix(in srgb, var(--accent) 92%, #fff) 0%, var(--accent) 100%);
+    color-mix(in srgb, var(--accent-fill) 92%, #fff) 0%, var(--accent-fill) 100%);
   box-shadow: var(--sh-accent);
 }
 .btn.full { width: 100%; }
@@ -99,7 +123,12 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 #setupScreen .card + .card { margin-top: 14px; }
 #setupScreen h2 { font-size: 18px; margin: 0 0 12px; }
 #setupScreen ol { padding-left: 20px; margin: 10px 0; font-size: 14px; line-height: 1.9; }
-#setupScreen code { background: var(--badge-bg); padding: 2px 6px; border-radius: 5px; font-size: 13px; }
+/* 코드는 **본문색**으로 — 설명문 색(--sub)을 물려받으면 뱃지 바탕 위에서 4.4:1로
+   기준(4.5)에 못 미쳤다. 저장소 이름·주소처럼 그대로 옮겨 적어야 하는 글이라 또렷해야 한다. */
+#setupScreen code {
+  background: var(--badge-bg); color: var(--text);
+  padding: 2px 6px; border-radius: 5px; font-size: 13px;
+}
 .field { margin: 14px 0; }
 .field label { display: block; font-size: 13px; color: var(--sub); margin-bottom: 6px; font-weight: 600; }
 .field input {
@@ -186,7 +215,7 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 .navbar .nav-arrow { font-size: 24px; color: var(--accent); }
 .navbar .nav-arrow:disabled { opacity: .3; }
 #resultBtn {
-  background: var(--accent); color: #fff; border-radius: 8px; padding: 10px 18px;
+  background: var(--accent-fill); color: #fff; border-radius: 8px; padding: 10px 18px;
   font-size: 14px; font-weight: 600; border: none; font-family: inherit;
   flex: 0 0 auto; white-space: nowrap;
 }
@@ -283,7 +312,7 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
   color: var(--text); font-family: inherit;
 }
 .tool:active { background: var(--badge-bg); }
-.tool.active { background: var(--accent); }
+.tool.active { background: var(--accent-fill); }
 .tool-sep { width: 1px; height: 24px; background: var(--border); margin: 0 4px; }
 
 /* ---- 필기 캔버스 ---- */
@@ -337,9 +366,9 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
 .wiki-body .cal-example { border-color: var(--accent); }
 .wiki-body .cal-warning { border-color: var(--warn); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .wiki-body mark { background: #78350f; color: #fde68a; }
+  :root:not([data-theme="light"]) .wiki-body mark { background: #6b4408; color: #ffe9ad; }
 }
-:root[data-theme="dark"] .wiki-body mark { background: #78350f; color: #fde68a; }
+:root[data-theme="dark"] .wiki-body mark { background: #6b4408; color: #ffe9ad; }
 
 /* 가로모드에서는 문제와 노트를 나란히 */
 @media (orientation: landscape) and (min-width: 860px) {
@@ -557,7 +586,7 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
   font-family: inherit; cursor: pointer; min-height: 40px; white-space: nowrap;
 }
 .sel-btn:active { background: var(--badge-bg); }
-.sel-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); flex: 1 1 auto; }
+.sel-btn.primary { background: var(--accent-fill); color: #fff; border-color: var(--accent); flex: 1 1 auto; }
 /* 나머지는 아이콘만 — 뜻이 분명해서 글씨가 필요 없다 */
 .sel-btn.icon { flex: 0 0 auto; width: 42px; padding: 9px 0; text-align: center; font-size: 15px; }
 
@@ -936,7 +965,7 @@ body.boxing .resize-grip { pointer-events: none; }
 }
 .bd-tag {
   flex: 0 0 auto; font-size: 10.5px; font-weight: 800; letter-spacing: .03em;
-  color: #fff; background: var(--accent); padding: 3px 8px; border-radius: 5px;
+  color: #fff; background: var(--accent-fill); padding: 3px 8px; border-radius: 5px;
 }
 
 .bd-sub {
@@ -966,7 +995,7 @@ body.boxing .resize-grip { pointer-events: none; }
 #qtext .bd-badge {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 15px; height: 15px; padding: 0 3px; margin: 0 1px 0 2px;
-  background: var(--accent); color: #fff;
+  background: var(--accent-fill); color: #fff;
   font-size: 9.5px; font-weight: 800; line-height: 1;
   border-radius: 7px; vertical-align: super;
   cursor: pointer; user-select: none;
@@ -976,7 +1005,7 @@ body.boxing .resize-grip { pointer-events: none; }
   flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 17px; height: 17px; padding: 0 4px;
-  background: var(--accent); color: #fff;
+  background: var(--accent-fill); color: #fff;
   font-size: 10.5px; font-weight: 800; line-height: 1;
   border-radius: 8px;
 }
@@ -1035,7 +1064,7 @@ body.boxing .resize-grip { pointer-events: none; }
   position: fixed; left: 50%; transform: translateX(-50%);
   bottom: calc(env(safe-area-inset-bottom) + 16px);
   display: flex; align-items: center; gap: 12px;
-  background: var(--accent); color: #fff;
+  background: var(--accent-fill); color: #fff;
   padding: 11px 13px 11px 18px; border-radius: 24px;
   font-size: 14px; font-weight: 600; z-index: 300;
   box-shadow: 0 8px 28px rgba(0,0,0,.26);
@@ -1284,7 +1313,7 @@ body.boxing .resize-grip { pointer-events: none; }
   background: var(--card); border: 1px solid var(--border);
   font-family: inherit; font-size: 13.5px; color: var(--text); cursor: pointer; white-space: nowrap;
 }
-.deck-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.deck-tab.active { background: var(--accent-fill); border-color: var(--accent); color: #fff; }
 .dt-ico { font-size: 13px; }
 .dt-n { font-weight: 800; opacity: .8; font-size: 12px; }
 .deck-tab.active .dt-n { opacity: 1; }
@@ -1703,7 +1732,7 @@ body.boxing .resize-grip { pointer-events: none; }
 .dn-caret.tap { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; }
 .dn-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dn-due {
-  flex: 0 0 auto; background: var(--accent); color: #fff; border-radius: 9px;
+  flex: 0 0 auto; background: var(--accent-fill); color: #fff; border-radius: 9px;
   padding: 1px 7px; font-size: 10.5px; font-weight: 800; font-variant-numeric: tabular-nums;
 }
 .deck-arch {
@@ -1745,7 +1774,7 @@ body.boxing .resize-grip { pointer-events: none; }
   display: flex; align-items: center; justify-content: center;
   font-size: 13px; font-weight: 800; color: #fff;
 }
-.deck-card.picked .deck-tick { background: var(--accent); border-color: var(--accent); }
+.deck-card.picked .deck-tick { background: var(--accent-fill); border-color: var(--accent); }
 
 /* ── 아래 작업 막대 ── */
 .deck-selbar {
@@ -1766,7 +1795,7 @@ body.boxing .resize-grip { pointer-events: none; }
 }
 .sel-btn2:active { background: var(--badge-bg); }
 .sel-btn2:disabled { opacity: .4; }
-.sel-btn2.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.sel-btn2.primary { background: var(--accent-fill); border-color: var(--accent); color: #fff; font-weight: 700; }
 .sel-btn2.danger { color: var(--wrong); }
 .sel-btn2.danger.on { background: var(--wrong); border-color: var(--wrong); color: #fff; font-weight: 700; }
 
@@ -1798,7 +1827,7 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
   background: var(--bg); color: var(--text); font-family: inherit; font-size: 12.5px;
   cursor: pointer; white-space: nowrap;
 }
-.ov-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.ov-chip.active { background: var(--accent-fill); border-color: var(--accent); color: #fff; font-weight: 700; }
 .ov-body {
   padding: 10px; display: flex; flex-direction: column; gap: 7px;
   max-height: 52vh; overflow-y: auto;
@@ -2006,9 +2035,9 @@ mark.peek-hit {
 }
 .set-preview mark { background: #fde68a; color: #78350f; padding: 0 3px; border-radius: 3px; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .set-preview mark { background: #78350f; color: #fde68a; }
+  :root:not([data-theme="light"]) .set-preview mark { background: #6b4408; color: #ffe9ad; }
 }
-:root[data-theme="dark"] .set-preview mark { background: #78350f; color: #fde68a; }
+:root[data-theme="dark"] .set-preview mark { background: #6b4408; color: #ffe9ad; }
 
 /* ── MarginNote 슬라이드 링크 ── (2026-10-12)
    노트의 `[슬라이드 p.12]`를 누르면 MarginNote의 그 쪽이 열린다. 본문에 1,400개 넘게
@@ -2020,7 +2049,7 @@ mark.peek-hit {
   color: var(--sub); font-size: .82em; font-weight: 600;
   white-space: nowrap; vertical-align: baseline;
 }
-.slide-link:active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.slide-link:active { background: var(--accent-fill); border-color: var(--accent); color: #fff; }
 
 /* ── 모아두기 창 ── (2026-10-12)
    공부하다 알게 된 것(AI 답변·찾아본 그림)을 그 자리에서 담는다. */
@@ -2084,7 +2113,7 @@ mark.peek-hit {
 /* 오늘은 테두리로, 고른 날은 채워서 — 둘이 겹쳐도 구분된다 */
 .day-chip.today { border-color: var(--accent); }
 .day-chip.today .dc-d { color: var(--accent); }
-.day-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.day-chip.active { background: var(--accent-fill); border-color: var(--accent); color: #fff; }
 .day-chip.active .dc-d, .day-chip.active .dc-w { color: #fff; }
 .day-chip.active .dc-n { background: rgba(255,255,255,.22); color: #fff; }
 .day-back { margin-bottom: 10px; }
@@ -2262,7 +2291,7 @@ body.dragging-doc .doc-drawer { opacity: .55; }
   font-size: 10.5px; font-weight: 800; background: var(--badge-bg);
   border-radius: 7px; padding: 1px 6px; min-width: 18px; text-align: center;
 }
-.cf-tab.active .cf-n { background: var(--accent); color: #fff; }
+.cf-tab.active .cf-n { background: var(--accent-fill); color: #fff; }
 
 .cf-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
 .cf-row {
@@ -2338,7 +2367,7 @@ body.dragging-doc .doc-drawer { opacity: .55; }
 .read-tools .icon-btn:active { background: var(--badge-bg); }
 #readScreen > header .icon-btn.active,
 .read-tools .icon-btn.active {
-  background: var(--accent); border-color: var(--accent); color: #fff;
+  background: var(--accent-fill); border-color: var(--accent); color: #fff;
 }
 #readScreen > header #readBack {
   border-color: transparent; background: none; min-width: 30px; padding: 4px;
@@ -2505,7 +2534,7 @@ body.dragging-doc .doc-drawer { opacity: .55; }
   padding: 5px 11px; font-size: 12.5px; border-radius: 999px;
   border: 1px solid var(--border); background: var(--card); color: var(--sub); cursor: pointer;
 }
-.scope-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.scope-btn.on { background: var(--accent-fill); border-color: var(--accent); color: #fff; }
 .scope-btn:disabled { opacity: .4; cursor: default; }
 .scope-btn.toggle { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; min-width: 38px; }
 .scope-sep { flex: 1 1 auto; }
@@ -2534,7 +2563,7 @@ mark.find-mark { background: #fde68a; color: inherit; border-radius: 2px; paddin
 /* 찾기 글자 칸 + 받아쓰기 */
 .search-row { display: flex; gap: 6px; align-items: center; }
 .search-row input { flex: 1 1 auto; min-width: 0; }
-.search-row .icon-btn.on { background: var(--accent); color: #fff; }
+.search-row .icon-btn.on { background: var(--accent-fill); color: #fff; }
 
 /* 마우스 버튼 시험 — 기기마다 다르니 직접 눌러 보게 한다 */
 .mouse-probe { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
@@ -2547,7 +2576,7 @@ mark.find-mark { background: #fde68a; color: inherit; border-radius: 2px; paddin
 .mp-log { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .mp-hit {
   padding: 4px 9px; font-size: 12px; border-radius: 999px;
-  background: var(--accent); color: #fff;
+  background: var(--accent-fill); color: #fff;
 }
 
 /* ── 창 버튼(●●●) 자리 ──
@@ -2785,7 +2814,7 @@ li.task.done .task-box { color: var(--accent); }
 .ask-btn { position: relative; }
 .ask-dot {
   position: absolute; top: 4px; right: 4px; width: 7px; height: 7px;
-  border-radius: 50%; background: var(--accent);
+  border-radius: 50%; background: var(--accent-fill);
   box-shadow: 0 0 0 2px var(--card);
 }
 /* 새 질문 칸 — 답을 보고 나면 이어서 묻게 된다 */
