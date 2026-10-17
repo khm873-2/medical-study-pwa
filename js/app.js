@@ -944,6 +944,10 @@ function renderDaySection(body, pool, index, attempts, noteGroups) {
     head.innerHTML = `<span class="today-period">${escapeHtml(l.period || '')}</span>`
       + `<b>${escapeHtml(l.name)}</b>`
       + (l.teacher ? `<span class="muted"> ${escapeHtml(l.teacher)}</span>` : '');
+    // 몇 번 읽었는지를 **강의 제목 옆에** — 오늘 무엇을 다시 볼지 고르는 자리다
+    // (2026-10-17 요청). 실강노트 기준, 없으면 예습노트.
+    const lecPath = notePathOf(noteGroups, l.wiki) || notePathOf(noteGroups, l.note);
+    if (lecPath) head.appendChild(passTag(lecPath));
     row.appendChild(head);
 
     const chips = document.createElement('div');
@@ -2881,7 +2885,7 @@ async function loadNotesTab(force) {
       const arrow = document.createElement('span');
       arrow.className = 'exam-progress';
       arrow.textContent = '›';
-      b.append(name, arrow);
+      b.append(name, passTag(n.path), arrow);
       b.onclick = () => openNote(n.path);
       return b;
     };
@@ -3300,14 +3304,24 @@ function clearDropHint() {
 
 function initDocDrop() {
   const host = document.getElementById('readPanes');
-  host.addEventListener('dragover', (e) => {
-    if (!docDragNote) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
-    paintDropHint(dropPlan(e.clientX, e.clientY));
-  });
+  // ⚠️ 서랍 **위에서도** 떨굴 수 있어야 한다. 서랍은 오른쪽 360px를 덮는데 창이 둘로
+  //    갈라져 있으면 오른쪽 창이 그 밑이다. 전에는 서랍의 포인터를 꺼서 통과시켰는데,
+  //    **끌기가 서랍 안에서 시작되므로** 그러면 iOS에서 끌기 자체가 흔들린다.
+  //    대신 서랍도 같은 손길을 받아 **좌표로** 밑에 있는 창을 찾아준다
+  //    (dropPlan·paneAtPoint는 겹침이 아니라 자리를 재므로 가려져도 맞는다).
+  const targets = [host, document.getElementById('docDrawer')].filter(Boolean);
+  for (const t of targets) {
+    t.addEventListener('dragover', (e) => {
+      if (!docDragNote) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      paintDropHint(dropPlan(e.clientX, e.clientY));
+    });
+    t.addEventListener('drop', (e) => onDocDrop(e));
+  }
   host.addEventListener('dragleave', (e) => { if (e.target === host) clearDropHint(); });
-  host.addEventListener('drop', async (e) => {
+
+  async function onDocDrop(e) {
     if (!docDragNote) return;
     e.preventDefault();
     const n = docDragNote;
@@ -3327,7 +3341,7 @@ function initDocDrop() {
       if (plan.split && panes.length < 2) splitPane(note);
       else { openInPane(note, { pane: Math.min(plan.pane, panes.length - 1) }); renderPanes(); }
     } catch (err) { toast(`노트를 열지 못했습니다: ${err.message}`); }
-  });
+  }
 }
 
 document.getElementById('readDocs').onclick = openDocDrawer;
@@ -3510,6 +3524,27 @@ async function setPass(path, n) {
   await kvSet(READ_PASS_KEY, readPass);
   backup.scheduleBackup();
   paintPassBtn();
+}
+
+/** 노트 이름 → 경로. 회독수는 경로로 세므로 이름만 있는 자리에서 이걸 거친다. */
+function notePathOf(groups, name) {
+  if (!name || !groups) return '';
+  const hit = findNoteInGroups(groups, name);
+  return hit ? hit.path : '';
+}
+
+/**
+ * 목록에 붙이는 회독 표시 — "이 노트를 몇 번 읽었나"를 **열기 전에** 알아야 한다
+ * (2026-10-17 요청). 아직 1회독 중인 노트에는 아무것도 안 붙인다 — 그게 기본이라
+ * 전부에 붙이면 눈만 시끄럽다.
+ */
+function passTag(path) {
+  const n = passOf(path);
+  const el = document.createElement('span');
+  el.className = `pass-tag${n ? '' : ' none'}`;
+  el.textContent = n ? `${n}회독` : '';
+  if (n) el.title = `${n}회독 마침`;
+  return el;
 }
 
 /** 지금 읽는 노트의 회독 단추를 상태에 맞게 그린다. */

@@ -268,9 +268,6 @@
         <button class="txt-btn" id="readDocs">노트</button>
       </div>
       <h1 id="readTitle"></h1>
-      <!-- 회독 단추 — 지금 담는 것이 "처음 배우는 것"인지 "인출 실패"인지를 가른다
-           (2026-10-17 요청). 누르면 한 회독 마침, 길게 누르면 되돌린다. -->
-      <button class="pass-btn hidden" id="readPass">1회독 중</button>
     </header>
     <!-- 접어둔 메뉴 — 가끔 쓰는 것들 -->
     <div class="more-menu hidden" id="readMoreMenu">
@@ -320,6 +317,10 @@
     </aside>
     <div class="dd-scrim hidden" id="docScrim"></div>
     <div class="navbar">
+      <!-- 회독 단추 — 담는 것이 "처음 배우는 것"인지 "인출 실패"인지를 가르는 스위치.
+           머리줄 오른쪽에 뒀더니 떠다니는 도구막대에 가렸다(2026-10-17 지적).
+           늘 비어 있는 왼쪽 아래, 돋보기 옆으로 내린다. -->
+      <button class="pass-btn hidden" id="readPass">1회독 중</button>
       <button class="icon-btn nav-arrow" id="readPrev" title="이전 섹션"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
       <div class="center"><button id="readPos" class="pos-jump" title="눌러서 섹션 번호로 이동">0/0</button></div>
       <button class="icon-btn ask-btn ask-wide" id="readAsk" title="AI에게 묻기 — 긁어뒀으면 그 부분을, 아니면 새로 묻습니다"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7z"/><path d="M18.5 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg><span class="ask-last hidden" id="readAskLast"></span></button>

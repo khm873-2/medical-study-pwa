@@ -450,6 +450,11 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
 .read-body h4, .read-body h5, .read-body h6 { margin: 18px 0 8px; }
 /* 선택 가능하게 — 올가미 대신 네이티브 선택을 쓴다 */
 .read-body, .read-body * { -webkit-user-select: text; user-select: text; }
+/* 다만 **끌 수 있는 링크**는 예외다 — 선택이 되면 iOS에서 끌기가 시작되지 않는다
+   (위 .dd-item과 같은 이유, 2026-10-17). */
+.read-body .wikilink, .read-body .wikilink * {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
 #readScreen .icon-btn.active { color: var(--accent); background: var(--badge-bg); }
 
 /* 누운 자세: 가로모드에서 글줄 길이를 읽기 좋게 제한하고 여백을 키운다.
@@ -2278,16 +2283,16 @@ body.dragging-doc .dd-scrim { pointer-events: none; opacity: 0; }
    "그 노트가 열려있는 오른쪽으로 배치할 수가 없는 문제"). 재어 보니 오른쪽 창
    444px 중 360px이 가려져 쓸 수 있는 자리가 84px뿐이었다.
    opacity만 낮추는 걸로는 안 된다 — **포인터를 안 받아야** dragover가 창에 닿는다. */
-body.dragging-doc .doc-drawer {
-  pointer-events: none; opacity: .16;
-}
+body.dragging-doc .doc-drawer { opacity: .16; }
 
 
 /* ── 회독 단추 (2026-10-17) ──
    지금 담는 것이 "처음 배우는 것"인지 "인출 실패"인지를 가르는 단 하나의 스위치라
    머리줄에 늘 보이게 둔다. 1회독 중에는 조용하고, 마치면 색이 들어온다. */
+/* 막대는 space-between이라 그냥 두면 가운데로 밀려난다 — 오른쪽 여백을 몰아줘서
+   돋보기 바로 옆에 붙인다(둘이 한 묶음으로 보이게). */
 .pass-btn {
-  flex: 0 0 auto; margin-left: auto;
+  flex: 0 0 auto; margin-right: auto;
   padding: 5px 11px; border-radius: 999px; min-height: 30px;
   border: 1px solid var(--border); background: var(--bg); color: var(--sub);
   font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
@@ -2298,6 +2303,17 @@ body.dragging-doc .doc-drawer {
   border-color: var(--correct); color: var(--correct);
 }
 .pass-btn:active { transform: scale(.96); }
+
+/* 목록·오늘 탭에 붙는 회독 표시 — 열기 전에 "몇 번 읽었나"가 보이게(2026-10-17).
+   1회독 중이면 아무것도 안 붙는다(.none) — 그게 기본이라 다 붙이면 눈만 시끄럽다. */
+.pass-tag {
+  flex: 0 0 auto; margin-left: 6px;
+  padding: 1px 7px; border-radius: 999px;
+  background: color-mix(in srgb, var(--correct) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--correct) 45%, transparent);
+  color: var(--correct); font-size: 10.5px; font-weight: 800; white-space: nowrap;
+}
+.pass-tag.none { display: none; }
 
 /* ── 모아두기: 어디로 갈지 고르기 ── */
 .sc-kind { display: flex; align-items: center; gap: 6px; padding: 0 14px 8px; flex-wrap: wrap; }
@@ -2340,6 +2356,12 @@ body.dragging-doc .doc-drawer {
   overflow: hidden;
 }
 .dd-item:active { background: var(--badge-bg); cursor: grabbing; }
+/* ⚠️ 끌 수 있는 것은 **글자 선택이 막혀 있어야** 한다. iOS는 길게 누르면 드래그가 아니라
+   **글자 선택·확대경**부터 띄워서, 끌기가 아예 시작되지 않는다(2026-10-17 신고:
+   "오래 눌러도 드래그가 안됨 … 텍스트가 선택이 되잖아"). callout도 같이 막는다. */
+.dd-item, .dd-item * {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
 
 /* 좁은 화면에서는 가로로 나누면 양쪽 다 못 읽는다 — 위아래로 나눈다 */
 @media (max-width: 760px) {

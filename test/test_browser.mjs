@@ -4928,19 +4928,29 @@ await run('회독수와 모아두기 갈래', async () => {
     // 앞 검사가 노트를 열어둔 채로 넘어올 수 있다 — 상태를 **직접 세우고** 본다
     paint({ note: null }, () => 0)();
     out.push({ name: '노트를 안 읽을 땐 숨는다', ok: b.classList.contains('hidden') });
+    if (window.__paintFindFab) window.__paintFindFab();
     paint({ note: { path: '02_Wiki/과목/a.md' } }, () => 0)();
-    await new Promise((r) => setTimeout(r, 40));
+    await new Promise((r) => setTimeout(r, 50));
     const rect = b.getBoundingClientRect();
     out.push({ name: '**노트를 열면 눈에 보인다**',
       ok: !b.classList.contains('hidden') && rect.width > 0 && rect.height > 0,
       detail: `${Math.round(rect.width)}×${Math.round(rect.height)} "${b.textContent}"` });
-    const hdr = document.querySelector('#readScreen header').getBoundingClientRect();
-    out.push({ name: '머리줄 안에 들어간다(화면 밖으로 안 나간다)',
-      ok: rect.left >= 0 && rect.right <= innerWidth
-        && rect.top >= hdr.top - 1 && rect.bottom <= hdr.bottom + 1,
-      detail: `${Math.round(rect.left)},${Math.round(rect.top)}` });
-    const title = document.getElementById('readTitle').getBoundingClientRect();
-    out.push({ name: '제목을 가리지 않는다', ok: !title.width || rect.left >= title.right - 1 });
+    // 머리줄 오른쪽에 뒀더니 떠다니는 도구막대에 가렸다(2026-10-17) — 아래 막대로 내렸다
+    out.push({ name: '**아래 막대에 있다(머리줄이 아니다)**', ok: !!b.closest('.navbar'),
+      detail: b.parentElement ? b.parentElement.className : '없음' });
+    const fab = document.getElementById('findFab').getBoundingClientRect();
+    out.push({ name: '**돋보기 바로 옆이다**',
+      ok: Math.abs(rect.top - fab.top) < 20 && rect.left > fab.left && rect.left - fab.right < 30,
+      detail: `돋보기 ~${Math.round(fab.right)} · 회독 ${Math.round(rect.left)}~` });
+    const tools = document.getElementById('readTools').getBoundingClientRect();
+    out.push({ name: '**도구막대에 안 가린다**',
+      ok: !(tools.width && rect.left < tools.right && rect.right > tools.left
+        && rect.top < tools.bottom && rect.bottom > tools.top) });
+    const clash = [...document.querySelectorAll('#readScreen .navbar button')]
+      .filter((x) => x !== b && x.id !== 'findFab').map((x) => x.getBoundingClientRect())
+      .filter((x) => x.width && rect.left < x.right && rect.right > x.left
+        && rect.top < x.bottom && rect.bottom > x.top);
+    out.push({ name: '막대 안 다른 단추와 안 겹친다', ok: !clash.length, detail: `${clash.length}개` });
     out.push({ name: '누를 만한 크기다', ok: rect.height >= 28 && rect.width >= 50,
       detail: `${Math.round(rect.width)}×${Math.round(rect.height)}` });
     paint({ note: { path: '02_Wiki/과목/a.md' } }, () => 2)();
@@ -4976,6 +4986,26 @@ await run('회독수와 모아두기 갈래', async () => {
   out.push({ name: '인출 실패 쪽은 "노트에 있는데 못 찾은 경우"를 먼저 보게 한다',
     ok: /이미 노트에 있는데 못 찾은 것/.test(app) });
   out.push({ name: '손으로 갈래를 바꿀 수 있다', ok: /scrapKind = b\.dataset\.bucket/.test(app) });
+
+  // 목록에서도 몇 회독인지 보여야 한다 — 열기 전에 무엇을 다시 볼지 고른다(2026-10-17)
+  {
+    const tag = new Function('passOf', `
+      ${(app.match(/function passTag\(path\) \{[\s\S]*?\n}\n/) || [''])[0]}
+      return passTag;`);
+    const t0 = tag(() => 0)('a.md');
+    const t2 = tag(() => 2)('a.md');
+    document.body.append(t0, t2);
+    out.push({ name: '1회독 중이면 아무것도 안 붙는다',
+      ok: getComputedStyle(t0).display === 'none', detail: t0.textContent || '(빈칸)' });
+    out.push({ name: '**읽은 노트엔 회독수가 붙는다**',
+      ok: t2.textContent === '2회독' && getComputedStyle(t2).display !== 'none',
+      detail: t2.textContent });
+    t0.remove(); t2.remove();
+  }
+  out.push({ name: '오늘 탭 강의 제목 옆에 붙인다',
+    ok: /head\.appendChild\(passTag\(lecPath\)\)/.test(app) });
+  out.push({ name: '노트 목록에도 붙인다',
+    ok: /b\.append\(name, passTag\(n\.path\), arrow\)/.test(app) });
   out.push({ name: '창을 열 때마다 회독수대로 다시 정한다', ok: /scrapKind = null;/.test(app) });
   return out;
 });
@@ -5016,16 +5046,57 @@ await run('서랍에서 떨구기', async () => {
 
   out.push({ name: '서랍이 오른쪽 창을 덮고 있다(이 상황이 문제였다)',
     ok: ddr.left < panes[1].right, detail: `서랍 ${Math.round(ddr.left)}~ · 오른창 ~${Math.round(panes[1].right)}` });
+  // 손이 닿는 건 서랍이다(끌기가 거기서 시작되니 그래야 한다). 대신 **서랍이 받아
+  // 좌표로 밑의 창을 찾아준다** — 아래 "오른쪽 창이 표적으로 잡힌다"가 그걸 본다.
   const hit = document.elementFromPoint(cx, cy);
-  out.push({ name: '**끄는 동안 오른쪽 창에 손이 닿는다**',
-    ok: !(hit && hit.closest && hit.closest('#docDrawer')),
+  out.push({ name: '오른쪽 창 자리는 서랍이 덮고 있다(그래서 좌표로 푼다)',
+    ok: !!(hit && hit.closest && hit.closest('#docDrawer')),
     detail: hit ? (hit.className || hit.tagName) : '없음' });
-  out.push({ name: '끄는 동안 서랍이 포인터를 안 받는다',
-    ok: getComputedStyle(dd).pointerEvents === 'none', detail: getComputedStyle(dd).pointerEvents });
-  out.push({ name: '끄는 동안 서랍이 거의 투명해진다',
+  // ⚠️ 서랍은 끄는 동안에도 **포인터를 계속 받아야** 한다 — 끌기가 서랍 안에서 시작되고,
+  //    거기서 포인터를 꺼버리면 iOS에서 끌기 자체가 흔들린다(2026-10-17 신고).
+  //    가려진 창은 포인터를 끄는 대신 **좌표로** 찾아준다(아래 "서랍 위에서 떨궈도 받는다").
+  out.push({ name: '끄는 동안에도 서랍은 포인터를 받는다(끌기가 거기서 시작된다)',
+    ok: getComputedStyle(dd).pointerEvents !== 'none', detail: getComputedStyle(dd).pointerEvents });
+  out.push({ name: '끄는 동안 서랍이 거의 투명해진다(밑이 보이게)',
     ok: Number(getComputedStyle(dd).opacity) <= 0.35, detail: getComputedStyle(dd).opacity });
-  out.push({ name: '끌지 않을 때는 서랍이 멀쩡하다', ok: /\.doc-drawer \{[^}]*opacity/.test(css) === false
-    || !/^\s*\.doc-drawer \{[^}]*pointer-events:\s*none/m.test(css) });
+  out.push({ name: '**서랍 위에서 떨궈도 받는다**',
+    ok: /\[host, document\.getElementById\('docDrawer'\)\]/.test(app) });
+
+  // 끌 수 있는 것은 **글자 선택이 막혀 있어야** 한다 — iOS는 길게 누르면 선택부터 한다
+  {
+    const list = document.getElementById('docList') || document.createElement('div');
+    const keepList = list.innerHTML;
+    list.innerHTML = '<button class="dd-item" draggable="true"><span class="dd-name">시험</span></button>';
+    await wait(40);
+    // ⚠️ 계산값으로 재면 안 된다 — 크롬은 <button>에 기본으로 user-select:none을 준다.
+    //    문제는 **iOS**이고 거기선 길게 누르면 선택이 먹는다. 그래서 **규칙이 있는지**를 본다.
+    // 규칙 묶음을 통째로 찾는다 — 선택자만 있고 속성이 없으면 소용없다.
+    // 주석을 먼저 걷어낸다 — 설명 글에 든 `.dd-item`이 규칙으로 잡히면 헛통과한다.
+    const bare = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const ddRule = (bare.match(/\.dd-item[^{}]*\{[^}]*\}/g) || [])
+      .find((b) => /user-select:\s*none/.test(b)) || '';
+    out.push({ name: '**서랍 줄에 글자 선택 막기가 걸려 있다**(없으면 iOS에서 끌기가 안 된다)',
+      ok: !!ddRule, detail: ddRule.slice(0, 50) });
+    out.push({ name: '안쪽 글씨까지 걸려 있다', ok: /\.dd-item \*/.test(ddRule), detail: ddRule.slice(0, 40) });
+    out.push({ name: '길게 눌러도 확대경이 안 뜬다',
+      ok: /-webkit-touch-callout:\s*none/.test(ddRule), detail: ddRule.slice(0, 60) });
+    list.innerHTML = keepList;
+  }
+  {
+    // ⚠️ 이 검사는 가짜 창으로 #readBody를 지운 뒤라 **임시 상자**에 재야 한다
+    const rb = document.createElement('div');
+    rb.className = 'read-body';
+    rb.innerHTML = '<p>앞말 <a class="wikilink" data-note="가" draggable="true">가</a> 뒷말</p>';
+    document.body.appendChild(rb);
+    await wait(40);
+    // 이쪽은 계산값이 뜻을 가진다 — `.read-body *`가 text로 덮으려 들기 때문이다
+    out.push({ name: '**본문 속 끌 수 있는 링크는 선택이 막힌다**(본문은 text인데도)',
+      ok: getComputedStyle(rb.querySelector('.wikilink')).userSelect === 'none',
+      detail: getComputedStyle(rb.querySelector('.wikilink')).userSelect });
+    out.push({ name: '본문 글자는 여전히 선택된다(긁기가 살아 있다)',
+      ok: getComputedStyle(rb.querySelector('p')).userSelect === 'text' });
+    rb.remove();
+  }
 
   // 어느 창을 겨눴는지 정하는 셈을 그대로 떼어 본다
   const two = new Function('panes', 'activePane', `
