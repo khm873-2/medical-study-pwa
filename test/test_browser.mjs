@@ -4910,7 +4910,44 @@ await run('긁으면 복사', async () => {
 await run('회독수와 모아두기 갈래', async () => {
   const out = [];
   const app = await fetch('/js/app.js').then((x) => x.text());
+  // ⚠️ "DOM에 있다"만 보면 안 된다 — 처음에 그리는 함수를 아무도 안 불러서 **영영 안
+  //    보였는데** 그 검사는 통과했다(2026-10-17: "엥 읽기모드에 회독버튼 없는데?").
+  //    노트를 여는 길이 여럿이라, **한 길(syncReader)에서만** 그리는지까지 본다.
   out.push({ name: '회독 단추가 머리줄에 있다', ok: !!document.getElementById('readPass') });
+  out.push({ name: '**노트를 여는 길에서 실제로 그린다**',
+    ok: /function syncReader\(\)[\s\S]{0,420}paintPassBtn\(\)/.test(app) });
+  {
+    document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+    document.getElementById('readScreen').classList.remove('hidden');
+    document.body.dataset.screen = 'readScreen';
+    await new Promise((r) => setTimeout(r, 50));
+    const b = document.getElementById('readPass');
+    const paint = new Function('reader', 'passOf', `
+      ${(app.match(/function paintPassBtn\(\) \{[\s\S]*?\n}\n/) || [''])[0]}
+      return paintPassBtn;`);
+    // 앞 검사가 노트를 열어둔 채로 넘어올 수 있다 — 상태를 **직접 세우고** 본다
+    paint({ note: null }, () => 0)();
+    out.push({ name: '노트를 안 읽을 땐 숨는다', ok: b.classList.contains('hidden') });
+    paint({ note: { path: '02_Wiki/과목/a.md' } }, () => 0)();
+    await new Promise((r) => setTimeout(r, 40));
+    const rect = b.getBoundingClientRect();
+    out.push({ name: '**노트를 열면 눈에 보인다**',
+      ok: !b.classList.contains('hidden') && rect.width > 0 && rect.height > 0,
+      detail: `${Math.round(rect.width)}×${Math.round(rect.height)} "${b.textContent}"` });
+    const hdr = document.querySelector('#readScreen header').getBoundingClientRect();
+    out.push({ name: '머리줄 안에 들어간다(화면 밖으로 안 나간다)',
+      ok: rect.left >= 0 && rect.right <= innerWidth
+        && rect.top >= hdr.top - 1 && rect.bottom <= hdr.bottom + 1,
+      detail: `${Math.round(rect.left)},${Math.round(rect.top)}` });
+    const title = document.getElementById('readTitle').getBoundingClientRect();
+    out.push({ name: '제목을 가리지 않는다', ok: !title.width || rect.left >= title.right - 1 });
+    out.push({ name: '누를 만한 크기다', ok: rect.height >= 28 && rect.width >= 50,
+      detail: `${Math.round(rect.width)}×${Math.round(rect.height)}` });
+    paint({ note: { path: '02_Wiki/과목/a.md' } }, () => 2)();
+    out.push({ name: '회독을 마치면 글씨와 색이 바뀐다',
+      ok: b.textContent === '2회독' && b.classList.contains('done'), detail: b.textContent });
+    paint({ note: null }, () => 0)();
+  }
   out.push({ name: '모아두기에 갈래 고르기가 있다',
     ok: document.querySelectorAll('#scKind .sc-k').length === 2 });
   out.push({ name: '회독수를 기기에 저장한다', ok: /READ_PASS_KEY = 'read_pass'/.test(app) });

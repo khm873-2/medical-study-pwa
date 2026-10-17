@@ -2515,6 +2515,10 @@ function syncReader() {
   const p = panes[activePane];
   reader = (p && p.tabs[p.active]) || null;
   moveReaderIds();
+  // 회독 단추는 **지금 보는 노트**를 따라간다 — 창·탭을 옮기면 같이 바뀌어야 한다.
+  // 여기 한 곳에 두는 이유: 노트를 여는 길이 여럿이라(열기·탭 이동·창 나누기·떨구기)
+  // 그 길마다 따로 부르면 반드시 하나를 빠뜨린다 — 실제로 처음엔 안 보였다(2026-10-17).
+  paintPassBtn();
 }
 
 /** `#readCard`·`#readHeading`·`#readBody`를 활성 창의 요소로 옮긴다. */
