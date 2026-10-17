@@ -4903,6 +4903,55 @@ await run('긁으면 복사', async () => {
   return out;
 });
 
+// ══════════ 한 번 툭 실패했다고 "인터넷이 없다"고 하지 않는다 (2026-10-17 신고) ══════════
+// "인터넷 있는데 왜 못올렸다고함?"
+// 아이패드는 화면이 쉬다 깨면 첫 요청이 한 번 실패한다(사파리가 Load failed를 던진다).
+// 전파가 아직 안 깬 것뿐인데 그 한 번에 바로 포기하고 대기열에 넣고 있었다.
+await run('저장 다시 해보기', async () => {
+  const out = [];
+  const app = await fetch('/js/app.js').then((x) => x.text());
+  const { looksOffline, withRetry } = new Function(`
+    ${(app.match(/\/\*\* 연결이 끊겨서 실패한 것처럼 보이는가\. \*\/\nfunction looksOffline[\s\S]*?\n}\n/) || [''])[0]}
+    ${(app.match(/const RETRY_WAIT[\s\S]*?\nasync function withRetry[\s\S]*?\n}\n/) || [''])[0]}
+    return { looksOffline, withRetry };`)();
+
+  out.push({ name: '끊긴 오류는 끊김으로 본다', ok: looksOffline(new Error('Load failed')) === true });
+  out.push({ name: '**GitHub이 답을 준 건 끊김이 아니다**(상태 코드가 찍혀 있다)',
+    ok: looksOffline(new Error('저장 실패 (422) — 뭔가')) === false });
+  out.push({ name: '권한 오류도 끊김이 아니다',
+    ok: looksOffline(new Error('저장 실패 (403) — 권한이 없습니다')) === false });
+
+  let tries = 0;
+  const t0 = Date.now();
+  const got = await withRetry(async () => {
+    tries++;
+    if (tries < 2) throw new Error('Load failed');
+    return { path: 'a/b.md' };
+  });
+  out.push({ name: '**한 번 툭 실패해도 다시 해서 올라간다**',
+    ok: got.path === 'a/b.md' && tries === 2, detail: `${tries}번 시도` });
+  out.push({ name: '다시 하느라 오래 붙들지 않는다', ok: Date.now() - t0 < 1800,
+    detail: `${Date.now() - t0}ms` });
+
+  let n = 0;
+  let threw = '';
+  try { await withRetry(async () => { n++; throw new Error('Load failed'); }); } catch (e) { threw = e.message; }
+  out.push({ name: '진짜 끊김은 세 번 해보고 포기한다', ok: n === 3 && threw === 'Load failed',
+    detail: `${n}번` });
+
+  let m = 0;
+  const t1 = Date.now();
+  try { await withRetry(async () => { m++; throw new Error('저장 실패 (404) — 없음'); }); } catch { /* 예상 */ }
+  out.push({ name: '끊김이 아니면 한 번만 하고 바로 알린다(괜히 안 기다린다)',
+    ok: m === 1 && Date.now() - t1 < 250, detail: `${m}번 ${Date.now() - t1}ms` });
+
+  out.push({ name: '모아두기도 다시 해보는 길을 쓴다',
+    ok: /withRetry\(\(\) => createFile\(p\.path/.test(app) });
+  out.push({ name: '대기열 다시 보내기도 같은 길을 쓴다',
+    ok: /withRetry\(\(\) => createFile\(it\.path/.test(app) });
+  return out;
+});
+
 // ══════════ 회독수 — 처음 배우는 것과 인출 실패를 가른다 (2026-10-17 요청) ══════════
 // "회독수가 1회 미만일때는 검색하고 기전 궁금한거 찾아보고 이런단말이지?
 //  처음 읽을때랑 나중에 인출안되는거랑 구별해야 할 것 같음"
@@ -5801,7 +5850,10 @@ await run('vault 저장 알림', async () => {
   await settled();
   out.push({ name: '**끊겼을 때는 창으로 붙잡는다**(토스트는 놓치기 쉽다)',
     ok: !!document.getElementById('alertSheet'), detail: sheetText().slice(0, 50) });
-  out.push({ name: '"인터넷이 없다"고 정확히 말한다', ok: /인터넷이 없어/.test(result()), detail: result().slice(0, 60) });
+  // "인터넷이 없다"고 단정하지 않는다 — **몇 번 해본 뒤**에야 그렇게 말한다(2026-10-17)
+  out.push({ name: '끊겼다고 말하되 몇 번 해봤다고 알려준다',
+    ok: /연결이 끊겨/.test(result()) && /해봤습니다/.test(result()),
+    detail: result().slice(0, 70) });
   out.push({ name: '잃는 게 없다고 안심시킨다',
     ok: /자동으로 올라갑니다|앱을 꺼도/.test(result()) });
   document.getElementById('alertSheet')?.remove();

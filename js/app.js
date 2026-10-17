@@ -7640,10 +7640,36 @@ document.getElementById('exportBtn').onclick = async () => {
 // 전부 "대기열로"라고만 하면 ②는 영영 안 올라간다.
 
 /** 지금 인터넷이 끊긴 상태인가. navigator.onLine은 거짓 양성이 많아 오류 문구도 같이 본다. */
+/** 연결이 끊겨서 실패한 것처럼 보이는가. */
 function looksOffline(err) {
-  if (navigator.onLine === false) return true;
-  return /NetworkError|Failed to fetch|Load failed|ERR_INTERNET|network|offline|타임아웃|timeout/i
-    .test(String((err && err.message) || err || ''));
+  const m = String((err && err.message) || err || '');
+  // GitHub이 **답을 보내준** 경우는 연결이 살아 있다는 뜻이다 — 상태 코드가 찍혀 있다.
+  // 이걸 "인터넷이 없다"로 말하면 사람이 엉뚱한 데를 고치러 간다(2026-10-17 지적).
+  if (/저장 실패 \(\d{3}\)/.test(m)) return false;
+  if (/NetworkError|Failed to fetch|Load failed|ERR_INTERNET|network|offline|타임아웃|timeout/i
+    .test(m)) return true;
+  return navigator.onLine === false;
+}
+
+/**
+ * 끊긴 것처럼 보이면 **몇 번 더 해본다**.
+ *
+ * 아이패드는 화면이 쉬다 깨면 첫 요청이 한 번 툭 실패한다(사파리가 `Load failed`를
+ * 던진다) — 전파가 아직 안 깬 것뿐인데 지금은 그 한 번에 바로 포기하고 "인터넷이 없다"고
+ * 말했다(2026-10-17 신고: "인터넷 있는데 왜 못올렸다고함?").
+ * 짧게 쉬었다 다시 해보면 대개 그냥 올라간다. 진짜로 끊겼으면 세 번 다 실패하니 그때 쌓는다.
+ */
+const RETRY_WAIT = [400, 1200];
+async function withRetry(fn) {
+  let last;
+  for (let i = 0; i <= RETRY_WAIT.length; i++) {
+    try { return await fn(); } catch (e) {
+      last = e;
+      if (!looksOffline(e) || i === RETRY_WAIT.length) throw e;
+      await new Promise((r) => setTimeout(r, RETRY_WAIT[i]));
+    }
+  }
+  throw last;
 }
 
 /**
@@ -7658,7 +7684,7 @@ async function pushToVault(payloads) {
   let why = '';
   for (const p of payloads) {
     try {
-      const r = await createFile(p.path, p.content, p.message);
+      const r = await withRetry(() => createFile(p.path, p.content, p.message));
       saved.push(r.path.split('/').pop());
     } catch (e) {
       const m = String((e && e.message) || e);
@@ -7679,7 +7705,7 @@ function vaultSaveMessage(r) {
     return { ok: true, text: `✅ vault에 저장했습니다 — ${r.saved.join(', ')}` };
   }
   if (r.offline) {
-    return { ok: false, text: `📥 인터넷이 없어 ${r.queued.length}건을 기기에 넣어뒀습니다 — 연결되면 자동으로 올라갑니다. 앱을 꺼도 남아 있습니다.` };
+    return { ok: false, text: `📥 연결이 끊겨 ${r.queued.length}건을 기기에 넣어뒀습니다 — 세 번 해봤습니다. 연결되면 자동으로 올라갑니다(앱을 꺼도 남아 있습니다).` };
   }
   if (r.needSetup) {
     return { ok: false, needSetup: true,
@@ -7748,7 +7774,7 @@ async function flushOutbox() {
   let sent = 0;
   for (const it of items) {
     try {
-      await createFile(it.path, it.content, it.message);
+      await withRetry(() => createFile(it.path, it.content, it.message));
       await dequeue(it.id);
       sent++;
     } catch (e) {
