@@ -2283,6 +2283,34 @@ body.dragging-doc .doc-drawer {
 }
 
 
+/* ── 회독 단추 (2026-10-17) ──
+   지금 담는 것이 "처음 배우는 것"인지 "인출 실패"인지를 가르는 단 하나의 스위치라
+   머리줄에 늘 보이게 둔다. 1회독 중에는 조용하고, 마치면 색이 들어온다. */
+.pass-btn {
+  flex: 0 0 auto; margin-left: auto;
+  padding: 5px 11px; border-radius: 999px; min-height: 30px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--sub);
+  font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  white-space: nowrap;
+}
+.pass-btn.done {
+  background: color-mix(in srgb, var(--correct) 16%, var(--bg));
+  border-color: var(--correct); color: var(--correct);
+}
+.pass-btn:active { transform: scale(.96); }
+
+/* ── 모아두기: 어디로 갈지 고르기 ── */
+.sc-kind { display: flex; align-items: center; gap: 6px; padding: 0 14px 8px; flex-wrap: wrap; }
+.sc-k {
+  padding: 5px 10px; border-radius: 999px; min-height: 30px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--sub);
+  font-family: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.sc-k.on {
+  background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; font-weight: 700;
+}
+.sc-k-why { font-size: 11px; }
+
 /* ── 문서 목록 서랍 ── */
 .doc-drawer {
   position: fixed; z-index: 110; right: 0; top: 0; bottom: 0;

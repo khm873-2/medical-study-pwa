@@ -268,6 +268,9 @@
         <button class="txt-btn" id="readDocs">노트</button>
       </div>
       <h1 id="readTitle"></h1>
+      <!-- 회독 단추 — 지금 담는 것이 "처음 배우는 것"인지 "인출 실패"인지를 가른다
+           (2026-10-17 요청). 누르면 한 회독 마침, 길게 누르면 되돌린다. -->
+      <button class="pass-btn hidden" id="readPass">1회독 중</button>
     </header>
     <!-- 접어둔 메뉴 — 가끔 쓰는 것들 -->
     <div class="more-menu hidden" id="readMoreMenu">
@@ -751,6 +754,12 @@
     <button class="icon-btn" id="scClose" title="닫기">✕</button>
   </div>
   <div class="sc-where" id="scWhere"></div>
+  <!-- 담은 것이 어디로 가는지 — 회독에 따라 저절로 정해지되 손으로 바꿀 수 있다 -->
+  <div class="sc-kind" id="scKind">
+    <button class="sc-k" data-bucket="learn">📘 처음 배우는 것</button>
+    <button class="sc-k" data-bucket="recall">🔁 인출 실패</button>
+    <span class="sc-k-why muted" id="scKindWhy"></span>
+  </div>
   <div class="af-body sc-body">
     <textarea id="scText" placeholder="여기를 길게 눌러 붙여넣으세요 — 글이든 그림이든 바로 들어갑니다.&#10;AI 답변, 찾아본 그림, 새로 알게 된 것…"></textarea>
     <div id="scShots" class="sc-shots"></div>

@@ -3115,8 +3115,15 @@ await run('모아두기 창', async () => {
   results.push({ name: '그림이 Obsidian 임베드로 걸린다', ok: /!\[\[모아두기_[\d_]+_1\.png\]\]/.test(text),
     detail: (text.match(/!\[\[[^\]]+\]\]/) || ['없음'])[0] });
   results.push({ name: '어디서 모았는지 머리에 남는다', ok: /출처: 아이패드 "모아두기"/.test(text) });
-  results.push({ name: '아직 정리 안 됐다고 표시한다', ok: /아직 정리 안 된 수집물/.test(text) });
-  results.push({ name: 'Obsidian 태그가 붙는다', ok: /tags: \[달모\/모아두기\]/.test(text) });
+  results.push({ name: '아직 정리 안 됐다고 표시한다',
+    ok: /아직 정리 안 된 수집물|인출 실패 — 아는 줄 알았는데/.test(text) });
+  results.push({ name: 'Obsidian 태그가 붙는다', ok: /tags: \[달모\/모아두기/.test(text) });
+  // 담은 **성격**이 적혀야 가중치를 주는 쪽이 둘을 다르게 본다(2026-10-17)
+  results.push({ name: '**처음 배우는 것인지 인출 실패인지 적는다**',
+    ok: /달모\/첫회독|달모\/인출실패/.test(text),
+    detail: (text.match(/tags: \[[^\]]*\]/) || ['없음'])[0] });
+  results.push({ name: '회독수를 함께 남긴다', ok: /^회독: /m.test(text),
+    detail: (text.match(/^회독: .*/m) || ['없음'])[0] });
   // 저장 결과는 세 갈래(올라감 / 인터넷 없어 대기 / 권한 문제)를 **다르게** 말해야 한다.
   // 다 "대기열로"라고만 하면 권한 문제는 영영 안 올라간다(2026-10-13).
   results.push({ name: '모아뒀다고 **짧게** 알려준다',
@@ -4893,6 +4900,46 @@ await run('긁으면 복사', async () => {
     ok: !/autoCopy\(full\)[\s\S]{0,220}toast\(/.test(src) });
   out.push({ name: '복사 단추도 같은 길을 쓴다(따로 놀지 않게)',
     ok: /toast\(await autoCopy\(t\)/.test(src) });
+  return out;
+});
+
+// ══════════ 회독수 — 처음 배우는 것과 인출 실패를 가른다 (2026-10-17 요청) ══════════
+// "회독수가 1회 미만일때는 검색하고 기전 궁금한거 찾아보고 이런단말이지?
+//  처음 읽을때랑 나중에 인출안되는거랑 구별해야 할 것 같음"
+// "거의 모르는 내용을 정리한건데 인출실패로 기록되는 측면이 있었음(응급 한정)"
+await run('회독수와 모아두기 갈래', async () => {
+  const out = [];
+  const app = await fetch('/js/app.js').then((x) => x.text());
+  out.push({ name: '회독 단추가 머리줄에 있다', ok: !!document.getElementById('readPass') });
+  out.push({ name: '모아두기에 갈래 고르기가 있다',
+    ok: document.querySelectorAll('#scKind .sc-k').length === 2 });
+  out.push({ name: '회독수를 기기에 저장한다', ok: /READ_PASS_KEY = 'read_pass'/.test(app) });
+  out.push({ name: '**회독수가 백업에 들어간다**(기기를 갈아도 남는다)',
+    ok: /'read_pass'/.test(await fetch('/js/backup.js').then((x) => x.text())) });
+
+  // 갈래를 정하는 셈만 떼어 본다 — 회독수와 맥락에 따라 갈려야 한다
+  const mk = (passes, ctx) => new Function('passOf', 'scrapContext', `
+    ${(app.match(/function scrapBucket\(\) \{[\s\S]*?\n}\n/) || [''])[0]}
+    return scrapBucket;`)(passes, ctx)();
+  const note = (p) => () => ({ kind: '노트', path: p, subject: 's', title: 't', where: '' });
+  out.push({ name: '**1회독 중이면 "처음 배우는 것"**', ok: mk(() => 0, note('a.md')) === 'learn' });
+  out.push({ name: '**1회독 마친 뒤면 "인출 실패"**', ok: mk(() => 1, note('a.md')) === 'recall' });
+  out.push({ name: '3회독 뒤도 인출 실패', ok: mk(() => 3, note('a.md')) === 'recall' });
+  out.push({ name: '문제를 풀다 담으면 회독과 무관하게 인출 실패',
+    ok: mk(() => 0, () => ({ kind: '모의고사', path: 'x.html' })) === 'recall' });
+  out.push({ name: '어디에도 안 묶인 메모는 처음 배우는 것',
+    ok: mk(() => 0, () => ({ kind: '메모', path: '' })) === 'learn' });
+
+  // 저장되는 글에 성격이 적히는가 — 가중치를 주는 쪽이 이걸 읽는다
+  out.push({ name: '첫 회독이면 달모/첫회독 태그', ok: /달모\/첫회독/.test(app) });
+  out.push({ name: '회독 뒤면 달모/인출실패 태그', ok: /달모\/인출실패/.test(app) });
+  out.push({ name: '**둘의 안내 문구가 다르다**',
+    ok: /처음 배우는 것 — 아직 정리 안 된 수집물/.test(app)
+      && /인출 실패 — 아는 줄 알았는데 안 나온 것/.test(app) });
+  out.push({ name: '인출 실패 쪽은 "노트에 있는데 못 찾은 경우"를 먼저 보게 한다',
+    ok: /이미 노트에 있는데 못 찾은 것/.test(app) });
+  out.push({ name: '손으로 갈래를 바꿀 수 있다', ok: /scrapKind = b\.dataset\.bucket/.test(app) });
+  out.push({ name: '창을 열 때마다 회독수대로 다시 정한다', ok: /scrapKind = null;/.test(app) });
   return out;
 });
 

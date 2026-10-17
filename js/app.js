@@ -3487,6 +3487,41 @@ document.getElementById('readSplitBtn').onclick = () => {
 // 노트별 "마지막으로 보던 섹션". 같은 문서를 다시 열면 거기서 이어 읽는다(2026-10-13).
 // ⚠️ **분할로 연 쪽은 기억하지 않는다** — 비교하려고 잠깐 띄운 자리가 "읽던 자리"로
 //    덮어써지면, 다음에 그 노트를 열었을 때 엉뚱한 데서 시작한다.
+// ───────────── 회독수 — 처음 배우는 중인가, 아는 줄 알았는데 안 나온 건가 ─────────────
+//
+// 왜 세는가(2026-10-17 요청): 모아두기로 담는 것의 **성격이 회독에 따라 다르다**.
+//   · 1회독 중에는 "기전이 궁금해서 찾아본 것" — 처음 배우는 내용이다.
+//   · 한 번 다 읽은 뒤에 담는 것은 "알았어야 하는데 안 떠오른 것" — 인출 실패다.
+// 지금까지는 둘을 구별하지 않아서, **거의 모르는 내용을 정리한 것까지 인출 실패로**
+// 기록되고 있었다(사용자 지적, 특히 응급). 가중치를 주는 쪽이 둘을 다르게 봐야 한다.
+const READ_PASS_KEY = 'read_pass';
+let readPass = {};           // {노트경로: 다 읽은 횟수}
+
+async function loadReadPass() { readPass = (await kvGet(READ_PASS_KEY)) || {}; }
+function passOf(path) { return Number((readPass || {})[path] || 0); }
+async function setPass(path, n) {
+  if (!path) return;
+  const v = Math.max(0, Math.round(n));
+  if (v) readPass[path] = v; else delete readPass[path];
+  await kvSet(READ_PASS_KEY, readPass);
+  backup.scheduleBackup();
+  paintPassBtn();
+}
+
+/** 지금 읽는 노트의 회독 단추를 상태에 맞게 그린다. */
+function paintPassBtn() {
+  const b = document.getElementById('readPass');
+  if (!b) return;
+  const path = reader && reader.note ? reader.note.path : '';
+  const n = passOf(path);
+  b.classList.toggle('hidden', !path);
+  b.classList.toggle('done', n > 0);
+  b.textContent = n ? `${n}회독` : '1회독 중';
+  b.title = n
+    ? `${n}회독 마침 — 지금 담는 건 "인출 실패"로 갑니다. 길게 누르면 되돌립니다.`
+    : '아직 1회독 중 — 지금 담는 건 "처음 배우는 것"으로 갑니다. 누르면 1회독 완료.';
+}
+
 const READ_POS_KEY = 'read_pos';
 let readPos = {};
 
@@ -3960,11 +3995,68 @@ function scrapContext() {
   return { kind: '메모', subject: '', title: '', where: '', path: '' };
 }
 
+// 회독 단추 — 누르면 한 회독 마침, 길게 누르면 되돌린다
+{
+  const b = document.getElementById('readPass');
+  if (b) {
+    b.onclick = async () => {
+      if (!(reader && reader.note)) return;
+      const path = reader.note.path;
+      const n = passOf(path) + 1;
+      await setPass(path, n);
+      toast(n === 1
+        ? '1회독 마침 — 이제 담는 것은 "인출 실패"로 들어갑니다.'
+        : `${n}회독 마침.`);
+    };
+    longPress(b, async () => {
+      if (!(reader && reader.note)) return;
+      const path = reader.note.path;
+      const n = passOf(path);
+      if (!n) { toast('아직 1회독 중입니다.'); return; }
+      await setPass(path, n - 1);
+      toast(n - 1 ? `${n - 1}회독으로 되돌렸습니다.` : '1회독 중으로 되돌렸습니다.');
+    });
+  }
+}
+
+/**
+ * 담은 것을 어느 갈래로 보낼까 — 회독수가 정한다(2026-10-17 요청).
+ *
+ * 1회독 중이면 **처음 배우는 것**이다. 기전이 궁금해 찾아본 것을 "인출 실패"로 적으면
+ * 가중치를 주는 쪽이 "이건 알았어야 하는데 못 떠올린 것"으로 읽는다 — 사실과 다르다.
+ * 한 회독을 마친 뒤에 담는 것이라야 인출 실패다.
+ */
+function scrapBucket() {
+  const ctx = scrapContext();
+  // 시험을 풀다 담은 건 회독과 무관하게 인출 실패다 — 물어본 시점이 이미 인출 시도다
+  if (ctx.kind && ctx.kind !== '노트' && ctx.kind !== '메모') return 'recall';
+  return passOf(ctx.path) > 0 ? 'recall' : 'learn';
+}
+let scrapKind = null;        // 사용자가 손으로 바꾼 갈래(null이면 회독수대로)
+
+function paintScrapKind() {
+  const auto = scrapBucket();
+  const pick = scrapKind || auto;
+  document.querySelectorAll('#scKind .sc-k').forEach((b) => {
+    b.classList.toggle('on', b.dataset.bucket === pick);
+    b.onclick = () => { scrapKind = b.dataset.bucket; paintScrapKind(); };
+  });
+  const ctx = scrapContext();
+  const n = passOf(ctx.path);
+  const why = document.getElementById('scKindWhy');
+  if (!why) return;
+  if (scrapKind && scrapKind !== auto) why.textContent = '손으로 바꿈';
+  else if (ctx.kind && ctx.kind !== '노트' && ctx.kind !== '메모') why.textContent = '문제를 풀다 담음';
+  else why.textContent = n ? `${n}회독 뒤` : '1회독 중';
+}
+
 function openScrap() {
   const ctx = scrapContext();
   const w = document.getElementById('scWhere');
   w.textContent = [ctx.title, ctx.where].filter(Boolean).join('  ›  ') || '어디에도 묶이지 않은 메모';
   document.getElementById('scStatus').textContent = '';
+  scrapKind = null;                     // 열 때마다 회독수대로 다시 정한다
+  paintScrapKind();
   document.getElementById('scrapFloat').classList.remove('hidden');
   if (scrapFloat) scrapFloat.place();
   setTimeout(() => document.getElementById('scText').focus(), 60);
@@ -4104,14 +4196,33 @@ async function saveScrap() {
   if (ctx.title) lines.push(`관련: ${ctx.title}${ctx.where ? ` · ${ctx.where}` : ''}`);
   if (ctx.path) lines.push(`원본: ${ctx.path}`);
   lines.push(`수집일시: 20${stamp} ${p2(now.getHours())}:${p2(now.getMinutes())}`);
-  lines.push('tags: [달모/모아두기]');
-  lines.push('처리:');
-  lines.push('  위키: 대기        # 공부하다 그 자리에서 모은 것');
+  // 담은 것의 **성격**을 적는다 — 처음 배우는 것과 인출 실패는 가중치가 달라야 한다
+  // (2026-10-17 요청: "거의 모르는 내용을 정리한건데 인출실패로 기록되는 측면이 있었음").
+  const bucket = scrapKind || scrapBucket();
+  const passN = passOf(ctx.path);
+  if (bucket === 'recall') {
+    lines.push('tags: [달모/모아두기, 달모/인출실패]');
+    lines.push(`회독: ${passN || '—'}회독 뒤`);
+    lines.push('처리:');
+    lines.push('  위키: 대기        # 알았어야 하는데 안 떠오른 것 — 노트에서 찾기 쉽게');
+  } else {
+    lines.push('tags: [달모/모아두기, 달모/첫회독]');
+    lines.push('회독: 1회독 중');
+    lines.push('처리:');
+    lines.push('  위키: 대기        # 처음 배우는 내용 — 노트에 없으면 채운다');
+  }
   lines.push('---', '');
   lines.push(`# ${ctx.title || '모아둔 메모'}${ctx.where ? ` — ${ctx.where}` : ''}`, '');
-  lines.push('> [!note] 아직 정리 안 된 수집물');
-  lines.push('> 공부하다 그 자리에서 모아둔 것이다. 다음 `/lecture-integrate` 때');
-  lines.push('> 위키·최종정리에 반영할지 판단한다.', '');
+  if (bucket === 'recall') {
+    lines.push('> [!warning] 인출 실패 — 아는 줄 알았는데 안 나온 것');
+    lines.push(`> ${passN ? `${passN}회독을 마친 뒤` : '문제를 풀다'} 막혀서 담았다.`);
+    lines.push('> **이미 노트에 있는데 못 찾은 것**이면 그 자리를 찾기 쉽게 고치는 게 먼저다');
+    lines.push('> (소제목·강조). 없는 내용이면 본문에 넣는다.', '');
+  } else {
+    lines.push('> [!note] 처음 배우는 것 — 아직 정리 안 된 수집물');
+    lines.push('> **1회독 중**에 기전이 궁금해 찾아본 것이다. 몰라서 담은 게 아니라');
+    lines.push('> 아직 안 배운 것이니, "인출 실패"로 세지 말 것 — 노트에 빠져 있으면 채운다.', '');
+  }
   if (text) lines.push(text, '');
   embeds.forEach((n) => lines.push(`![[${n}]]`, ''));
 
@@ -8625,6 +8736,7 @@ function hideSplash() {
   initClozeMaker();
   paintVersionChip();
   await loadReadPos();
+  await loadReadPass();
   initServiceWorker();
   gem.loadDeadModels().catch(() => {});
   gem.loadBodyTiers().catch(() => {});   // 어떤 모델에 어떤 본문이 통했는지 기억해둔 것
