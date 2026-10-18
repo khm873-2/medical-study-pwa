@@ -13,7 +13,8 @@ global.document = { createElement: () => ({ className: '', textContent: '' }), a
 // reader.js는 브라우저 모듈을 import하므로 스텁으로 치환한 복사본을 쓴다.
 const src = readFileSync(`${PWA}/js/reader.js`, 'utf8')
   .replace(/import \{[^}]*\} from '\.\/github\.js';/,
-    'const listDir=async()=>[],getText=async()=>"",getBlobUrl=async()=>"";')
+    'const listDir=async()=>[],getText=async()=>"",getBlobUrl=async()=>"";'
+    + 'const listTree=async()=>(globalThis.__TREE||[]);')
   .replace(/import \{[^}]*\} from '\.\/db\.js';/,
     'const _kv={};const kvGet=async(k)=>_kv[k],kvSet=async(k,v)=>{_kv[k]=v;};');
 const shim = `${PWA}/js/__t_reader.mjs`;
@@ -271,6 +272,60 @@ ok('1글자는 검색 안 함', empty.length === 0);
   ok('과목으로 거른다', R.cardsInDeck(cards, R.subKey('응급_중환자')).length === 5);
   ok('노트로 거른다', R.cardsInDeck(cards, R.noteKey(pick('1015_응급중환자_ACLS'))).length === 3);
   ok('키가 없으면 전부', R.cardsInDeck(cards, null).length === 12);
+}
+
+// ── 노트 목록이 스스로 낡는가 (2026-10-18) ──
+// 실제 증상: 맥에서 암기법 3개를 새로 만들었는데 아이패드 목록에 13개만 떴다. 앱을 껐다
+// 켜도 그대로였다 — 캐시가 IndexedDB에 남고 `force` 없이는 영영 다시 안 읽었기 때문이다.
+{
+  const tree = (paths) => paths.map((p) => ({ path: p, sha: 'x', size: 10 }));
+  globalThis.__TREE = tree([
+    '02_Wiki/응급_중환자/응급중환자_중환자감시.md',
+    '02_Wiki/응급_중환자/암기법/응급중환자_기본소생술BLS_암기법.md',
+    '02_Wiki/응급_중환자/암기법/응급중환자_중환자감시_암기법.md',
+    '02_Wiki/응급_중환자/QA/응급중환자_중환자감시_QA.md',
+    '98_예습노트_보관/응급_중환자/1015_응급중환자_ACLS.md',
+    '02_Wiki/응급_중환자/_강의목록.md',          // _로 시작하면 뺀다
+    'attachments/그림.png',                      // 노트가 아니다
+    '02_Wiki/너무/깊이/들어간/파일.md',           // 4단을 넘으면 안 받는다
+  ]);
+  const g1 = await R.noteList(true);
+  const find = (sub) => g1.find((x) => x.subject === sub);
+  ok('git tree 한 번으로 목록을 만든다', g1.length >= 3, `${g1.length}묶음`);
+  ok('하위 폴더는 따로 묶는다(암기법·QA)',
+    !!find('응급_중환자 · 암기법') && !!find('응급_중환자 · QA'),
+    g1.map((x) => x.subject).join(' / '));
+  ok('_로 시작하는 파일은 뺀다',
+    !(find('응급_중환자') || { notes: [] }).notes.some((n) => n.name.startsWith('_')));
+  ok('md가 아닌 것·너무 깊은 것은 안 받는다',
+    !g1.some((x) => x.notes.some((n) => /png|깊이/.test(n.path))));
+
+  // **새 파일이 생기면 저절로 보여야 한다** — 이게 이번 신고의 핵심이다
+  globalThis.__TREE = tree([
+    '02_Wiki/응급_중환자/암기법/응급중환자_기본소생술BLS_암기법.md',
+    '02_Wiki/응급_중환자/암기법/응급중환자_중환자감시_암기법.md',
+    '02_Wiki/응급_중환자/암기법/응급중환자_신생아소생술NRP_암기법.md',   // ← 새로 생김
+  ]);
+  const cached = await R.noteList(false);        // 방금 받았으니 아직 안 낡았다
+  ok('갓 받은 뒤에는 다시 안 읽는다(쓸데없이 묻지 않게)',
+    (cached.find((x) => x.subject === '응급_중환자 · 암기법') || { notes: [] }).notes.length === 2);
+  await R._setNoteAt(Date.now() - 10 * 60 * 1000);     // 10분 전에 받은 목록이라 치면
+  const stale = await R.noteList(false);
+  ok('**낡으면 force 없이도 다시 읽는다**(이번 신고의 핵심)',
+    (stale.find((x) => x.subject === '응급_중환자 · 암기법') || { notes: [] }).notes
+      .some((n) => n.name.includes('신생아소생술NRP')),
+    (stale.find((x) => x.subject === '응급_중환자 · 암기법') || { notes: [] }).notes.length + '개');
+  const forced = await R.noteList(true);
+  ok('**새로 만든 노트가 목록에 들어온다**',
+    (forced.find((x) => x.subject === '응급_중환자 · 암기법') || { notes: [] }).notes
+      .some((n) => n.name.includes('신생아소생술NRP')),
+    (forced.find((x) => x.subject === '응급_중환자 · 암기법') || { notes: [] }).notes.length + '개');
+
+  // 못 읽을 때 목록이 비면 안 된다 — 오프라인에서 다 사라지는 것보다 옛것이 낫다
+  globalThis.__TREE = [];
+  const kept = await R.noteList(false);
+  ok('못 읽으면 있던 목록을 지킨다', kept.length > 0, `${kept.length}묶음`);
+  delete globalThis.__TREE;
 }
 
 // ── 노트 이름 찾기(findNoteInGroups) — "오늘" 탭 ↻ 자동 복구의 바탕 (2026-10-12) ──

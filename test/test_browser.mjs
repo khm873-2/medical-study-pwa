@@ -4171,6 +4171,84 @@ await run('노트 서랍', async () => {
   return out;
 });
 
+// ══════════ 노트 서랍 — 새로 만든 노트가 저절로 뜨는가 (2026-10-18) ══════════
+// 실제 신고: 맥에서 암기법 3개를 만들었는데 아이패드에서 "노트 열기"에 13개만 떴다.
+// 목록이 두 겹으로 굳어 있었다 — IndexedDB의 note_index_v2(force 없이는 영영 안 읽음)와
+// 서랍 DOM에 얹어둔 list.__groups(한 번 받으면 새로고침 전까지 그대로).
+await run('새 노트가 서랍에 뜬다', async () => {
+  const out = [];
+  const d = await import('/js/db.js');
+  const a = await import('/js/auth.js');
+  await a.setToken('fake'); await a.setRepo('me/v');
+  const realFetch = window.fetch;
+  let trees = 0;                                   // git tree를 몇 번 물었는지
+  let paths = [
+    '02_Wiki/응급_중환자/응급중환자_기본소생술BLS.md',
+    '02_Wiki/응급_중환자/암기법/응급중환자_기본소생술BLS_암기법.md',
+  ];
+  window.fetch = async (url, init) => {
+    const u = String(url);
+    if (!u.includes('api.github.com')) return realFetch(url, init);
+    if (u.includes('/git/trees/')) {
+      trees++;
+      return { ok: true, status: 200, json: async () => ({
+        truncated: false,
+        tree: paths.map((p) => ({ path: p, type: 'blob', sha: 'x', size: 20 })) }) };
+    }
+    const name = decodeURIComponent(u.split('/contents/')[1] || '').split('/').pop().replace('.md', '');
+    return { ok: true, status: 200, json: async () => ({}), text: async () => `# ${name}\n\n본문\n` };
+  };
+  const openDrawer = async () => {
+    document.getElementById('readDocs').click();
+    await new Promise((r) => setTimeout(r, 700));
+    const names = [...document.querySelectorAll('#docList .dd-item .dd-name')].map((x) => x.textContent);
+    document.getElementById('docClose').click();
+    await new Promise((r) => setTimeout(r, 150));
+    return names;
+  };
+  await d.kvSet('note_index_v2', null);
+  await d.kvSet('note_index_at', 0);
+  const n1 = await openDrawer();
+  out.push({ name: 'git tree 한 번으로 목록을 받는다', ok: trees === 1, detail: `${trees}번` });
+  out.push({ name: '받은 목록이 서랍에 뜬다', ok: n1.some((x) => /_암기법$/.test(x)),
+    detail: n1.join(' / ') });
+
+  // 맥에서 암기법을 하나 더 만들었다 — 앱을 끄지 않고 서랍만 다시 연다
+  paths = paths.concat('02_Wiki/응급_중환자/암기법/응급중환자_중환자감시_암기법.md');
+  await d.kvSet('note_index_at', Date.now() - 10 * 60 * 1000);   // 10분 전 받은 목록
+  const n2 = await openDrawer();
+  out.push({ name: '**새로 만든 노트가 다시 열면 보인다**',
+    ok: n2.some((x) => /중환자감시_암기법/.test(x)), detail: n2.join(' / ') });
+  out.push({ name: '낡았을 때만 다시 묻는다', ok: trees === 2, detail: `${trees}번` });
+
+  // 방금 받았으면 또 묻지 않는다 — 서랍 여닫을 때마다 네트워크를 때리면 안 된다
+  const n3 = await openDrawer();
+  out.push({ name: '갓 받은 목록은 그대로 쓴다', ok: trees === 2, detail: `${trees}번` });
+  out.push({ name: '그래도 목록은 같다', ok: n3.length === n2.length });
+
+  // 서랍 DOM에 목록을 쥐고 있으면 캐시를 고쳐도 화면이 안 바뀐다 — 그 길을 막았는지 본다
+  out.push({ name: '서랍이 목록을 DOM에 쥐고 있지 않다',
+    ok: !document.getElementById('docList').__groupsMemo
+      && !/if \(!list\.__groups\)/.test(await (await fetch('/js/app.js')).text()) });
+
+  // 못 읽는 상황에서 목록이 비면 안 된다
+  window.fetch = async (url, init) => {
+    const u = String(url);
+    if (!u.includes('api.github.com')) return realFetch(url, init);
+    if (u.includes('/git/trees/')) throw new TypeError('Failed to fetch');
+    return { ok: true, status: 200, json: async () => ({}), text: async () => '# x\n' };
+  };
+  await d.kvSet('note_index_at', 0);
+  const n4 = await openDrawer();
+  out.push({ name: '못 읽으면 있던 목록을 지킨다(빈 서랍 금지)',
+    ok: n4.length === n2.length, detail: `${n4.length}개` });
+
+  window.fetch = realFetch;
+  await d.kvSet('note_index_v2', null);
+  await d.kvSet('note_index_at', 0);
+  return out;
+});
+
 // ══════════ 캡처·카드도 "어디까지 잡히는지" 보인다 (2026-10-13) ══════════
 // 글 선택만 미리보기가 있고 캡처는 파란 선만 보였다 — 손을 떼야 어디가 복사됐는지 알았다.
 await run('자르는 틀', async () => {

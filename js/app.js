@@ -3051,19 +3051,23 @@ async function openDocDrawer() {
       : '끌어서 오른쪽에 놓으면 화면이 갈라집니다';
   }
   const list = document.getElementById('docList');
-  // 목록은 한 번만 받아오지만 **그릴 때마다 다시 그린다** — 맨 위의 "지금 문서의 짝"과
-  // 과목 순서가 지금 열어둔 노트에 달려 있어서, 한 번 그려두면 옛 노트 기준으로 굳는다.
-  if (!list.__groups) {
+  // ⚠️ 여기서 목록을 **DOM에 들고 있으면 안 된다**. 전에는 `list.__groups`에 한 번 담고
+  //    다시는 안 읽어서, 앱을 켜둔 채로 맥에서 새 노트를 만들면 영영 안 나타났다
+  //    (2026-10-18 신고: 암기법 16개 중 13개만 떴다). noteList가 스스로 낡으므로
+  //    **열 때마다 물어본다** — 안 낡았으면 바로 돌려주고, 낡았으면 git tree 한 번이다.
+  if (!list.children.length) {
     list.innerHTML = '<p class="muted" style="padding:12px">불러오는 중…</p>';
-    try {
-      list.__groups = await noteList(false);
-    } catch (e) {
-      list.innerHTML = `<p class="muted" style="padding:12px">${escapeText(e.message)}</p>`;
-      return;
-    }
   }
+  let groups;
+  try {
+    groups = await noteList(false);
+  } catch (e) {
+    list.innerHTML = `<p class="muted" style="padding:12px">${escapeText(e.message)}</p>`;
+    return;
+  }
+  list.__groups = groups;                 // 검색 상자가 다시 그릴 때 쓴다
   document.getElementById('docSearch').value = '';
-  renderDocList(list.__groups, '');
+  renderDocList(groups, '');
   setTimeout(() => document.getElementById('docSearch').focus(), 80);
 }
 function closeDocDrawer() {

@@ -6,27 +6,94 @@
 //  - 화면이 꺼지지 않게 Wake Lock을 건다.
 //  - ⭐ ==하이라이트== 를 뽑아 플래시카드로 돌릴 수 있다(노트에 이미 818개 깔려 있다).
 
-import { getText, getBlobUrl } from './github.js';
+import { getText, getBlobUrl, listTree } from './github.js';
 import { splitSections, listNoteFiles } from './wiki.js';
 import { renderMarkdown, hydrateEmbeds } from './markdown.js';
 import { kvGet, kvSet } from './db.js';
 
 const NOTE_ROOTS = ['98_예습노트_보관', '02_Wiki', '01_임종평_전범위'];
 
-/** 노트 목록(과목별). 캐시해두고 새로고침 때만 다시 긁는다. */
+/**
+ * 노트 목록(과목별).
+ *
+ * ⚠️ **스스로 낡는다**(2026-10-18 신고: "암기법 노트 만들어져 있는데 노트 열기하면
+ * 안나옴"). 전에는 한 번 받아두면 `force` 없이는 영영 다시 안 읽어서, 맥에서 새로 만든
+ * 노트가 아이패드 목록에 안 나타났다. 앱을 껐다 켜도 캐시는 IndexedDB에 남아 그대로였다.
+ *
+ * 받는 방법도 바꿨다. 전에는 뿌리 3개 × 과목 28개를 폴더마다 훑어 **100번 넘게** 물어봤다 —
+ * 그래서 자주 다시 읽을 수가 없었다. 이제 git tree로 **요청 한 번**에 전체 경로를 받는다.
+ * 싸니까 자주 읽을 수 있고, 자주 읽으니 낡지 않는다.
+ */
+const NOTE_KEY = 'note_index_v2';
+const NOTE_AT = 'note_index_at';
+const NOTE_TTL = 3 * 60 * 1000;        // 이만큼 지나면 다시 읽는다
+
+export const _setNoteAt = (t) => kvSet(NOTE_AT, t);   // 검사에서 목록을 낡게 만들 때 쓴다
+
 export async function noteList(force) {
-  // v2: QA 하위폴더를 포함하고 정렬이 오름차순으로 바뀌었다 — 옛 캐시를 버린다
-  const KEY = 'note_index_v2';
   if (!force) {
-    const hit = await kvGet(KEY);
+    const hit = await kvGet(NOTE_KEY);
+    const at = Number((await kvGet(NOTE_AT)) || 0);
+    if (hit && Date.now() - at < NOTE_TTL) return hit;
+    // 낡았으면 다시 읽되, 못 읽으면 있던 걸 그대로 쓴다(오프라인에서 목록이 비면 안 된다)
+    try {
+      const fresh = await fetchNoteList();
+      if (fresh.length) return fresh;
+    } catch { /* 아래에서 옛것을 돌려준다 */ }
     if (hit) return hit;
   }
+  try {
+    const fresh = await fetchNoteList();
+    if (fresh.length) return fresh;
+  } catch (e) {
+    const hit = await kvGet(NOTE_KEY);
+    if (hit) return hit;
+    throw e;
+  }
+  return (await kvGet(NOTE_KEY)) || [];
+}
+
+async function fetchNoteList() {
+  let files = null;
+  // ① git tree 한 번 — 경로가 전부 들어 있다
+  try {
+    const tree = await listTree();
+    if (!tree.truncated) {
+      files = [];
+      for (const e of tree) {
+        if (!e.path.endsWith('.md')) continue;
+        const parts = e.path.split('/');
+        // {뿌리}/{과목}/{이름}.md  또는  {뿌리}/{과목}/{묶음}/{이름}.md
+        if (parts.length < 3 || parts.length > 4) continue;
+        if (!NOTE_ROOTS.includes(parts[0])) continue;
+        // 한글 이름은 자소 분리형(NFD)으로 올 수 있다 — 묶는 열쇠로 쓰므로 맞춰둔다.
+        // 안 맞추면 눈에 똑같은 과목이 두 묶음으로 갈린다(2026-10-12에 겪은 그 문제다).
+        files.push({
+          root: parts[0],
+          subject: parts[1].normalize('NFC'),
+          group: parts.length === 4 ? parts[2].normalize('NFC') : null,
+          name: parts[parts.length - 1].replace(/\.md$/, '').normalize('NFC'),
+          path: e.path,
+        });
+      }
+    }
+  } catch { /* 아래 폴더 훑기로 */ }
+
+  // ② tree를 못 쓰면(잘렸거나 막혔거나) 전처럼 폴더를 훑는다
+  if (!files) {
+    files = [];
+    for (const root of NOTE_ROOTS) {
+      for (const f of await listNoteFiles(root)) files.push({ ...f, root });
+    }
+  }
+
+  // 과목 밑에 폴더가 하나 더 있으면(02_Wiki/{과목}/QA/) 그것도 과목처럼 따로 묶는다 —
+  // 산문본과 Q&A본은 읽는 목적이 달라서 한 목록에 섞으면 찾기 힘들다(2026-10-12).
   const groups = [];
   for (const root of NOTE_ROOTS) {
-    // 과목 밑에 폴더가 하나 더 있으면(02_Wiki/{과목}/QA/) 그것도 과목처럼 따로 묶는다 —
-    // 산문본과 Q&A본은 읽는 목적이 달라서 한 목록에 섞으면 찾기 힘들다(2026-10-12).
     const bySubject = new Map();
-    for (const f of await listNoteFiles(root)) {
+    for (const f of files) {
+      if (f.root !== root) continue;
       if (f.name.startsWith('_')) continue;
       const key = f.group ? `${f.subject} · ${f.group}` : f.subject;
       if (!bySubject.has(key)) bySubject.set(key, []);
@@ -37,7 +104,10 @@ export async function noteList(force) {
       if (notes.length) groups.push({ root, subject, notes });
     }
   }
-  await kvSet(KEY, groups);
+  if (groups.length) {
+    await kvSet(NOTE_KEY, groups);
+    await kvSet(NOTE_AT, Date.now());
+  }
   return groups;
 }
 
