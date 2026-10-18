@@ -5,20 +5,14 @@
 // 실행:
 //   python3 -m http.server 8777     (레포 루트에서)
 //   node test/test_browser.mjs
-// 필요: npm i puppeteer-core --cache /tmp/npmcache  (/tmp/jsdomtest 에 설치되어 있음)
+// 필요: ~/.cache/dalmo-test 에 puppeteer-core (test/_deps.mjs 참고)
 
-import { createRequire } from 'module';
+import { needDep } from './_deps.mjs';
 
 const URL_BASE = process.env.PWA_URL || 'http://localhost:8777/';
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
-let puppeteer;
-try {
-  puppeteer = createRequire('/tmp/jsdomtest/package.json')('puppeteer-core');
-} catch {
-  console.log('⏭  puppeteer-core 없음 — 건너뜁니다');
-  process.exit(0);
-}
+const puppeteer = needDep('puppeteer-core');
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,

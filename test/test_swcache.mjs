@@ -7,8 +7,9 @@
 //
 // 실행: node test/test_swcache.mjs
 import http from 'http';
+import { needDep } from './_deps.mjs';
 import { createRequire } from 'module';
-const pup = createRequire('/tmp/jsdomtest/package.json')('puppeteer-core');
+const pup = needDep('puppeteer-core');
 
 let payload = 'VERSION_OLD';
 const srv = http.createServer((req, res) => {

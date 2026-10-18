@@ -7,20 +7,14 @@
 // jsdom은 레이아웃(실제 px)을 계산하지 않지만, **CSS 규칙 매칭과 우선순위**는 계산한다.
 // 그래서 "이 요소가 display:none이 되는가", "이 핸들러가 붙는가"는 정확히 검증된다.
 //
-// 실행: node test/test_dom.mjs   (jsdom 필요: npm i jsdom --cache /tmp/npmcache)
+// 실행: node test/test_dom.mjs   (jsdom 필요 — test/_deps.mjs 참고)
 
 import { readFileSync } from 'fs';
-import { createRequire } from 'module';
+import { needDep } from './_deps.mjs';
 
 const PWA = '/Users/hyunminkang/Documents/medical-study-pwa';
-let JSDOM;
-try {
-  const req = createRequire('/tmp/jsdomtest/package.json');
-  ({ JSDOM } = req('jsdom'));
-} catch {
-  console.log('⏭  jsdom이 없어 건너뜁니다 (npm i jsdom --cache /tmp/npmcache)');
-  process.exit(0);
-}
+// 건너뛰지 않는다 — 없으면 죽는다. 조용히 빠지면 "전부 통과"가 거짓말이 된다(2026-10-18).
+const { JSDOM } = needDep('jsdom');
 
 let pass = 0; const fail = [];
 const ok = (n, c, d) => { if (c) pass++; else fail.push(`${n}${d ? ' — ' + d : ''}`); };
