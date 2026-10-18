@@ -7423,6 +7423,89 @@ await run('카드 빈칸 직접 고치기', async () => {
     }
   }
 
+  // ── 그림만 골라도 카드가 된다 (2026-10-19 요청) ──
+  // "하이라이트나 볼드 없으면 아예 오픈이 안되는데 사진만 선택되어도 카드 만들 수 있도록"
+  // 해부·영상은 원래 그 꼴이다 — 물어볼 글이 없고, 그림에 네모를 치면 그게 곧 문제다.
+  {
+    const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUA'
+      + 'AAAPUlEQVR4nO3BMQEAAADCoPVPbQwfoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+      + 'AAAAACAtwFQQAABCM+7WwAAAABJRU5ErkJggg==';
+    body.innerHTML = `<p>설명은 그냥 줄글이다.</p><p><img src="${PNG}" alt="심장해부"`
+      + ' style="width:240px;height:150px"></p>';
+    await new Promise((r) => setTimeout(r, 200));
+    const ri = body.querySelector('img').getBoundingClientRect();
+    // 그림만 네모 안에 들어오게 — 글은 건드리지 않는다
+    const picOnly = R.cardsFromBox(body, { l: ri.left, t: ri.top, r: ri.right, b: ri.bottom },
+      { notePath: 'x.md', noteTitle: '노트', heading: '2. 심장 해부' });
+    out.push({ name: '**강조가 없어도 그림만으로 카드가 열린다**', ok: picOnly.length === 1,
+      detail: `${picOnly.length}장` });
+    if (picOnly.length) {
+      out.push({ name: '그림이 카드에 들어간다', ok: /<img/.test(picOnly[0].contextHtml) });
+      out.push({ name: '빈칸은 아직 없다(네모를 쳐서 만든다)',
+        ok: (picOnly[0].answers || []).length === 0 });
+      out.push({ name: '**무슨 카드인지 목차가 맨 위에 보인다**',
+        ok: /심장 해부/.test(picOnly[0].topic || ''), detail: picOnly[0].topic });
+      out.push({ name: '그림 카드라고 적어둔다', ok: picOnly[0].kind === 'image',
+        detail: picOnly[0].kind });
+      out.push({ name: '그림이 둘이어도 id가 안 겹치게 그림 이름을 넣는다',
+        ok: /img:/.test(picOnly[0].id), detail: picOnly[0].id });
+
+      window.__openCardFloat(picOnly);
+      await new Promise((r) => setTimeout(r, 350));
+      out.push({ name: '목차 줄이 실제로 그려진다',
+        ok: /심장 해부/.test((document.querySelector('#cfBody .cf-topic') || {}).textContent || ''),
+        detail: (document.querySelector('#cfBody .cf-topic') || {}).textContent });
+      out.push({ name: '뭘 해야 하는지 알려준다(그림을 끌어 네모)',
+        ok: /네모/.test((document.querySelector('#cfBody .cf-hint') || {}).textContent || ''),
+        detail: (document.querySelector('#cfBody .cf-hint') || {}).textContent });
+
+      // 아직 물어볼 게 없으면 넣지 않는다 — 넣어봐야 못 푸는 카드다
+      const n0 = document.querySelectorAll('#cfBody .io-mask').length;
+      document.getElementById('cfAdd').click();
+      await new Promise((r) => setTimeout(r, 300));
+      out.push({ name: '네모가 없으면 추가하지 않고 할 일을 알려준다',
+        ok: n0 === 0 && /1\/1/.test(document.getElementById('cfStatus').textContent),
+        detail: document.getElementById('cfStatus').textContent });
+
+      // 네모를 치면 그때부터 카드가 된다
+      const wrap = document.querySelector('#cfBody .io-wrap');
+      const im2 = wrap && wrap.querySelector('img');
+      if (im2) {
+        const rr2 = im2.getBoundingClientRect();
+        const ev = (t, x, y, b) => wrap.dispatchEvent(new PointerEvent(t, {
+          pointerType: 'touch', pointerId: 5, isPrimary: true, buttons: b,
+          clientX: x, clientY: y, bubbles: true, cancelable: true }));
+        ev('pointerdown', rr2.left + 20, rr2.top + 20, 1);
+        for (let i = 1; i <= 6; i++) ev('pointermove', rr2.left + 20 + i * 15, rr2.top + 20 + i * 12, 1);
+        ev('pointerup', rr2.left + 110, rr2.top + 92, 0);
+        await new Promise((r) => setTimeout(r, 300));
+        out.push({ name: '**그림에 네모를 치면 그게 문제가 된다**',
+          ok: document.querySelectorAll('#cfBody .io-mask').length === 1,
+          detail: `${document.querySelectorAll('#cfBody .io-mask').length}개` });
+        out.push({ name: '네모 개수를 카드가 들고 있다', ok: picOnly[0].masks === 1,
+          detail: String(picOnly[0].masks) });
+      }
+      document.getElementById('cfClose').click();
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
+
+  // ── 손짓이 굳어서 카드창이 멈추지 않는가 (2026-10-19 신고) ──
+  // "아니 아예 추가만 안눌리는게 아니고 그냥 카드 만들기에서 벗어날 수가 없네"
+  // 그림에 네모 치는 쪽과 쓱 끌기가 **둘 다 포인터를 가로채려 해서** 서로 뺏었다.
+  // 뺏긴 쪽은 pointerup을 영영 못 받아 `cf-brushing`(touch-action: none)이 그대로 남았다.
+  {
+    const app = await fetch('/js/app.js').then((r) => r.text());
+    out.push({ name: '쓱 끌기는 포인터를 가로채지 않는다(그림 그리기와 안 싸우게)',
+      ok: !/root\.setPointerCapture/.test(app), detail: '' });
+    out.push({ name: '그림 그리기는 네모·낱말 칸에서 시작하지 않는다',
+      ok: /cl\.contains\('io-mask'\) \|\| cl\.contains\('io-word'\)/.test(app) });
+    out.push({ name: '다시 그릴 때 그리다 만 네모를 턴다',
+      ok: /io-mask\.drawing'\)\.forEach\(\(el\) => el\.remove\(\)\)/.test(app) });
+    out.push({ name: '다시 그릴 때 굳은 cf-brushing을 턴다',
+      ok: /cf-brushing'\)\.forEach\(\(el\) => el\.classList\.remove\('cf-brushing'\)\)/.test(app) });
+  }
+
   // ── 같은 낱말을 몇 번을 눌러도 글이 안 움직인다 (2026-10-16 지적) ──
   // "같은 단어를 계속 누르면 점점 글자 간격이 벌어지는데? 이런일이 있어서는 안되지."
   // 껍데기(.cf-w)를 본문에 함께 저장하면 다음에 그릴 때 그 위에 또 씌워지고,

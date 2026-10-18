@@ -4697,7 +4697,10 @@ function makeImagesOccludable(root, card) {
     const clamp = (v) => Math.max(0, Math.min(100, v));
 
     wrap.addEventListener('pointerdown', (e) => {
-      if (e.target.classList && e.target.classList.contains('io-mask')) return;  // 지우려는 것
+      // 이미 쳐둔 네모와 읽어낸 낱말 칸은 **누르는 자리**다 — 여기서 새 네모를 그리기
+      // 시작하면 쓱 handler와 둘이 같은 손짓을 붙잡고 서로 포인터를 뺏는다(2026-10-19).
+      const cl = e.target.classList;
+      if (cl && (cl.contains('io-mask') || cl.contains('io-word'))) return;
       if (e.button > 0) return;
       from = pos(e);
       box = document.createElement('span');
@@ -4841,7 +4844,6 @@ function openBlank(el) {
 function bindCardBrush(root, card) {
   let st = null;
   let hold = 0;
-  // 가리는 쪽: 글 낱말과 그림 속 글자 / 여는 쪽: 글 빈칸과 그림 네모
   const kindOf = (el) => (!el ? null
     : el.classList.contains('cf-w') || el.classList.contains('io-word') ? 'cover' : 'open');
   const SEL = '.cf-w, .io-word, .cloze, .io-mask';
@@ -4851,7 +4853,7 @@ function bindCardBrush(root, card) {
     if (st.kind === 'cover' ? coverWord(el) : openBlank(el)) st.n++;
   };
   const startBrush = () => {
-    if (st.brush) return;
+    if (!st || st.brush) return;
     st.brush = true;
     clearTimeout(hold);
     root.classList.add('cf-brushing');
@@ -4864,38 +4866,43 @@ function bindCardBrush(root, card) {
     return hit && kindOf(hit) === st.kind ? hit : null;
   };
 
-  root.addEventListener('pointerdown', (e) => {
-    if (e.button) return;
-    const first = e.target.closest && e.target.closest(SEL);
-    if (!first || !root.contains(first)) return;        // 그림에 네모 치는 손짓은 그림이 받는다
-    st = { kind: kindOf(first), first, x: e.clientX, y: e.clientY, brush: false, n: 0, done: new Set() };
-    // 가만히 눌러 머물면 끌기로 넘어간다 — 그 뒤로는 손가락이 지나가는 데가 다 열린다
-    hold = setTimeout(startBrush, BRUSH_HOLD);
-    try { root.setPointerCapture(e.pointerId); } catch {}
-  });
-
-  root.addEventListener('pointermove', (e) => {
+  // 손짓이 이어지는 동안만 창에 붙는다. **포인터 가로채기(setPointerCapture)는 쓰지 않는다** —
+  // 그림에 네모 치는 쪽이 이미 가로채고 있는데 여기서 또 가로채면 서로 뺏는다. 뺏긴 쪽은
+  // pointerup을 영영 못 받아 그리다 만 네모와 `cf-brushing`이 그대로 남았다 — 그러면
+  // 카드 본문이 touch-action: none인 채로 굳어 아무것도 안 먹는다(2026-10-19 신고).
+  const onMove = (e) => {
     if (!st) return;
     if (!st.brush && Math.hypot(e.clientX - st.x, e.clientY - st.y) < BRUSH_MOVE) return;
     startBrush();
-    e.preventDefault();                                 // 끌기 중에는 화면이 안 밀리게
+    if (e.cancelable) e.preventDefault();
     apply(at(e.clientX, e.clientY));
-  }, { passive: false });
-
+  };
   const end = () => {
     if (!st) return;
     clearTimeout(hold);
-    if (!st.brush) apply(st.first);                     // 그냥 누른 것 — 하나만
+    const was = st;
+    st = null;                                  // 먼저 비운다 — 아래에서 뭐가 터져도 안 굳게
+    window.removeEventListener('pointermove', onMove, true);
+    window.removeEventListener('pointerup', end, true);
+    window.removeEventListener('pointercancel', end, true);
     root.classList.remove('cf-brushing');
-    const n = st.n;
-    st = null;
+    if (!was.brush) { st = was; apply(was.first); st = null; }   // 그냥 누른 것 — 하나만
     // 그리기는 **손을 뗀 뒤 한 번만** — 끌는 중에 다시 그리면 손짓이 끊긴다
-    if (n) { syncCardFromDom(root, card); renderCfNew(); }
+    if (was.n) { syncCardFromDom(root, card); renderCfNew(); }
   };
-  root.addEventListener('pointerup', end);
-  root.addEventListener('pointercancel', end);
-  // 누른 채 바깥으로 나가도 끝내준다(아이패드에서 손가락이 패널을 벗어나는 일이 흔하다)
-  root.addEventListener('lostpointercapture', end);
+
+  root.addEventListener('pointerdown', (e) => {
+    if (e.button) return;
+    const first = e.target.closest && e.target.closest(SEL);
+    if (!first || !root.contains(first)) return;      // 그림에 네모 치는 손짓은 그림이 받는다
+    end();                                            // 앞 손짓이 남아 있으면 먼저 끝낸다
+    st = { kind: kindOf(first), first, x: e.clientX, y: e.clientY, brush: false, n: 0, done: new Set() };
+    // 가만히 눌러 머물면 끌기로 넘어간다 — 그 뒤로는 손가락이 지나가는 데가 다 열린다
+    hold = setTimeout(startBrush, BRUSH_HOLD);
+    window.addEventListener('pointermove', onMove, { passive: false, capture: true });
+    window.addEventListener('pointerup', end, true);
+    window.addEventListener('pointercancel', end, true);
+  });
 }
 
 
@@ -4945,6 +4952,10 @@ function renderCfNew() {
     t.textContent = c.topic;
     body.appendChild(t);
   }
+  // 앞 손짓이 덜 끝난 채 굳어 있을 수 있다 — 그리다 만 네모와 `cf-brushing`을 턴다.
+  // 이게 남으면 본문이 touch-action: none인 채로 멈춰 아무것도 안 먹는다(2026-10-19 신고).
+  document.querySelectorAll('#cfBody .io-mask.drawing').forEach((el) => el.remove());
+  document.querySelectorAll('#cfBody .cf-brushing').forEach((el) => el.classList.remove('cf-brushing'));
   const q = document.createElement('div');
   q.className = 'cf-q cf-pick';
   setCardBody(q, c.contextHtml);
@@ -4959,11 +4970,14 @@ function renderCfNew() {
   // 처음 만든 카드는 가려진 데가 많아서 하나씩 누르면 손이 열 번 넘게 간다 —
   // 그럴 때 쓰는 손짓을 먼저 알려준다(2026-10-18 요청).
   const blanks = q.querySelectorAll('.cloze, .io-mask').length;
-  hint.textContent = blanks >= 4
-    ? `가려진 데 ${blanks}군데 — 빈칸에서 시작해 쓱 끌면 지나간 데가 다 열립니다.`
-    : q.querySelector('img')
-      ? '눌러서 가립니다 · 글자에서 쓱 끌면 여러 개를 한 번에 · 그림은 끌어서 네모로.'
-      : '눌러서 가립니다 — 쓱 끌면 지나간 낱말을 한 번에 가리고, 빈칸에서 시작하면 엽니다.';
+  hint.textContent = !blanks && q.querySelector('img')
+    // 그림만 고른 카드 — 아직 물어볼 게 없다. 뭘 해야 하는지부터 말해준다(2026-10-19)
+    ? '그림 위를 끌어 네모를 치면 그 자리가 문제가 됩니다.'
+    : blanks >= 4
+      ? `가려진 데 ${blanks}군데 — 빈칸에서 시작해 쓱 끌면 지나간 데가 다 열립니다.`
+      : q.querySelector('img')
+        ? '눌러서 가립니다 · 글자에서 쓱 끌면 여러 개를 한 번에 · 그림은 끌어서 네모로.'
+        : '눌러서 가립니다 — 쓱 끌면 지나간 낱말을 한 번에 가리고, 빈칸에서 시작하면 엽니다.';
   body.appendChild(hint);
   if (shown && (c.answers || []).length) {
     const a = document.createElement('div');
@@ -5128,6 +5142,14 @@ function initCardFloat() {
   document.getElementById('cfAdd').onclick = async () => {
     if (!cfDeck || !cfDeck.cards.length) return;
     const c = cfDeck.cards[cfDeck.idx];
+    // 빈칸도 네모도 없으면 물어볼 게 없는 카드다 — 넣어봐야 못 푼다.
+    // 그림만 골라 연 카드가 여기로 온다(2026-10-19). 막기만 하지 말고 할 일을 알려준다.
+    if (!(c.answers || []).length && !(c.masks || 0)) {
+      toast(document.querySelector('#cfBody .cf-q img')
+        ? '그림 위를 끌어 네모를 쳐 주세요 — 가릴 데가 있어야 문제가 됩니다.'
+        : '가릴 낱말을 눌러 주세요 — 빈칸이 있어야 카드가 됩니다.');
+      return;
+    }
     try {
       await saveCards([c]);
       backup.scheduleBackup();

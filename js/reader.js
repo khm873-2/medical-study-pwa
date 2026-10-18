@@ -733,19 +733,23 @@ export function cardsFromBox(root, box, meta = {}) {
   //    라벨("병태생리:"), 족보 정답, 케이스 별명, 번호 매김은 emphasisIn이 뜻을 갖고
   //    버린 것이다 — 그걸 못 봤다고 글에서 다시 주우면 버린 뜻이 사라진다.
   //    강조가 **아예 없던** 범위에서만 글에서 고른다.
+  // 그림만 골랐을 수도 있다 — 그러면 글에서 물어볼 말을 못 찾아도 빈손이 아니다.
+  // (여기서는 **있는지만** 본다. groups에 넣는 건 아래 — 먼저 넣으면 "글에서 고르기"
+  //  길로 아예 안 들어간다.)
+  const picBlocks = imageBlocksIn(root, box);
   if (!groups.size && !sawEmphasis(root, box)) {
     const blocks = blocksIn(root, box);
-    if (!blocks.length) return [];
-    plain = plainPicks(blocks);
-    if (!plain.length) return [];
-    for (const b of blocks) if (!groups.has(b)) groups.set(b, []);
+    if (!blocks.length && !picBlocks.length) return [];
+    plain = blocks.length ? plainPicks(blocks) : [];
+    if (!plain.length && !picBlocks.length) return [];
+    if (plain.length) for (const b of blocks) if (!groups.has(b)) groups.set(b, []);
   }
 
   // 그림은 **걸친 만큼** 따라온다(2026-10-16 요청: "10% 넘게 높이 들어가면 그 카드에
   // 포함하라고 했잖음"). 그림만 있는 문단은 글이 없어 위 모으기에서 빠지므로 여기서
   // 따로 넣는다. ⚠️ 물어볼 말을 고른 **뒤에** 넣어야 한다 — 먼저 넣으면 groups가
   // 비어 있지 않게 되어 "글에서 고르기" 길로 아예 안 들어간다.
-  for (const el of imageBlocksIn(root, box)) if (!groups.has(el)) groups.set(el, []);
+  for (const el of picBlocks) if (!groups.has(el)) groups.set(el, []);
 
   // ⚠️ **네모 친 범위는 통째로 한 장이다** (2026-10-15 요청:
   //    "적어도 내가 선택한 범위는 그냥 다 보여지는 상태에서 일단 된 다음에 거기서
@@ -796,18 +800,29 @@ export function cardsFromBox(root, box, meta = {}) {
       : cloneWithBlanks(host, els, answers, box, plain);
     if (html) parts.push(html);
   }
-  if (!answers.length || !parts.length) return [];
+  if (!parts.length) return [];
+  // **그림만 골라도 카드가 된다** (2026-10-19 요청: "하이라이트나 볼드 없으면 아예 오픈이
+  // 안되는데 사진만 선택되어도 카드 만들 수 있도록"). 물어볼 글이 없어도 그림에 네모를
+  // 치면 그게 곧 문제다 — 해부·영상은 원래 그 꼴이다. 글도 그림도 없을 때만 빈손이다.
+  const pics = picBlocks
+    .flatMap((b) => [...b.querySelectorAll('img')])
+    .map((im) => im.getAttribute('data-embed') || im.getAttribute('alt') || im.getAttribute('src') || '')
+    .filter(Boolean);
+  if (!answers.length && !pics.length) return [];
 
   const anchor = units[0];
   const trail = contextTrail(anchor, root);
   return [{
-    id: `${meta.notePath || ''}#${meta.heading || ''}#b0#${answers.join('|').slice(0, 40)}`,
+    // 글 답이 없으면 그림 이름으로 가른다 — 한 소제목 아래 그림이 둘이면 id가 겹친다
+    id: `${meta.notePath || ''}#${meta.heading || ''}#b0#`
+      + (answers.length ? answers.join('|').slice(0, 40) : `img:${pics.join('|').slice(0, 60)}`),
     notePath: meta.notePath || '', noteTitle: meta.noteTitle || '',
     heading: meta.heading || '',
     contextHtml: tidyCardHtml(parts.join('\n')),
     answers,
     starred: [...groups.values()].flat().some((e) => e.tagName === 'MARK'),
-    kind: units.length === 1 && units[0].tagName === 'TABLE' ? 'table' : 'block',
+    kind: units.length === 1 && units[0].tagName === 'TABLE' ? 'table'
+      : (!answers.length && pics.length) ? 'image' : 'block',
     trail,
     topic: [meta.heading, ...trail].filter(Boolean).join('  ›  '),
   }];
