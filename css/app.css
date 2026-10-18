@@ -2928,7 +2928,7 @@ li.task.done .task-box { color: var(--accent); }
 
 /* 카드 본문에서 낱말을 눌러 빈칸을 고친다(2026-10-14).
    추천은 그대로 두고 **고칠 길만** 연다 — 오래 외울 카드는 직접 고르는 게 맞다. */
-.cf-pick { line-height: 2.1; }
+.cf-pick { line-height: 2.1; touch-action: pan-y pinch-zoom; }
 .cf-w { border-radius: 5px; padding: 1px 2px; cursor: pointer; }
 .cf-w:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .cloze.pickable { cursor: pointer; }
@@ -2962,6 +2962,17 @@ li.task.done .task-box { color: var(--accent); }
   min-width: 0; padding: 1px 2px; border-radius: 5px;
   font-weight: inherit; vertical-align: baseline;
 }
+/* ── 쓱 끌어서 여럿을 한 번에 (2026-10-18 요청) ──
+   처음 만든 카드는 가려진 데가 너무 많아서 하나씩 누르면 손이 열 번 넘게 간다.
+   끌면 지나간 데가 다 바뀐다. 어느 쪽으로 갈지는 **처음 짚은 것**이 정한다 —
+   글자에서 시작하면 가리고, 빈칸에서 시작하면 연다(모드를 고르게 하지 않는다).
+
+   `touch-action: manipulation`이면 아이패드에서 세로로 끌 때 화면이 먼저 밀려서
+   손짓을 가로챈다. 글 위에서만 끊어둔다 — 패널은 여백·머리로 여전히 끌어 넘긴다. */
+.cf-pick.cf-brushing { touch-action: none; cursor: crosshair; }
+/* 끌는 중에는 지나간 자리가 바로 보여야 한다 — 어디까지 긁었는지 모르면 다시 긁는다 */
+.cf-brushing .cf-w, .cf-brushing .cloze { transition: background .08s linear; }
+.cf-brushing .cf-w:hover { background: color-mix(in srgb, var(--accent) 26%, transparent); }
 .cf-hint { margin-top: 10px; font-size: 11.5px; }
 
 /* ── AI 질문 (2026-10-14) ──

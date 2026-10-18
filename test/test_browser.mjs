@@ -7219,6 +7219,50 @@ await run('손으로 빈칸 만들기', async () => {
   return out;
 });
 
+// ── 카드 편집: 진짜 손가락처럼 눌렀다 뗀다 ──
+// `.click()`은 pointerdown/up을 내지 않는다. 카드 편집은 누르기와 **끌기**를 한 손짓으로
+// 가르느라 pointer 이벤트로 받으므로, 검사도 실제로 일어나는 일을 그대로 흉내 내야 한다.
+const TAP_HELPERS = `
+  window.__tap = (el) => {
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    const ev = (t, o) => el.dispatchEvent(new PointerEvent(t, Object.assign(
+      { pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: x, clientY: y,
+        bubbles: true, cancelable: true }, o || {})));
+    ev('pointerdown', { buttons: 1 }); ev('pointerup', { buttons: 0 });
+  };
+  // a에서 b까지 쓱 끈다 — 지나가는 것을 한 손짓에 바꾼다
+  // 가만히 눌러 머문 뒤 끈다 — 손가락을 거의 안 움직이고 시작하는 길(오래 누르기)
+  window.__hold = async (el, to) => {
+    const ra = el.getBoundingClientRect(), rb = to.getBoundingClientRect();
+    const x1 = ra.left + ra.width / 2, y1 = ra.top + ra.height / 2;
+    const x2 = rb.left + rb.width / 2, y2 = rb.top + rb.height / 2;
+    const root = el.closest('.cf-q');
+    const ev = (t, n, x, y, b) => n.dispatchEvent(new PointerEvent(t, {
+      pointerType: 'touch', pointerId: 9, isPrimary: true, buttons: b,
+      clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    ev('pointerdown', el, x1, y1, 1);
+    await new Promise((r) => setTimeout(r, 500));        // 머문다
+    for (let i = 1; i <= 10; i++) ev('pointermove', root, x1 + (x2 - x1) * i / 10, y1 + (y2 - y1) * i / 10, 1);
+    ev('pointerup', root, x2, y2, 0);
+  };
+  window.__brush = (from, to, steps) => {
+    const ra = from.getBoundingClientRect(), rb = to.getBoundingClientRect();
+    const x1 = ra.left + ra.width / 2, y1 = ra.top + ra.height / 2;
+    const x2 = rb.left + rb.width / 2, y2 = rb.top + rb.height / 2;
+    const root = from.closest('.cf-q');
+    const ev = (t, x, y, b) => root.dispatchEvent(new PointerEvent(t, {
+      pointerType: 'touch', pointerId: 7, isPrimary: true, buttons: b,
+      clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    from.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', pointerId: 7,
+      isPrimary: true, buttons: 1, clientX: x1, clientY: y1, bubbles: true, cancelable: true }));
+    const n = steps || 12;
+    for (let i = 1; i <= n; i++) ev('pointermove', x1 + (x2 - x1) * i / n, y1 + (y2 - y1) * i / n, 1);
+    ev('pointerup', x2, y2, 0);
+  };
+`;
+await page.evaluate(TAP_HELPERS);
+
 // ══════════ 추천 카드에서 빈칸을 직접 고친다 (2026-10-14 요청) ══════════
 // "추천 카드 기능도 좋음... 근데 오래 암기할 때는 내가 원하는 걸 외워야 할 것 같음"
 await run('카드 빈칸 직접 고치기', async () => {
@@ -7258,13 +7302,13 @@ await run('카드 빈칸 직접 고치기', async () => {
   out.push({ name: '**낱말마다 누를 수 있다**', ok: words.length >= 2,
     detail: `${words.length}개: ${words.slice(0, 3).map((w) => w.textContent).join(' ')}` });
   out.push({ name: '뭘 하면 되는지 적혀 있다',
-    ok: /낱말을 눌러/.test((document.querySelector('#cfBody .cf-hint') || {}).textContent || '') });
+    ok: /눌러서 가립니다|쓱 끌면/.test((document.querySelector('#cfBody .cf-hint') || {}).textContent || '') });
 
   const before = (document.querySelectorAll('#cfBody .cloze') || []).length;
   if (!words.length) { document.getElementById('cfClose').click(); body.innerHTML = ''; return out; }
   const pick = words.find((w) => /2도|표재|깊이/.test(w.textContent)) || words[0];
   const picked = pick.textContent;
-  pick.click();
+  window.__tap(pick);
   await new Promise((r) => setTimeout(r, 200));
   const after = document.querySelectorAll('#cfBody .cloze').length;
   out.push({ name: '**누르면 빈칸이 하나 늘어난다**', ok: after === before + 1,
@@ -7277,7 +7321,7 @@ await run('카드 빈칸 직접 고치기', async () => {
   out.push({ name: '빈칸도 누를 수 있다', ok: !!blank });
   if (blank) {
     const n0 = document.querySelectorAll('#cfBody .cloze').length;
-    blank.click();
+    window.__tap(blank);
     await new Promise((r) => setTimeout(r, 200));
     out.push({ name: '**빈칸을 누르면 다시 보인다**',
       ok: document.querySelectorAll('#cfBody .cloze').length === n0 - 1,
@@ -7287,6 +7331,97 @@ await run('카드 빈칸 직접 고치기', async () => {
   // 추천은 그대로 남아 있다
   out.push({ name: '추천 빈칸도 그대로 있다(추천 기능은 유지)',
     ok: document.querySelectorAll('#cfBody .cloze').length > 0 });
+
+  // ── 쓱 끌어서 여럿을 한 번에 (2026-10-18 요청) ──
+  // "카드 처음 만들 때 가려져 있는 부분이 보통 너무 많아서 문제거든? 한번에 드래그하면서
+  //  여기저기 열어버리는 방법?" — 하나씩 누르면 손이 열 번 넘게 간다.
+  {
+    body.innerHTML = renderMarkdown(
+      '**아트로핀**은 **서맥**에 쓰고 **에피네프린**은 **무맥성**에 쓰며 **아미오다론**은 **세동**에 쓴다.');
+    await new Promise((r) => setTimeout(r, 140));
+    const rb = body.getBoundingClientRect();
+    const made = R.cardsFromBox(body, { l: rb.left, t: rb.top, r: rb.right, b: rb.bottom },
+      { notePath: 'x.md', noteTitle: '노트', heading: '약' });
+    if (made.length) {
+      window.__openCardFloat(made);
+      await new Promise((r) => setTimeout(r, 320));
+      const qq = () => document.querySelector('#cfBody .cf-q');
+      const nBlank = () => document.querySelectorAll('#cfBody .cloze').length;
+
+      // ① 빈칸에서 시작해 끌면 지나간 빈칸이 **다 열린다**
+      const b0 = nBlank();
+      out.push({ name: '처음 만든 카드에 빈칸이 여럿이다', ok: b0 >= 3, detail: `${b0}개` });
+      const bl = [...qq().querySelectorAll('.cloze')];
+      if (b0 >= 3) {
+        window.__brush(bl[0], bl[bl.length - 1]);
+        await new Promise((r) => setTimeout(r, 250));
+        out.push({ name: '**빈칸에서 쓱 끌면 지나간 데가 다 열린다**',
+          ok: nBlank() === 0, detail: `${b0} → ${nBlank()}` });
+        out.push({ name: '답 목록도 같이 비워진다',
+          ok: (made[0].answers || []).length === 0, detail: (made[0].answers || []).join(',') });
+      }
+
+      // ② 반대로 글자에서 시작해 끌면 지나간 낱말이 **다 가려진다**
+      const ws = [...qq().querySelectorAll('.cf-w')];
+      out.push({ name: '푼 자리도 다시 누를 수 있는 낱말로 남는다', ok: ws.length >= 4,
+        detail: `${ws.length}개` });
+      if (ws.length >= 4) {
+        const n0 = nBlank();
+        window.__brush(ws[0], ws[3]);
+        await new Promise((r) => setTimeout(r, 250));
+        out.push({ name: '**글자에서 쓱 끌면 지나간 낱말이 다 가려진다**',
+          ok: nBlank() >= n0 + 3, detail: `${n0} → ${nBlank()}` });
+      }
+
+      // ③ 끌기 중에는 한쪽으로만 간다 — 지나간 빈칸을 도로 가려버리면 왔다 갔다 한다
+      const mix = [...qq().querySelectorAll('.cf-w, .cloze')];
+      if (mix.length >= 4) {
+        const n1 = nBlank();
+        const firstBlank = mix.find((x) => x.classList.contains('cloze'));
+        const lastAny = mix[mix.length - 1];
+        if (firstBlank) {
+          window.__brush(firstBlank, lastAny);
+          await new Promise((r) => setTimeout(r, 250));
+          out.push({ name: '빈칸에서 시작했으면 가리지는 않는다(한쪽으로만)',
+            ok: nBlank() <= n1, detail: `${n1} → ${nBlank()}` });
+        }
+      }
+
+      // ④ 그냥 한 번 누르는 건 여전히 하나만 — 끌기를 넣느라 누르기가 망가지면 안 된다
+      const w1 = qq().querySelector('.cf-w');
+      if (w1) {
+        const n2 = nBlank();
+        window.__tap(w1);
+        await new Promise((r) => setTimeout(r, 200));
+        out.push({ name: '한 번 누르면 하나만 바뀐다(끌기를 넣어도)',
+          ok: nBlank() === n2 + 1, detail: `${n2} → ${nBlank()}` });
+      }
+
+      // ⑤ 오래 눌러도 끌기로 넘어간다 — "오래누르면 아예 가려진부분을 여는 모드로"
+      {
+        const bl2 = [...qq().querySelectorAll('.cloze')];
+        if (bl2.length >= 3) {
+          const n3 = nBlank();
+          await window.__hold(bl2[0], bl2[bl2.length - 1]);
+          await new Promise((r) => setTimeout(r, 250));
+          out.push({ name: '**가만히 눌러 머물다 끌어도 열린다**(손가락을 안 움직이고 시작)',
+            ok: nBlank() <= n3 - 2, detail: `${n3} → ${nBlank()}` });
+        }
+      }
+
+      // ⑥ 가려진 데가 많으면 끄는 법을 먼저 알려준다
+      const hint = (document.querySelector('#cfBody .cf-hint') || {}).textContent || '';
+      out.push({ name: '뭘 하면 되는지 적혀 있다(끌기까지)', ok: /쓱 끌/.test(hint), detail: hint });
+
+      // ⑦ 끌기가 끝나면 화면 밀림 막이가 풀려야 한다 — 안 풀면 패널을 못 넘긴다
+      out.push({ name: '끌기가 끝나면 원래대로 돌아온다',
+        ok: !qq().classList.contains('cf-brushing') });
+      out.push({ name: '평소엔 세로로 넘길 수 있다',
+        ok: /pan-y/.test(getComputedStyle(qq()).touchAction), detail: getComputedStyle(qq()).touchAction });
+      document.getElementById('cfClose').click();
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
 
   // ── 같은 낱말을 몇 번을 눌러도 글이 안 움직인다 (2026-10-16 지적) ──
   // "같은 단어를 계속 누르면 점점 글자 간격이 벌어지는데? 이런일이 있어서는 안되지."
@@ -7369,7 +7504,7 @@ await run('카드 빈칸 직접 고치기', async () => {
       await new Promise((r) => setTimeout(r, 320));
       const n0 = document.querySelectorAll('#cfBody .cloze').length;
       const one = document.querySelector('#cfBody .cloze.pickable');
-      if (one) { one.click(); await new Promise((r) => setTimeout(r, 180)); }
+      if (one) { window.__tap(one); await new Promise((r) => setTimeout(r, 180)); }
       const n1 = document.querySelectorAll('#cfBody .cloze').length;
       out.push({ name: '하나를 풀면 빈칸이 하나만 준다', ok: n0 === 2 && n1 === 1, detail: `${n0} → ${n1}` });
       out.push({ name: '**답 목록도 하나만 준다**', ok: (dup[0].answers || []).length === 1,

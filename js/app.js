@@ -4669,17 +4669,9 @@ async function addOcrWords(wrap, im, root, card) {
     w.style.width = `${(l.w * 100).toFixed(2)}%`;
     w.style.height = `${(l.h * 100).toFixed(2)}%`;
     w.title = l.t;
-    w.onclick = (e) => {
-      e.stopPropagation();
-      const m = document.createElement('span');
-      m.className = 'io-mask';
-      m.dataset.answer = l.t;          // 읽어낸 글이 곧 답이다
-      for (const k of ['left', 'top', 'width', 'height']) m.style[k] = w.style[k];
-      w.replaceWith(m);
-      bindMask(m, wrap, card);
-      syncCardFromDom(root, card);
-      renderCfNew();
-    };
+    w.dataset.answer = l.t;            // 읽어낸 글이 곧 답이다
+    // 가리는 손짓은 뿌리의 쓱 handler가 받는다 — 글 낱말과 **같은 길**로 돌아야
+    // 그림과 글을 한 손짓에 걸쳐 끌 수 있다(여기에 onclick을 달면 두 번 처리된다).
     wrap.appendChild(w);
   }
 }
@@ -4692,7 +4684,7 @@ function makeImagesOccludable(root, card) {
     ioBound.add(wrap);
 
     // 이미 쳐둔 네모 — 누르면 지운다
-    wrap.querySelectorAll('.io-mask').forEach((m) => bindMask(m, wrap, card));
+    wrap.querySelectorAll('.io-mask').forEach((m) => bindMask(m));
     // 맥에서 읽어둔 글자가 있으면 **눌러서 가릴 수 있게** 얹는다(없으면 조용히 넘어간다)
     addOcrWords(wrap, im, root, card).catch(() => {});
 
@@ -4730,7 +4722,7 @@ function makeImagesOccludable(root, card) {
       box.classList.remove('drawing');
       // 손가락이 미끄러진 정도는 네모가 아니다
       if (w < 2 || h < 2) box.remove();
-      else { bindMask(box, wrap, card); syncCardFromDom(root, card); renderCfNew(); }
+      else { bindMask(box); syncCardFromDom(root, card); renderCfNew(); }
       box = null;
       from = null;
     };
@@ -4750,32 +4742,35 @@ function ensureOcclusionWrap(im) {
   return wrap;
 }
 
-/** 네모 하나 — 누르면 지운다. */
-function bindMask(m, wrap, card) {
+/**
+ * 네모 하나 — 누르면 지운다.
+ *
+ * 지우는 손짓은 **뿌리의 쓱 handler**(bindCardBrush)가 받는다. 여기서 따로 onclick을
+ * 달면 한 번 누른 게 두 번 처리된다 — 네모를 지우고 그 자리의 낱말까지 가려졌다.
+ * 여기선 "누를 수 있다"는 표시만 해둔다.
+ */
+function bindMask(m) {
   m.classList.add('pickable');
-  m.onclick = (e) => {
-    e.stopPropagation();
-    const root = wrap.closest('.cf-q') || wrap.parentElement;
-    m.remove();
-    syncCardFromDom(root, card);
-    renderCfNew();
-  };
 }
 
+/**
+ * 카드 본문의 낱말·빈칸을 손으로 고칠 수 있게 한다 — 누르거나 **쓱 끌어서**.
+ *
+ * 왜 끌기가 필요한가: 처음 만든 카드는 가려진 데가 너무 많아서 하나씩 누르면 손이
+ * 열 번 넘게 간다("카드 처음 만들 때 가려져 있는 부분이 보통 너무 많아서 문제거든?"
+ * — 2026-10-18 요청). 끌면 지나간 것이 한 손짓에 다 열린다.
+ *
+ * **어느 쪽으로 갈지는 처음 짚은 것이 정한다.** 글자에서 시작하면 지나가는 것을 가리고,
+ * 빈칸에서 시작하면 지나가는 것을 연다 — 모드를 둘로 나눠 고르게 하지 않는다.
+ */
 function makeWordsTappable(root, card) {
   makeImagesOccludable(root, card);
-  // ① 이미 빈칸인 것 — 누르면 되돌린다
-  root.querySelectorAll('.cloze').forEach((el) => {
-    el.classList.add('pickable');
-    el.onclick = (e) => {
-      e.stopPropagation();
-      el.replaceWith(document.createTextNode(el.dataset.answer || ''));
-      syncCardFromDom(root, card);
-      renderCfNew();
-    };
-  });
+  wrapCardWords(root);
+  bindCardBrush(root, card);
+}
 
-  // ② 아직 글자인 것 — 낱말마다 눌릴 수 있게 감싼다
+/** 아직 글자인 데를 낱말마다 `<span class="cf-w">`로 감싼다(빈칸 속은 건드리지 않는다). */
+function wrapCardWords(root) {
   const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(n) {
       if (!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
@@ -4792,19 +4787,117 @@ function makeWordsTappable(root, card) {
       if (!piece) continue;
       if (/^\s+$/.test(piece)) { frag.appendChild(document.createTextNode(piece)); continue; }
       const w = document.createElement('span');
-      w.className = 'cf-w';
+      w.className = 'cf-w pickable';
       w.textContent = piece;
-      w.onclick = (e) => {
-        e.stopPropagation();
-        w.replaceWith(blankSpan(piece));
-        syncCardFromDom(root, card);
-        renderCfNew();
-      };
       frag.appendChild(w);
     }
     node.replaceWith(frag);
   }
+  root.querySelectorAll('.cloze, .io-mask, .io-word').forEach((el) => el.classList.add('pickable'));
 }
+
+const BRUSH_MOVE = 10;        // 이만큼 움직이면 "끌기"로 본다(손떨림은 누르기로 남게)
+const BRUSH_HOLD = 350;       // 가만히 이만큼 누르고 있으면 끌기로 넘어간다
+
+/** 낱말 하나를 가린다. 그림 속 글자(.io-word)는 네모로 바뀐다. */
+function coverWord(el) {
+  if (!el) return false;
+  if (el.classList.contains('io-word')) {
+    const m = document.createElement('span');
+    m.className = 'io-mask pickable';
+    m.dataset.answer = el.dataset.answer || '';
+    for (const k of ['left', 'top', 'width', 'height']) m.style[k] = el.style[k];
+    if (cfDeck && cfDeck.shown) m.classList.add('filled');
+    el.replaceWith(m);
+    return true;
+  }
+  if (!el.classList.contains('cf-w')) return false;
+  const b = blankSpan(el.textContent);
+  b.classList.add('pickable');
+  // 지금 답을 펴놓고 보는 중이면 새 빈칸도 펴진 채로 — 한 카드에서 모양이 갈리지 않게
+  if (cfDeck && cfDeck.shown) b.classList.add('filled');
+  el.replaceWith(b);
+  return true;
+}
+
+/** 빈칸·네모 하나를 연다. 글 빈칸은 다시 누를 수 있는 낱말로 되돌린다. */
+function openBlank(el) {
+  if (!el) return false;
+  if (el.classList.contains('io-mask')) { el.remove(); return true; }
+  if (!el.classList.contains('cloze')) return false;
+  const w = document.createElement('span');
+  w.className = 'cf-w pickable';            // 되돌린 자리도 바로 다시 가릴 수 있게
+  w.textContent = el.dataset.answer || el.textContent || '';
+  el.replaceWith(w);
+  return true;
+}
+
+/**
+ * 누르기·끌기를 **한 군데서** 받는다.
+ *
+ * 전에는 낱말마다 onclick을 달았다. 그러면 끌기를 알 수가 없고(각자 자기 click만 안다),
+ * 낱말이 수백 개인 카드에서 닫힘(closure)도 수백 개 생겼다. 여기선 뿌리에 하나만 단다.
+ */
+function bindCardBrush(root, card) {
+  let st = null;
+  let hold = 0;
+  // 가리는 쪽: 글 낱말과 그림 속 글자 / 여는 쪽: 글 빈칸과 그림 네모
+  const kindOf = (el) => (!el ? null
+    : el.classList.contains('cf-w') || el.classList.contains('io-word') ? 'cover' : 'open');
+  const SEL = '.cf-w, .io-word, .cloze, .io-mask';
+  const apply = (el) => {
+    if (!el || st.done.has(el)) return;
+    st.done.add(el);
+    if (st.kind === 'cover' ? coverWord(el) : openBlank(el)) st.n++;
+  };
+  const startBrush = () => {
+    if (st.brush) return;
+    st.brush = true;
+    clearTimeout(hold);
+    root.classList.add('cf-brushing');
+    apply(st.first);
+  };
+  const at = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    if (!el || !root.contains(el)) return null;
+    const hit = el.closest(SEL);
+    return hit && kindOf(hit) === st.kind ? hit : null;
+  };
+
+  root.addEventListener('pointerdown', (e) => {
+    if (e.button) return;
+    const first = e.target.closest && e.target.closest(SEL);
+    if (!first || !root.contains(first)) return;        // 그림에 네모 치는 손짓은 그림이 받는다
+    st = { kind: kindOf(first), first, x: e.clientX, y: e.clientY, brush: false, n: 0, done: new Set() };
+    // 가만히 눌러 머물면 끌기로 넘어간다 — 그 뒤로는 손가락이 지나가는 데가 다 열린다
+    hold = setTimeout(startBrush, BRUSH_HOLD);
+    try { root.setPointerCapture(e.pointerId); } catch {}
+  });
+
+  root.addEventListener('pointermove', (e) => {
+    if (!st) return;
+    if (!st.brush && Math.hypot(e.clientX - st.x, e.clientY - st.y) < BRUSH_MOVE) return;
+    startBrush();
+    e.preventDefault();                                 // 끌기 중에는 화면이 안 밀리게
+    apply(at(e.clientX, e.clientY));
+  }, { passive: false });
+
+  const end = () => {
+    if (!st) return;
+    clearTimeout(hold);
+    if (!st.brush) apply(st.first);                     // 그냥 누른 것 — 하나만
+    root.classList.remove('cf-brushing');
+    const n = st.n;
+    st = null;
+    // 그리기는 **손을 뗀 뒤 한 번만** — 끌는 중에 다시 그리면 손짓이 끊긴다
+    if (n) { syncCardFromDom(root, card); renderCfNew(); }
+  };
+  root.addEventListener('pointerup', end);
+  root.addEventListener('pointercancel', end);
+  // 누른 채 바깥으로 나가도 끝내준다(아이패드에서 손가락이 패널을 벗어나는 일이 흔하다)
+  root.addEventListener('lostpointercapture', end);
+}
+
 
 /**
  * 빈칸을 가리거나 드러낸다.
@@ -4863,9 +4956,14 @@ function renderCfNew() {
   body.appendChild(q);
   const hint = document.createElement('div');
   hint.className = 'cf-hint muted';
-  hint.textContent = q.querySelector('img')
-    ? '낱말을 눌러 가립니다 · 그림은 끌어서 네모로 가립니다 — 누르면 다시 보입니다.'
-    : '낱말을 눌러 직접 가릴 수 있습니다 — 빈칸을 누르면 다시 보입니다.';
+  // 처음 만든 카드는 가려진 데가 많아서 하나씩 누르면 손이 열 번 넘게 간다 —
+  // 그럴 때 쓰는 손짓을 먼저 알려준다(2026-10-18 요청).
+  const blanks = q.querySelectorAll('.cloze, .io-mask').length;
+  hint.textContent = blanks >= 4
+    ? `가려진 데 ${blanks}군데 — 빈칸에서 시작해 쓱 끌면 지나간 데가 다 열립니다.`
+    : q.querySelector('img')
+      ? '눌러서 가립니다 · 글자에서 쓱 끌면 여러 개를 한 번에 · 그림은 끌어서 네모로.'
+      : '눌러서 가립니다 — 쓱 끌면 지나간 낱말을 한 번에 가리고, 빈칸에서 시작하면 엽니다.';
   body.appendChild(hint);
   if (shown && (c.answers || []).length) {
     const a = document.createElement('div');
