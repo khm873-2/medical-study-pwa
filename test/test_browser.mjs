@@ -4171,6 +4171,80 @@ await run('노트 서랍', async () => {
   return out;
 });
 
+// ══════════ 짝은 파일이름으로 짓는다 — h1이 달라도 (2026-10-18) ══════════
+// 실제 신고: "암기법 노트 열면 매칭되게 하라고 하지 않았나. 그 노트에 맞는 걸로."
+// h1은 사람이 읽는 제목이라 교수 이름과 조사가 붙는다 —
+//   파일 `응급중환자_Shock진단과치료` / h1 "응급중환자_Shock의 진단과 치료 — 정창환 교수"
+// 짝을 h1로 지었더니 이 셋(Shock·중환자실구조와운영·중환자실통증진정섬망관리)이 안 걸렸다.
+await run('짝 찾기 — 이름이 달라도', async () => {
+  const out = [];
+  const d = await import('/js/db.js');
+  const a = await import('/js/auth.js');
+  await a.setToken('fake'); await a.setRepo('me/v');
+  const realFetch = window.fetch;
+  // vault에 실제로 들어 있는 모양 그대로: h1에 교수 이름과 조사가 붙고, 암기법에는 source_note가 있다
+  const H1 = {
+    '응급중환자_Shock진단과치료': '응급중환자_Shock의 진단과 치료 — 정창환 교수',
+    '응급중환자_Shock진단과치료_암기법': '응급중환자_Shock진단과치료 — 암기법 후보',
+    '응급중환자_중환자실통증진정섬망관리': '응급중환자_중환자실 환자의 통증·진정 및 섬망 관리 — 홍관영 교수',
+  };
+  const SRC = { '응급중환자_Shock진단과치료_암기법': '응급중환자_Shock진단과치료' };
+  window.fetch = async (url, init) => {
+    const u = String(url);
+    if (!u.includes('api.github.com')) return realFetch(url, init);
+    const name = decodeURIComponent(u.split('/contents/')[1] || '').split('/').pop().replace('.md', '');
+    const fm = SRC[name] ? `---\nsource_note: "${SRC[name]}"\n---\n\n` : '';
+    return { ok: true, status: 200, json: async () => ({}),
+      text: async () => `${fm}# ${H1[name] || name}\n\n## 한 토막\n내용\n` };
+  };
+  await d.kvSet('note_index_v2', [
+    { root: '02_Wiki', subject: '응급_중환자', notes: [
+      { name: '응급중환자_Shock진단과치료', path: '02_Wiki/응급_중환자/응급중환자_Shock진단과치료.md' },
+      { name: '응급중환자_중환자실통증진정섬망관리', path: '02_Wiki/응급_중환자/응급중환자_중환자실통증진정섬망관리.md' },
+      { name: '응급중환자_환경의학', path: '02_Wiki/응급_중환자/응급중환자_환경의학.md' }] },
+    { root: '02_Wiki', subject: '응급_중환자 · 암기법', notes: [
+      { name: '응급중환자_Shock진단과치료_암기법', path: '02_Wiki/응급_중환자/암기법/응급중환자_Shock진단과치료_암기법.md' },
+      { name: '응급중환자_중환자실통증진정섬망관리_암기법', path: '02_Wiki/응급_중환자/암기법/응급중환자_중환자실통증진정섬망관리_암기법.md' },
+      { name: '응급중환자_환경의학_암기법', path: '02_Wiki/응급_중환자/암기법/응급중환자_환경의학_암기법.md' }] },
+    { root: '02_Wiki', subject: '응급_중환자 · QA', notes: [
+      { name: '응급중환자_Shock진단과치료_QA', path: '02_Wiki/응급_중환자/QA/응급중환자_Shock진단과치료_QA.md' }] },
+  ]);
+  await d.kvSet('note_index_at', Date.now());     // 방금 받은 목록이라 치고 그대로 쓰게
+  // 어떤 노트를 열어두고 서랍을 열면 짝이 뭐라고 나오는가
+  const pairsAfterOpening = async (path) => {
+    await window.__openNote(path);
+    await new Promise((r) => setTimeout(r, 400));
+    document.getElementById('readDocs').click();
+    await new Promise((r) => setTimeout(r, 500));
+    const names = [...document.querySelectorAll('#docList .dd-item.pair .dd-name')].map((x) => x.textContent);
+    document.getElementById('docClose').click();
+    await new Promise((r) => setTimeout(r, 120));
+    return names;
+  };
+
+  const p1 = await pairsAfterOpening('02_Wiki/응급_중환자/응급중환자_Shock진단과치료.md');
+  out.push({ name: '**h1에 교수 이름이 붙어도 그 강의 암기법을 찾는다**',
+    ok: p1.includes('응급중환자_Shock진단과치료_암기법'), detail: p1.join(' / ') || '(짝 없음)' });
+  out.push({ name: '맨 위가 암기법이다', ok: /_암기법$/.test(p1[0] || ''), detail: p1[0] });
+  out.push({ name: 'Q&A도 같이 걸린다', ok: p1.includes('응급중환자_Shock진단과치료_QA') });
+  out.push({ name: '남의 강의는 안 끌어온다',
+    ok: !p1.some((n) => /환경의학|통증진정/.test(n)), detail: p1.join(' / ') });
+
+  const p2 = await pairsAfterOpening('02_Wiki/응급_중환자/응급중환자_중환자실통증진정섬망관리.md');
+  out.push({ name: 'h1에 가운뎃점·조사가 끼어도 찾는다',
+    ok: p2.includes('응급중환자_중환자실통증진정섬망관리_암기법'), detail: p2.join(' / ') || '(짝 없음)' });
+
+  // 반대 방향 — 암기법을 열면 본문이 짝으로 나와야 한다
+  const p3 = await pairsAfterOpening('02_Wiki/응급_중환자/암기법/응급중환자_Shock진단과치료_암기법.md');
+  out.push({ name: '암기법에서 본문으로도 간다',
+    ok: p3.includes('응급중환자_Shock진단과치료'), detail: p3.join(' / ') || '(짝 없음)' });
+
+  window.fetch = realFetch;
+  await d.kvSet('note_index_v2', null);
+  await d.kvSet('note_index_at', 0);
+  return out;
+});
+
 // ══════════ 노트 서랍 — 새로 만든 노트가 저절로 뜨는가 (2026-10-18) ══════════
 // 실제 신고: 맥에서 암기법 3개를 만들었는데 아이패드에서 "노트 열기"에 13개만 떴다.
 // 목록이 두 겹으로 굳어 있었다 — IndexedDB의 note_index_v2(force 없이는 영영 안 읽음)와

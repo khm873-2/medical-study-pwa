@@ -10,7 +10,7 @@
 const VERSION = 'v100';
 // 배포 시각 — 앱 화면에 "언제 것인지"를 보여주는 데 쓴다(2026-10-14).
 // deploy.sh가 VERSION과 함께 갈아 끼운다.
-const BUILT = '2026-10-18 09:40';
+const BUILT = '2026-10-18 10:20';
 const SHELL = `shell-${VERSION}`;
 
 const SHELL_FILES = [

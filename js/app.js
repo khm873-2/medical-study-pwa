@@ -2925,6 +2925,7 @@ async function loadNotesTab(force) {
   }
 }
 
+window.__openNote = (p) => openNote(p);     // 검사가 경로로 바로 열 때 쓴다
 async function openNote(path) {
   const body = document.getElementById('notesBody');
   const prev = body.innerHTML;
@@ -3116,20 +3117,36 @@ function pairedNotes(groups) {
   const doc = currentDoc();
   if (!doc) return [];
   const mine = doc.path || '';
-  const key = lectureKey(doc.title || mine.split('/').pop().replace(/\.md$/, ''));
-  if (key.length < 6) return [];
+  const file = mine.split('/').pop().replace(/\.md$/, '');
+  // **짝은 파일이름으로 짓는다.** 전에는 h1(doc.title)만 봤는데, h1은 사람이 읽는 제목이라
+  // 교수 이름과 조사가 붙는다 — "Shock의 진단과 치료 — 정창환 교수" ↔ 파일 `응급중환자_Shock진단과치료`.
+  // 그래서 본문을 열면 그 강의 암기법이 안 떴다(2026-10-18 신고). 파일이름만 규칙을 지킨다.
+  // source_note(암기법·QA frontmatter에 적힌 원본 노트)가 있으면 그게 가장 확실한 끈이다.
+  const keys = [lectureKey(file), lectureKey(sourceNoteOf(doc)), lectureKey(doc.title || '')]
+    .filter((k, i, a) => k.length >= 6 && a.indexOf(k) === i);
+  if (!keys.length) return [];
+  const base = keys[0];
   const out = [];
   for (const g of groups || []) {
     for (const n of g.notes || []) {
       if (n.path === mine) continue;
       const k = lectureKey(n.name);
       // 똑같거나, 한쪽이 다른 쪽을 품으면 짝으로 본다(예습노트는 제목이 짧게 줄기도 한다)
-      const hit = k === key || (k.length >= 8 && key.includes(k)) || (key.length >= 8 && k.includes(key));
-      if (hit) out.push({ ...n, ...noteKind(n.path, n.name), exact: k === key });
+      const hit = keys.some((key) =>
+        k === key || (k.length >= 8 && key.includes(k)) || (key.length >= 8 && k.includes(key)));
+      if (hit) out.push({ ...n, ...noteKind(n.path, n.name), exact: k === base });
     }
   }
   const rank = { 암기법: 0, 'Q&A': 1, 위키: 2, 국시: 3, 예습: 4 };
   return out.sort((a, b) => (b.exact - a.exact) || (rank[a.t] - rank[b.t])).slice(0, 8);
+}
+/** 암기법·QA frontmatter의 `source_note:` — 원본 노트를 대놓고 가리킨다. 없으면 ''. */
+function sourceNoteOf(doc) {
+  const raw = (reader && reader.note && reader.note.path === (doc && doc.path) && reader.note.raw) || '';
+  const fm = String(raw).match(/^---\n([\s\S]*?)\n---/);
+  if (!fm) return '';
+  const m = fm[1].match(/^source_note:\s*["']?(.+?)["']?\s*$/m);
+  return m ? m[1].trim() : '';
 }
 
 function renderDocList(groups, q) {
