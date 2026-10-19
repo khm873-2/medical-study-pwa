@@ -5887,6 +5887,107 @@ await run('퀴즈 도구막대', async () => {
     }
   }
 
+  // ── 노트 아래 노트 — 본문과 암기법을 같이 (2026-10-19 요청) ──
+  // "노트를 오른쪽에 띄운 상태에서 해당 창을 2분할 해서 위에는 노트를, 아래는 암기법을"
+  {
+    const Rr = await import('/js/reader.js');
+    const real = window.fetch;
+    let which = '본문';
+    window.fetch = async (u, i) => {
+      const t = String(u);
+      if (!t.includes('api.github.com')) return real(u, i);
+      return { ok: true, status: 200, json: async () => ({}),
+        text: async () => `# ${which}\n\n## 한 토막\n${which} 내용이다.\n\n## 두 토막\n또 있다.\n` };
+    };
+    try {
+      which = '본문';
+      await window.__openWikiNote(await Rr.loadNote('02_Wiki/과목/본문.md'));
+      await new Promise((r) => setTimeout(r, 250));
+      which = '암기법';
+      await window.__openWikiNote2(await Rr.loadNote('02_Wiki/과목/암기법.md'));
+      await new Promise((r) => setTimeout(r, 350));
+
+      const p1 = document.getElementById('wikiPanel');
+      const p2 = document.getElementById('wikiPanel2');
+      const r1 = p1.getBoundingClientRect(), r2 = p2.getBoundingClientRect();
+      out.push({ name: '**아래 칸이 생긴다**', ok: !p2.classList.contains('hidden') });
+      out.push({ name: '둘 다 눈에 보인다',
+        ok: r1.width > 60 && r1.height > 40 && r2.width > 60 && r2.height > 40,
+        detail: `위 ${Math.round(r1.width)}×${Math.round(r1.height)} · 아래 ${Math.round(r2.width)}×${Math.round(r2.height)}` });
+      out.push({ name: '**위아래로 쌓인다**(겹치지 않는다)',
+        ok: r2.top >= r1.bottom - 2, detail: `위 밑 ${Math.round(r1.bottom)} · 아래 위 ${Math.round(r2.top)}` });
+      out.push({ name: '같은 칸 안에 있다(가로로 안 벌어진다)',
+        ok: Math.abs(r1.left - r2.left) < 2 && Math.abs(r1.width - r2.width) < 2 });
+      out.push({ name: '위에는 본문, 아래에는 암기법',
+        ok: /본문/.test(document.getElementById('wikiNote').textContent)
+          && /암기법/.test(document.getElementById('wiki2Note').textContent),
+        detail: `${document.getElementById('wikiNote').textContent} / ${document.getElementById('wiki2Note').textContent}` });
+      out.push({ name: '아래 칸에도 글이 실제로 그려진다',
+        ok: /암기법 내용/.test(document.getElementById('wiki2Body').textContent),
+        detail: document.getElementById('wiki2Body').textContent.slice(0, 24) });
+      out.push({ name: '아래 칸 글도 낱말로 긁힌다',
+        ok: document.querySelectorAll('#wiki2Body .tok').length >= 2 });
+
+      // 높이 손잡이 — 둘 다 열렸을 때만 나온다
+      const gr = document.getElementById('wikiResizer');
+      out.push({ name: '높이 손잡이가 둘 사이에 선다',
+        ok: !gr.classList.contains('hidden')
+          && gr.getBoundingClientRect().top >= r1.bottom - 20
+          && gr.getBoundingClientRect().bottom <= r2.top + 20 });
+
+      // 손잡이를 **실제로 끌어** 높이가 바뀌는지 — 규칙만 있고 안 먹는 일이 잦다
+      {
+        const h0 = p1.getBoundingClientRect().height;
+        const g0 = gr.getBoundingClientRect();
+        const ev = (t, y, b) => (t === 'pointerdown' ? gr : document).dispatchEvent(
+          new PointerEvent(t, { pointerType: 'touch', pointerId: 4, isPrimary: true, buttons: b,
+            clientX: g0.left + g0.width / 2, clientY: y, bubbles: true, cancelable: true }));
+        ev('pointerdown', g0.top + g0.height / 2, 1);
+        // 아래로 끈다 — 위 칸을 키우는 쪽. 위로 끌면 최소 높이에 금방 막힌다
+        for (let k = 1; k <= 6; k++) ev('pointermove', g0.top + g0.height / 2 + k * 14, 1);
+        ev('pointerup', g0.top + g0.height / 2 + 84, 0);
+        await new Promise((r) => setTimeout(r, 200));
+        const h1 = p1.getBoundingClientRect().height;
+        out.push({ name: '**손잡이를 끌면 위 칸 높이가 바뀐다**', ok: Math.abs(h1 - h0) > 20,
+          detail: `${Math.round(h0)} → ${Math.round(h1)}px` });
+        out.push({ name: '아래 칸이 남은 자리를 쓴다(둘이 안 겹친다)',
+          ok: p2.getBoundingClientRect().top >= p1.getBoundingClientRect().bottom - 2 });
+      }
+
+      // 토막 넘기기
+      document.getElementById('wiki2NextSec').click();
+      await new Promise((r) => setTimeout(r, 150));
+      out.push({ name: '아래 칸도 토막을 넘긴다',
+        ok: /2\/2/.test(document.getElementById('wiki2Note').textContent),
+        detail: document.getElementById('wiki2Note').textContent });
+
+      // 자리 바꾸기
+      document.getElementById('wiki2Swap').click();
+      await new Promise((r) => setTimeout(r, 200));
+      out.push({ name: '**⇅로 위아래를 바꾼다**',
+        ok: /암기법/.test(document.getElementById('wikiNote').textContent)
+          && /본문/.test(document.getElementById('wiki2Note').textContent),
+        detail: `${document.getElementById('wikiNote').textContent} / ${document.getElementById('wiki2Note').textContent}` });
+
+      // 위 칸을 닫으면 아래 것이 올라온다 — 빈 위 칸만 남으면 안 된다
+      document.getElementById('wikiClose').click();
+      await new Promise((r) => setTimeout(r, 250));
+      out.push({ name: '위를 닫으면 아래 것이 위로 올라온다',
+        ok: !p1.classList.contains('hidden') && p2.classList.contains('hidden')
+          && /본문/.test(document.getElementById('wikiNote').textContent),
+        detail: document.getElementById('wikiNote').textContent });
+      out.push({ name: '아래 칸만 닫으면 위는 그대로',
+        ok: document.querySelector('#quizScreen .side-col')
+          && !document.querySelector('#quizScreen .side-col').classList.contains('two-notes') });
+    } catch (e) {
+      out.push({ name: '노트 2분할 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 140) });
+    } finally {
+      window.fetch = real;
+      if (window.__resetWiki) window.__resetWiki();
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
+
   // ── 보고 있는 노트와 카드가 **안 끊기는가** (2026-10-19 신고) ──
   // "퀴즈에서 노트에서 카드 만들었는데 새 카드로 추가가 안 되고, 기존 카드는 보이지도
   //  않음. 뭔가 떨어진 느낌임 원래 노트랑 연결이 안 되고."

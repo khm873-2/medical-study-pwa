@@ -1204,7 +1204,7 @@ function ensurePen() {
 function destroyPen() {
   if (pen) { pen.destroy(); pen = null; }
   penStrokes = {};
-  closeWiki();
+  closeWikiAll();
   closeAi();
 }
 
@@ -1271,15 +1271,119 @@ function toggleWiki() {
     syncSideCol();
     loadWiki(quiz.q, quiz.answers[quiz.qIndex] !== null);
   } else {
-    closeWiki();
+    closeWikiAll();
   }
 }
+/** 위 칸 닫기(✕). 아래 칸이 있으면 **그걸 위로 올린다** — 빈 위 칸만 남으면 이상하다. */
 function closeWiki() {
+  document.getElementById('wikiPanel').classList.add('hidden');
+  document.getElementById('toolWiki').classList.remove('active');
+  if (wiki2State) {
+    wikiState = { refs: wiki2State.refs, secIdx: wiki2State.secIdx, unlocked: true };
+    closeWiki2();
+    openWikiPanel();
+    return;
+  }
+  syncSideCol();
+}
+
+/** 둘 다 닫는다 — 시험을 떠나거나 전체보기로 갈 때. */
+function closeWikiAll() {
+  if (wiki2State) closeWiki2();
   document.getElementById('wikiPanel').classList.add('hidden');
   document.getElementById('toolWiki').classList.remove('active');
   syncSideCol();
 }
 document.getElementById('wikiClose').onclick = closeWiki;
+
+// ───────── 노트 아래 노트 (2026-10-19 요청) ─────────
+//
+// "퀴즈 풀 때 암기법 문서를 같이 볼 수 있게 노트를 오른쪽에 띄운 상태에서 해당 창을
+//  2분할 해서 위에는 노트를, 아래는 암기법 노트를"
+//
+// 위 칸(wikiState)과 **같은 모양**을 쓰되 상태만 따로 둔다. 칸을 더 늘리지는 않는다 —
+// 셋으로 나누면 글 읽을 자리가 남지 않는다(사이드 칼럼은 기본 360px이다).
+let wiki2State = null;        // {refs, secIdx}
+
+function openWikiPanel() {
+  document.getElementById('wikiPanel').classList.remove('hidden');
+  document.getElementById('toolWiki').classList.add('active');
+  syncSideCol();
+  renderWikiSection();
+}
+
+/** 아래 칸에 노트를 띄운다. */
+async function openNoteInWikiPanel2(note) {
+  wiki2State = {
+    refs: { noteName: note.title, notePath: note.path, sections: note.sections,
+      auto: false, manual: true },
+    secIdx: 0,
+  };
+  // 위 칸이 비어 있으면 아래로 보낼 까닭이 없다 — 그냥 위에 띄운다
+  if (!wikiState) { wiki2State = null; return openNoteInWikiPanel(note); }
+  document.getElementById('wikiPanel2').classList.remove('hidden');
+  syncSideCol();
+  renderWiki2();
+}
+
+function closeWiki2() {
+  wiki2State = null;
+  document.getElementById('wikiPanel2').classList.add('hidden');
+  syncSideCol();
+}
+
+/** 아래 칸을 그린다. 위 칸과 달리 가리개(lock)가 없다 — 내가 직접 고른 노트다. */
+function renderWiki2() {
+  if (!wiki2State) return;
+  const { refs, secIdx } = wiki2State;
+  const sec = refs.sections[secIdx];
+  const pick = document.getElementById('wiki2SecPick');
+  pick.innerHTML = '';
+  refs.sections.forEach((x, i) => {
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = x.heading;
+    pick.appendChild(o);
+  });
+  pick.value = String(secIdx);
+  document.getElementById('wiki2Note').textContent =
+    `${refs.noteName}  ·  ${secIdx + 1}/${refs.sections.length}`;
+  const body = document.getElementById('wiki2Body');
+  body.innerHTML = renderMarkdown(sec ? sec.text : '');
+  tokenizeTree(body);
+  hydrateEmbeds(body, (name) => getBlobUrl(`attachments/${name}`)).catch(() => {});
+}
+
+{
+  const g = (id) => document.getElementById(id);
+  g('wiki2Close').onclick = closeWiki2;
+  g('wiki2SecPick').onchange = (e) => {
+    if (!wiki2State) return;
+    wiki2State.secIdx = Number(e.target.value) || 0;
+    renderWiki2();
+  };
+  const step = (d) => () => {
+    if (!wiki2State) return;
+    const n = wiki2State.refs.sections.length;
+    wiki2State.secIdx = (wiki2State.secIdx + d + n) % n;
+    renderWiki2();
+  };
+  g('wiki2PrevSec').onclick = step(-1);
+  g('wiki2NextSec').onclick = step(1);
+  // 자리 바꾸기 — 아래 것을 더 많이 보게 됐을 때 위로 올린다
+  g('wiki2Swap').onclick = () => {
+    if (!wiki2State || !wikiState) return;
+    const up = wikiState;
+    wikiState = { refs: wiki2State.refs, secIdx: wiki2State.secIdx, unlocked: true };
+    wiki2State = { refs: up.refs, secIdx: up.secIdx };
+    renderWikiSection();
+    renderWiki2();
+  };
+  g('wiki2Cards').onclick = () => {
+    const w = wiki2State && wiki2State.refs;
+    openCardManager(w && w.notePath ? { path: w.notePath, title: w.noteName || '' } : null);
+  };
+}
 
 // ---------- 문항 전체보기 (2026-10-12) ----------
 //
@@ -1313,7 +1417,7 @@ function closeOverview() {
 document.getElementById('toolOverview').onclick = () => {
   const p = document.getElementById('overviewPanel');
   if (p.classList.contains('hidden')) {
-    closeWiki();
+    closeWikiAll();
     closeAi();
     ovFilterColor = 0;
     ovStarOnly = false;
@@ -1492,7 +1596,8 @@ async function loadWiki(q, answered) {
 let wikiHome = null;        // 원래 걸려 있던 연계노트 — ↩로 돌아간다
 
 window.__openWikiNote = (note) => openNoteInWikiPanel(note);   // 검사가 옆 패널을 세우는 통로
-window.__resetWiki = () => { wikiState = null; wikiHome = null; closeWiki(); };
+window.__openWikiNote2 = (note) => openNoteInWikiPanel2(note);
+window.__resetWiki = () => { wikiState = null; wiki2State = null; wikiHome = null; closeWikiAll(); };
 
 async function openNoteInWikiPanel(note) {
   if (!wikiHome && wikiState) wikiHome = wikiState;
@@ -1901,6 +2006,7 @@ function syncSideCol() {
   const anyOpen =
     !document.getElementById('aiPanel').classList.contains('hidden') ||
     !document.getElementById('wikiPanel').classList.contains('hidden') ||
+    !document.getElementById('wikiPanel2').classList.contains('hidden') ||
     !document.getElementById('overviewPanel').classList.contains('hidden');
   document.getElementById('quizScreen').classList.toggle('with-side', anyOpen);
   updatePaneLayout();
@@ -1914,9 +2020,14 @@ const wideScreen = () => window.matchMedia('(min-width: 900px)').matches;
 function updatePaneLayout() {
   const aiOpen = !document.getElementById('aiPanel').classList.contains('hidden');
   const wikiOpen = !document.getElementById('wikiPanel').classList.contains('hidden');
+  const two = !document.getElementById('wikiPanel2').classList.contains('hidden');
   const col = document.querySelector('#quizScreen .side-col');
-  if (col) col.classList.toggle('both', aiOpen && wikiOpen);
+  if (col) {
+    col.classList.toggle('both', aiOpen && wikiOpen);
+    col.classList.toggle('two-notes', wikiOpen && two);
+  }
   document.getElementById('paneResizer').classList.toggle('hidden', !(aiOpen && wikiOpen));
+  document.getElementById('wikiResizer').classList.toggle('hidden', !(wikiOpen && two));
   document.getElementById('toolAi').classList.toggle('active', aiOpen);
   document.getElementById('toolWiki').classList.toggle('active', wikiOpen);
 }
@@ -2388,6 +2499,8 @@ function initResizers() {
   if (savedW) root.style.setProperty('--side-w', savedW);
   const savedH = localStorage.getItem('ai_h');
   if (savedH) root.style.setProperty('--ai-h', savedH);
+  const savedWiki = localStorage.getItem('wiki_h');
+  if (savedWiki) root.style.setProperty('--wiki-h', savedWiki);
 
   let drag = null;
   const onMove = (e) => {
@@ -2401,7 +2514,7 @@ function initResizers() {
       const col = document.querySelector('#quizScreen .side-col');
       const total = col ? col.getBoundingClientRect().height : window.innerHeight;
       const h = Math.max(110, Math.min(drag.startH + (e.clientY - drag.y), Math.max(140, total - 110)));
-      root.style.setProperty('--ai-h', `${Math.round(h)}px`);
+      root.style.setProperty(drag.kind === 'wiki' ? '--wiki-h' : '--ai-h', `${Math.round(h)}px`);
     }
     if (pen) pen.resize();
   };
@@ -2411,6 +2524,7 @@ function initResizers() {
     drag = null;
     localStorage.setItem('side_w', root.style.getPropertyValue('--side-w') || '');
     localStorage.setItem('ai_h', root.style.getPropertyValue('--ai-h') || '');
+    localStorage.setItem('wiki_h', root.style.getPropertyValue('--wiki-h') || '');
     document.removeEventListener('pointermove', onMove);
     document.removeEventListener('pointerup', onUp);
     if (pen) pen.resize();
@@ -2419,18 +2533,24 @@ function initResizers() {
     e.preventDefault();
     e.stopPropagation();
     const side = document.querySelector('#quizScreen .side-col');
-    const ai = document.getElementById('aiPanel');
+    // 어느 칸의 높이를 끄는지에 따라 기준이 다르다(ai 칸이냐, 위쪽 노트 칸이냐)
+    const grown = document.getElementById(kind === 'wiki' ? 'wikiPanel' : 'aiPanel');
     markGripDragging(e.currentTarget, true);
     drag = {
       kind, el: e.currentTarget, x: e.clientX, y: e.clientY,
       startW: side ? side.getBoundingClientRect().width : 360,
-      startH: ai ? ai.getBoundingClientRect().height : 200,
+      startH: grown ? grown.getBoundingClientRect().height : 200,
     };
     document.addEventListener('pointermove', onMove, { passive: false });
     document.addEventListener('pointerup', onUp);
   };
   colR.addEventListener('pointerdown', start('col'));
   paneR.addEventListener('pointerdown', start('pane'));
+  const wikiR = document.getElementById('wikiResizer');
+  if (wikiR) {
+    wikiR.addEventListener('pointerdown', start('wiki'));
+    wikiR.ondblclick = () => { root.style.removeProperty('--wiki-h'); localStorage.removeItem('wiki_h'); };
+  }
 
   // 더블탭하면 기본값으로
   colR.ondblclick = () => { root.style.removeProperty('--side-w'); localStorage.removeItem('side_w'); if (pen) pen.resize(); };
@@ -3053,9 +3173,12 @@ async function openDocDrawer() {
   // 틀린 말이다(갈라질 게 없다). 그때는 어느 창에나 놓을 수 있다고 알려준다.
   const hint = dd.querySelector('.dd-hint');
   if (hint) {
-    hint.textContent = paneCount() >= 2
-      ? '끌어서 왼쪽·오른쪽 어느 창에나 놓을 수 있습니다 — 끄는 동안 이 목록은 비켜납니다'
-      : '끌어서 오른쪽에 놓으면 화면이 갈라집니다';
+    hint.textContent = document.body.dataset.screen === 'quizScreen'
+      // 퀴즈에서는 창을 가르는 게 아니라 **옆칸을 위아래로** 나눈다
+      ? '누르면 옆칸에, 길게 누르면 아래 칸에 — 본문과 암기법을 같이 봅니다'
+      : paneCount() >= 2
+        ? '끌어서 왼쪽·오른쪽 어느 창에나 놓을 수 있습니다 — 끄는 동안 이 목록은 비켜납니다'
+        : '끌어서 오른쪽에 놓으면 화면이 갈라집니다';
   }
   const list = document.getElementById('docList');
   // ⚠️ 여기서 목록을 **DOM에 들고 있으면 안 된다**. 전에는 `list.__groups`에 한 번 담고
@@ -3270,6 +3393,16 @@ function docItem(n, asPair) {
       renderPanes();
     } catch (e) { toast(`노트를 열지 못했습니다: ${e.message}`); }
   };
+  // 길게 누르면 **아래 칸**에 — 본문과 암기법을 위아래로 같이 본다(2026-10-19 요청).
+  // 읽기 화면에서 길게 누르면 창을 가르는 것과 같은 뜻이다(거기선 좌우, 여기선 위아래).
+  longPress(b, async () => {
+    if (document.body.dataset.screen !== 'quizScreen') return;
+    closeDocDrawer();
+    try {
+      await openNoteInWikiPanel2(await loadNote(n.path));
+      toast('아래 칸에 열었습니다 — ⇅로 자리를 바꿀 수 있습니다.');
+    } catch (e) { toast(`노트를 열지 못했습니다: ${e.message}`); }
+  });
   b.addEventListener('dragstart', (e) => {
     docDragNote = n;
     e.dataTransfer.effectAllowed = 'copy';

@@ -497,6 +497,25 @@
       </div>
       <div id="wikiBody" class="wiki-body"></div>
     </div>
+
+    <!-- 노트 아래에 노트 하나 더 — 풀면서 **본문과 암기법을 같이** 본다(2026-10-19 요청).
+         위 칸과 같은 모양이되 "다른 노트"는 없다. 여기에 뭘 띄울지는 위에서 고른다
+         (서랍에서 길게 누르면 아래로). 칸이 끝없이 늘어나면 글 읽을 자리가 없어진다. -->
+    <div class="pane-resizer resize-grip hidden" data-axis="y" id="wikiResizer" title="끌어서 높이 조절 (두 번 누르면 기본값)"><span class="rg-dots"></span></div>
+    <div id="wikiPanel2" class="hidden">
+      <div class="wiki-head">
+        <button class="icon-btn" id="wiki2PrevSec" title="이전 섹션">‹</button>
+        <div class="wiki-title">
+          <select id="wiki2SecPick" class="wiki-pick" title="섹션 고르기"></select>
+          <div class="wiki-sub" id="wiki2Note"></div>
+        </div>
+        <button class="icon-btn" id="wiki2NextSec" title="다음 섹션">›</button>
+        <button class="txt-btn" id="wiki2Swap" title="위 칸과 자리 바꾸기">⇅</button>
+        <button class="txt-btn" id="wiki2Cards" title="이 노트의 카드">카드</button>
+        <button class="icon-btn" id="wiki2Close" title="닫기">✕</button>
+      </div>
+      <div id="wiki2Body" class="wiki-body"></div>
+    </div>
     </div><!-- /.side-col -->
     </div><!-- /.split -->
 

@@ -333,7 +333,7 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
 .tok { display: inline; }
 
 /* ---- 위키 패널 ---- */
-#wikiPanel {
+#wikiPanel, #wikiPanel2 {
   margin-top: 14px; background: var(--card); border: 1px solid var(--border);
   border-radius: 14px; overflow: hidden;
 }
@@ -756,6 +756,14 @@ body.boxing .resize-grip { pointer-events: none; }
   /* 하나만 열렸으면 전체를 쓴다 */
   #quizScreen .side-col:not(.both) > #aiPanel,
   #quizScreen .side-col:not(.both) > #wikiPanel { flex: 1 1 auto; }
+  /* ── 노트 아래 노트 (2026-10-19 요청) ──
+     본문을 위에, 암기법을 아래에 놓고 같이 본다. 위 칸 높이만 정해주면
+     아래 칸이 남은 자리를 쓴다 — ai 칸을 나누는 방식과 같다. */
+  #quizScreen .side-col.two-notes > #wikiPanel {
+    flex: 0 0 var(--wiki-h, 50%); min-height: 110px;
+  }
+  #quizScreen .side-col.two-notes > #wikiPanel2 { flex: 1 1 auto; min-height: 110px; }
+  #quizScreen .side-col:not(.two-notes) > #wikiPanel2 { flex: 1 1 auto; }
 }
 
 /* 좁은 폭에서도 글이 뭉개지지 않게 */
@@ -1567,7 +1575,7 @@ body.boxing .resize-grip { pointer-events: none; }
 .warn-box { border-radius: var(--r-2); border-left-width: 3px; }
 
 /* ── 사이드 패널 ── */
-#wikiPanel, #aiPanel, #overviewPanel {
+#wikiPanel, #wikiPanel2, #aiPanel, #overviewPanel {
   border-radius: var(--r-3);
   box-shadow: var(--sh-2);
 }
