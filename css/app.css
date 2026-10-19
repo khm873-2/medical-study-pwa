@@ -2928,6 +2928,14 @@ li.task.done .task-box { color: var(--accent); }
 
 /* 카드 본문에서 낱말을 눌러 빈칸을 고친다(2026-10-14).
    추천은 그대로 두고 **고칠 길만** 연다 — 오래 외울 카드는 직접 고르는 게 맞다. */
+/* 끌어서 고치는 동안 **글이 선택되면 안 된다**. 아이패드에서 글 위를 끌거나 길게
+   누르면 사파리가 글을 집어 "복사·찾아보기" 쪽지를 띄운다. 그 쪽지가 뜨면 그 다음
+   누름은 쪽지를 닫는 데 먹혀서 "추가가 안 눌린다"가 된다(2026-10-19 신고:
+   "복사하기 같은 게 계속 나오고 추가버튼이 안눌리는 버그"). 서랍 끌기 때와 같은 까닭.
+   ⚠️ .af-body * 가 위에서 text로 열어두므로 **여기서 다시 닫아야** 한다. */
+.cf-pick, .cf-pick * {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
 .cf-pick { line-height: 2.1; touch-action: pan-y pinch-zoom; }
 .cf-w { border-radius: 5px; padding: 1px 2px; cursor: pointer; }
 .cf-w:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }

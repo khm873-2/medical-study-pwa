@@ -4886,6 +4886,9 @@ function bindCardBrush(root, card) {
     window.removeEventListener('pointerup', end, true);
     window.removeEventListener('pointercancel', end, true);
     root.classList.remove('cf-brushing');
+    // 그래도 글이 집혔으면 놓아준다 — 집힌 채로 두면 사파리가 "복사" 쪽지를 띄우고,
+    // 그 쪽지가 다음 누름을 먹어 "추가가 안 눌린다"가 된다(2026-10-19).
+    if (was.brush) { try { window.getSelection().removeAllRanges(); } catch {} }
     if (!was.brush) { st = was; apply(was.first); st = null; }   // 그냥 누른 것 — 하나만
     // 그리기는 **손을 뗀 뒤 한 번만** — 끌는 중에 다시 그리면 손짓이 끊긴다
     if (was.n) { syncCardFromDom(root, card); renderCfNew(); }

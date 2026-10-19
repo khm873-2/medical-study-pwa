@@ -7490,6 +7490,35 @@ await run('카드 빈칸 직접 고치기', async () => {
     }
   }
 
+  // 크롬은 -webkit-touch-callout을 구현하지 않는다 — 규칙 글을 직접 본다.
+  // ⚠️ 주석에 선택자가 들어 있으면 헛통과한다(전에 겪음) — 주석부터 턴다.
+  const cssSaysNoCallout = await (async () => {
+    const css = (await fetch('/css/app.css').then((r) => r.text())).replace(/\/\*[\s\S]*?\*\//g, '');
+    const m = css.match(/\.cf-pick,\s*\.cf-pick \*\s*\{([^}]*)\}/);
+    return !!m && /-webkit-touch-callout:\s*none/.test(m[1]);
+  })();
+
+  // ── 끌 때 글이 집히지 않는가 (2026-10-19 신고) ──
+  // "추가버튼 누르니까 복사하기? 같은 게 계속 나오고 추가버튼이 안눌리는 버그"
+  // 아이패드에서 글 위를 끌면 사파리가 글을 집어 "복사·찾아보기" 쪽지를 띄운다.
+  // 그 쪽지가 뜨면 다음 누름은 쪽지를 닫는 데 먹힌다 — 버튼이 죽은 것처럼 보인다.
+  // ⚠️ `.af-body *`가 위에서 text로 열어두므로, **실제로 계산된 값**을 재야 한다.
+  {
+    const pick = document.querySelector('#cfBody .cf-pick');
+    if (pick) {
+      const w = pick.querySelector('.cf-w') || pick.querySelector('.cloze') || pick;
+      const cs = getComputedStyle(w);
+      out.push({ name: '**카드 본문은 글이 집히지 않는다**(.af-body *를 이기는지)',
+        ok: cs.webkitUserSelect === 'none' || cs.userSelect === 'none',
+        detail: `user-select: ${cs.userSelect} / webkit: ${cs.webkitUserSelect}` });
+      out.push({ name: '길게 눌러도 쪽지가 안 뜬다(-webkit-touch-callout)',
+        ok: (cs.webkitTouchCallout || '') === 'none' || cssSaysNoCallout,
+        detail: cs.webkitTouchCallout || '(크롬은 이 속성이 없다 — 규칙으로 확인)' });
+      out.push({ name: '끌기가 끝나면 집힌 글을 놓아준다',
+        ok: /getSelection\(\)\.removeAllRanges/.test(await fetch('/js/app.js').then((r) => r.text())) });
+    }
+  }
+
   // ── 손짓이 굳어서 카드창이 멈추지 않는가 (2026-10-19 신고) ──
   // "아니 아예 추가만 안눌리는게 아니고 그냥 카드 만들기에서 벗어날 수가 없네"
   // 그림에 네모 치는 쪽과 쓱 끌기가 **둘 다 포인터를 가로채려 해서** 서로 뺏었다.
