@@ -2314,6 +2314,18 @@ body.dragging-doc .doc-drawer { opacity: .16; }
   color: var(--correct); font-size: 10.5px; font-weight: 800; white-space: nowrap;
 }
 .pass-tag.none { display: none; }
+/* "오늘" 탭에서는 **눌러서** 센다(2026-10-19 요청) — 노트를 안 열고도 세어진다.
+   아직 1회독 중일 때도 보여야 누를 수 있으므로, 그때는 조용한 색으로 둔다. */
+.pass-tag.pass-tap {
+  padding: 2px 9px; min-height: 24px; cursor: pointer; font-family: inherit;
+  background: var(--bg); border-color: var(--border); color: var(--sub);
+}
+.pass-tag.pass-tap.done {
+  background: color-mix(in srgb, var(--correct) 15%, transparent);
+  border-color: color-mix(in srgb, var(--correct) 45%, transparent);
+  color: var(--correct);
+}
+.pass-tag.pass-tap:active { transform: scale(.94); }
 
 /* ── 모아두기: 어디로 갈지 고르기 ── */
 .sc-kind { display: flex; align-items: center; gap: 6px; padding: 0 14px 8px; flex-wrap: wrap; }

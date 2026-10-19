@@ -5183,23 +5183,60 @@ await run('회독수와 모아두기 갈래', async () => {
   out.push({ name: '손으로 갈래를 바꿀 수 있다', ok: /scrapKind = b\.dataset\.bucket/.test(app) });
 
   // 목록에서도 몇 회독인지 보여야 한다 — 열기 전에 무엇을 다시 볼지 고른다(2026-10-17)
-  {
-    const tag = new Function('passOf', `
-      ${(app.match(/function passTag\(path\) \{[\s\S]*?\n}\n/) || [''])[0]}
-      return passTag;`);
-    const t0 = tag(() => 0)('a.md');
-    const t2 = tag(() => 2)('a.md');
-    document.body.append(t0, t2);
+  // ⚠️ 전에는 app.js에서 passTag 소스를 뜯어 따로 돌렸다. 그 함수가 다른 함수를 부르기
+  //    시작하자 거기서 터졌고, 무엇보다 **검사가 보는 것과 앱이 쓰는 것이 갈린다**.
+  //    이제 진짜 함수를 부른다(window.__passUi).
+  const U = window.__passUi;
+  out.push({ name: '검사가 진짜 회독 표시를 부를 수 있다', ok: !!(U && U.tag && U.btn) });
+  if (U) {
+    const P = '02_Wiki/과목/pass-test.md';
+    await U.set(P, 0);
+    const t0 = U.tag(P);
+    document.body.append(t0);
     out.push({ name: '1회독 중이면 아무것도 안 붙는다',
       ok: getComputedStyle(t0).display === 'none', detail: t0.textContent || '(빈칸)' });
+    await U.set(P, 2);
+    const t2 = U.tag(P);
+    document.body.append(t2);
     out.push({ name: '**읽은 노트엔 회독수가 붙는다**',
       ok: t2.textContent === '2회독' && getComputedStyle(t2).display !== 'none',
       detail: t2.textContent });
-    t0.remove(); t2.remove();
+
+    // ── "오늘" 탭에서 **눌러서** 센다 (2026-10-19 요청) ──
+    // "이런 홈화면에서도 회독수 버튼 이름 옆에 만들어서 누를 수 있게 해줘.
+    //  당연히 노트 안에서 보는거랑 연동이 돼야겠지."
+    await U.set(P, 0);
+    const btn = U.btn(P);
+    document.body.append(btn);
+    out.push({ name: '**1회독 중에도 보인다**(안 보이면 누를 수가 없다)',
+      ok: getComputedStyle(btn).display !== 'none' && btn.textContent === '1회독 중',
+      detail: `"${btn.textContent}" display:${getComputedStyle(btn).display}` });
+    const rbt = btn.getBoundingClientRect();
+    out.push({ name: '누를 만한 크기다', ok: rbt.height >= 22 && rbt.width >= 40,
+      detail: `${Math.round(rbt.width)}×${Math.round(rbt.height)}` });
+    btn.click();
+    await new Promise((r) => setTimeout(r, 250));
+    out.push({ name: '**누르면 1회독이 센다**', ok: U.of(P) === 1 && btn.textContent === '1회독',
+      detail: `${U.of(P)}회 "${btn.textContent}"` });
+    btn.click();
+    await new Promise((r) => setTimeout(r, 250));
+    out.push({ name: '또 누르면 2회독', ok: U.of(P) === 2, detail: `${U.of(P)}회` });
+
+    // 같은 수를 보는가 — 노트 안 단추와 목록 표시와 "오늘" 탭 단추가 하나로 움직여야 한다
+    out.push({ name: '**옆에 떠 있던 표시도 같이 바뀐다**(연동)',
+      ok: t2.textContent === '2회독' && t0.textContent === '2회독',
+      detail: `목록표시 "${t0.textContent}" / "${t2.textContent}"` });
+    await U.set(P, 5);
+    out.push({ name: '노트 안에서 센 것도 여기 바로 비친다',
+      ok: btn.textContent === '5회독' && t0.textContent === '5회독',
+      detail: `단추 "${btn.textContent}" 표시 "${t0.textContent}"` });
+
+    await U.set(P, 0);
+    t0.remove(); t2.remove(); btn.remove();
   }
-  out.push({ name: '오늘 탭 강의 제목 옆에 붙인다',
-    ok: /head\.appendChild\(passTag\(lecPath\)\)/.test(app) });
-  out.push({ name: '노트 목록에도 붙인다',
+  out.push({ name: '오늘 탭 강의 제목 옆에 **누를 수 있는** 단추를 붙인다',
+    ok: /head\.appendChild\(passBtn\(lecPath\)\)/.test(app) });
+  out.push({ name: '노트 목록엔 표시만 붙인다(줄 자체가 단추라 단추를 겹칠 수 없다)',
     ok: /b\.append\(name, passTag\(n\.path\), arrow\)/.test(app) });
   out.push({ name: '창을 열 때마다 회독수대로 다시 정한다', ok: /scrapKind = null;/.test(app) });
   return out;

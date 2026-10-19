@@ -947,7 +947,9 @@ function renderDaySection(body, pool, index, attempts, noteGroups) {
     // 몇 번 읽었는지를 **강의 제목 옆에** — 오늘 무엇을 다시 볼지 고르는 자리다
     // (2026-10-17 요청). 실강노트 기준, 없으면 예습노트.
     const lecPath = notePathOf(noteGroups, l.wiki) || notePathOf(noteGroups, l.note);
-    if (lecPath) head.appendChild(passTag(lecPath));
+    // 여기선 **누를 수 있어야** 한다(2026-10-19 요청) — 오늘 뭘 다시 볼지 고르면서
+    // 바로 세는 자리다. 노트를 안 열고도 세어지고, 노트 안 단추와 같은 수를 본다.
+    if (lecPath) head.appendChild(passBtn(lecPath));
     row.appendChild(head);
 
     const chips = document.createElement('div');
@@ -3545,6 +3547,7 @@ async function setPass(path, n) {
   await kvSet(READ_PASS_KEY, readPass);
   backup.scheduleBackup();
   paintPassBtn();
+  paintPassTags();     // "오늘" 탭·목록에 떠 있는 표시도 같이 — 하나로 움직여야 한다
 }
 
 /** 노트 이름 → 경로. 회독수는 경로로 세므로 이름만 있는 자리에서 이걸 거친다. */
@@ -3560,12 +3563,71 @@ function notePathOf(groups, name) {
  * 전부에 붙이면 눈만 시끄럽다.
  */
 function passTag(path) {
-  const n = passOf(path);
   const el = document.createElement('span');
-  el.className = `pass-tag${n ? '' : ' none'}`;
-  el.textContent = n ? `${n}회독` : '';
-  if (n) el.title = `${n}회독 마침`;
+  el.className = 'pass-tag';
+  el.dataset.passPath = path || '';
+  paintOnePass(el);
   return el;
+}
+
+/** 읽기 화면 단추와 **같은 말**을 쓴다 — 자리마다 다르게 부르면 같은 수인지 모른다. */
+const passLabel = (n) => (n ? `${n}회독` : '1회독 중');
+
+/**
+ * 눌러서 세는 회독 단추 — "오늘" 탭처럼 **열기 전에** 세는 자리에 붙인다(2026-10-19 요청).
+ *
+ * 표시만 하는 `passTag`와 달리 누를 수 있다. 값은 같은 곳(readPass)에 적으므로
+ * 노트 안에서 누르든 여기서 누르든 하나로 움직인다.
+ * ⚠️ 단추 안에 단추를 넣을 수 없다 — 서랍의 노트 줄(.dd-item)은 그 자체가 단추라
+ *    거기엔 `passTag`(표시용)를 쓴다.
+ */
+function passBtn(path) {
+  const b = document.createElement('button');
+  b.className = 'pass-tag pass-tap';
+  b.dataset.passPath = path || '';
+  paintOnePass(b);
+  b.onclick = async (e) => {
+    e.stopPropagation();
+    const n = passOf(path) + 1;
+    await setPass(path, n);
+    toast(n === 1 ? '1회독 마침 — 이제 담는 것은 "인출 실패"로 들어갑니다.' : `${n}회독 마침.`);
+  };
+  longPress(b, async () => {
+    const n = passOf(path);
+    if (!n) { toast('아직 1회독 중입니다.'); return; }
+    await setPass(path, n - 1);
+    toast(n - 1 ? `${n - 1}회독으로 되돌렸습니다.` : '1회독 중으로 되돌렸습니다.');
+  });
+  return b;
+}
+
+/** 표시 하나를 지금 값에 맞춘다. */
+function paintOnePass(el) {
+  const n = passOf(el.dataset.passPath);
+  const tap = el.classList.contains('pass-tap');
+  el.classList.toggle('done', n > 0);
+  // 표시만 하는 것은 1회독 중이면 숨긴다(그게 기본이라 다 붙이면 눈만 시끄럽다).
+  // 누를 수 있는 것은 **눌러야 하니까** 0일 때도 보여야 한다.
+  el.classList.toggle('none', !n && !tap);
+  el.textContent = !n && !tap ? '' : passLabel(n);
+  el.title = n
+    ? `${n}회독 마침${tap ? ' — 길게 누르면 되돌립니다.' : ''}`
+    : (tap ? '아직 1회독 중 — 누르면 1회독 완료.' : '');
+}
+
+// 검사가 **진짜 이 함수들을** 부를 수 있게 둔다. 전에는 app.js에서 소스를 정규식으로
+// 뜯어 따로 돌렸는데, 함수가 다른 함수를 부르기 시작하자 거기서 터졌다 — 그러면
+// 검사가 보는 것과 앱이 쓰는 것이 갈린다.
+window.__passUi = { tag: (p) => passTag(p), btn: (p) => passBtn(p), set: setPass, of: passOf };
+
+/**
+ * 화면에 떠 있는 회독 표시를 **전부** 지금 값에 맞춘다.
+ *
+ * 노트 안에서 세든 "오늘" 탭에서 세든 같은 수를 보여야 한다. 탭을 통째로 다시 그리지
+ * 않고 표시만 고쳐 쓴다 — 다시 그리면 스크롤 자리와 펼쳐둔 것이 날아간다.
+ */
+function paintPassTags() {
+  document.querySelectorAll('[data-pass-path]').forEach(paintOnePass);
 }
 
 /** 지금 읽는 노트의 회독 단추를 상태에 맞게 그린다. */
