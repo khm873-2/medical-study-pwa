@@ -7556,6 +7556,65 @@ await run('카드 빈칸 직접 고치기', async () => {
     }
   }
 
+  // ── 가린 네모가 **어디서 보든 같은 자리**인가 (2026-10-19 신고) ──
+  // "카드 만들기때 그림에 그렸던 네모랑 노트의 카드에서 보이는 네모 위치가 다른 버그"
+  //
+  // 네모 자리는 그림 상자를 기준으로 %로 적는다. 그런데 본문 그림은 width: 100%에
+  // max-height가 걸려 있어 **상자가 그림보다 넓어지고**, object-fit: contain이 남는
+  // 띠 가운데에 그림을 칠한다. 그 띠 폭이 보는 자리마다 달라서(편집기 10px,
+  // 외우기 화면 416px) 네모가 그만큼씩 다르게 밀렸다.
+  {
+    const PNG = await (async () => {
+      const cv = document.createElement('canvas'); cv.width = 800; cv.height = 600;
+      const x = cv.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 800, 600);
+      return cv.toDataURL();
+    })();
+    const html = `<p><span class="io-wrap"><img class="embed" data-embed="t.png" src="${PNG}">`
+      + '<span class="io-mask" style="left:50%;top:40%;width:20%;height:15%"></span></span></p>';
+    const mk = (cls) => {
+      const d = document.createElement('div');
+      d.className = cls;
+      d.innerHTML = html;
+      document.body.appendChild(d);
+      return d;
+    };
+    // 일부러 **폭이 다른** 두 자리에 같은 HTML을 놓는다 — 그게 이 버그가 나던 조건이다
+    const a = mk('cf-q cf-pick'); a.style.width = '520px';
+    const z = mk('card-context'); z.style.width = '1340px';
+    await new Promise((r) => setTimeout(r, 300));
+    const look = (host) => {
+      const im = host.querySelector('img');
+      const mask = host.querySelector('.io-mask');
+      const ri = im.getBoundingClientRect(), rm = mask.getBoundingClientRect();
+      const s = Math.min(ri.width / im.naturalWidth, ri.height / im.naturalHeight);
+      const pw = im.naturalWidth * s, ph = im.naturalHeight * s;
+      return {
+        band: Math.round((ri.width - pw) / 2),          // object-fit이 남긴 띠
+        bandY: Math.round((ri.height - ph) / 2),
+        // 네모가 **그림 안에서** 차지하는 비율 — 이게 두 자리에서 같아야 한다
+        fx: (rm.left - ri.left) / ri.width,
+        fy: (rm.top - ri.top) / ri.height,
+        box: `${Math.round(ri.width)}×${Math.round(ri.height)}`,
+      };
+    };
+    const A = look(a), Z = look(z);
+    out.push({ name: '**그림 상자에 빈 띠가 안 생긴다**(네모가 밀리던 까닭)',
+      ok: A.band <= 1 && Z.band <= 1 && A.bandY <= 1 && Z.bandY <= 1,
+      detail: `편집기 ${A.band}/${A.bandY}px · 외우기 ${Z.band}/${Z.bandY}px` });
+    out.push({ name: '**폭이 달라도 네모가 그림의 같은 자리에 있다**',
+      ok: Math.abs(A.fx - Z.fx) < 0.01 && Math.abs(A.fy - Z.fy) < 0.01,
+      detail: `편집기 ${A.fx.toFixed(3)},${A.fy.toFixed(3)} · 외우기 ${Z.fx.toFixed(3)},${Z.fy.toFixed(3)}` });
+    out.push({ name: '그림 상자 크기 자체가 같다', ok: A.box === Z.box,
+      detail: `${A.box} / ${Z.box}` });
+    // 감싼 상자가 그림보다 크면(여백 때문에) 네모가 그만큼 내려앉는다
+    const wr = a.querySelector('.io-wrap').getBoundingClientRect();
+    const ir = a.querySelector('img').getBoundingClientRect();
+    out.push({ name: '감싼 상자가 그림에 딱 맞는다(여백이 안 끼어든다)',
+      ok: Math.abs(wr.height - ir.height) <= 1 && Math.abs(wr.width - ir.width) <= 1,
+      detail: `상자 ${Math.round(wr.width)}×${Math.round(wr.height)} · 그림 ${Math.round(ir.width)}×${Math.round(ir.height)}` });
+    a.remove(); z.remove();
+  }
+
   // ── 손짓이 굳어서 카드창이 멈추지 않는가 (2026-10-19 신고) ──
   // "아니 아예 추가만 안눌리는게 아니고 그냥 카드 만들기에서 벗어날 수가 없네"
   // 그림에 네모 치는 쪽과 쓱 끌기가 **둘 다 포인터를 가로채려 해서** 서로 뺏었다.

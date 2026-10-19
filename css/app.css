@@ -2956,8 +2956,19 @@ li.task.done .task-box { color: var(--accent); }
 /* ── 그림 가리기 (image occlusion · 2026-10-16) ──
    그림 위에 네모를 쳐서 가린다. 자리는 비율(%)이라 화면이 바뀌어도 따라간다.
    "답 보기"를 누르면 글 빈칸과 **같은 상태**(.filled)로 함께 벗겨진다. */
-.io-wrap { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
+.io-wrap { position: relative; display: inline-block; max-width: 100%; line-height: 0; margin: 8px 0; }
 .io-wrap img { display: block; max-width: 100%; height: auto; }
+/* ⚠️ 가린 네모는 **그림 상자**를 기준으로 %로 적는다. 그런데 본문 그림은 width: 100%에
+   max-height가 걸려 있어서, 상자가 그림보다 가로로 넓어지고 object-fit: contain이
+   남는 띠 가운데에 그림을 칠한다. 그 띠만큼 네모가 밀린다 — 그리고 띠 폭은 **보는
+   자리마다 다르다**(재어 보니 편집기 10px, 외우기 화면 416px). 그래서 "카드 만들 때
+   그렸던 네모랑 외울 때 네모 위치가 다르다"가 됐다(2026-10-19 신고).
+   상자를 그림에 딱 맞춘다 — width를 auto로 두면 max-width·max-height가 비율을
+   지키며 줄이므로 띠가 아예 안 생긴다. max-height는 자리마다 다르니 여기서 안 정한다. */
+/* 여백도 **상자 밖으로** 뺀다. 그림에 margin이 붙어 있으면 감싼 상자가 그만큼 커지고,
+   네모는 상자 기준이라 그 차이만큼(재어 보니 8/396 ≈ 2%) 내려앉는다. 여백은 감싼
+   상자가 대신 든다(위 .io-wrap 블록). */
+.io-wrap img.embed { width: auto; height: auto; margin: 0; }
 .io-mask {
   position: absolute; border-radius: 4px;
   background: var(--accent); border: 2px solid color-mix(in srgb, #fff 55%, var(--accent));
