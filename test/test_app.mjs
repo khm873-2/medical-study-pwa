@@ -142,6 +142,47 @@ console.log(`  파싱: 시험 ${parsed}개 · 문항 ${qTotal}개 · 이미지 $
   console.log(`  문제 그림 ${seen}장 — vault에서 전부 찾음${missing.length ? ` (못 찾음 ${missing.length})` : ''}`);
 }
 
+// --- 흐름도(mermaid): 앱과 vault 스크립트가 **같은 이름**을 부르는가 (2026-10-19) ---
+// 맥에서 그린 그림을 앱이 찾으려면 이름 짓는 셈이 두 군데에서 똑같아야 한다.
+// 한쪽만 고치면 그림을 영영 못 찾는데, 화면에는 코드가 그대로 보일 뿐이라 알아채기 어렵다.
+{
+  const { mermaidName, renderMarkdown } = await import(`${PWA}/js/markdown.js`);
+  const SRC = 'flowchart TD\n  A[출생] --> B{만삭인가?}\n  B -->|예| C[일반 처치]';
+  check('흐름도 이름이 attachments 밑 .mermaid로 간다',
+    mermaidName(SRC).startsWith('.mermaid/m') && mermaidName(SRC).endsWith('.png'),
+    mermaidName(SRC));
+  check('같은 글이면 같은 이름', mermaidName(SRC) === mermaidName(SRC + ''));
+  check('글이 달라지면 이름도 달라진다(고치면 다시 그려지게)',
+    mermaidName(SRC) !== mermaidName(SRC + '\n  C --> D[관찰]'));
+  check('앞뒤 빈 줄은 무시한다', mermaidName(SRC) === mermaidName(`\n${SRC}\n\n`));
+
+  // vault 쪽 스크립트의 같은 함수를 **그대로 떼어다** 돌려 본다
+  let vaultName = null;
+  try {
+    const src = readFileSync(`${VAULT}/.claude/scripts/render-mermaid.mjs`, 'utf8');
+    const m = src.match(/export function mermaidName\(src\) \{[\s\S]*?\n\}/);
+    if (m) vaultName = new Function(`${m[0].replace('export ', '')}; return mermaidName;`)();
+  } catch { /* 아래에서 걸린다 */ }
+  check('vault에 흐름도 그리는 스크립트가 있다', !!vaultName);
+  if (vaultName) {
+    check('**앱과 vault가 같은 이름을 부른다**', vaultName(SRC) === mermaidName(SRC),
+      `vault ${vaultName(SRC)} / 앱 ${mermaidName(SRC)}`);
+    check('긴 글에서도 같다',
+      vaultName(SRC.repeat(20)) === mermaidName(SRC.repeat(20)));
+  }
+
+  // 글을 그릴 때 코드 덩어리가 아니라 **그림 자리**가 나와야 한다
+  const html = renderMarkdown('# 제목\n\n```mermaid\n' + SRC + '\n```\n\n뒷글\n');
+  check('**흐름도가 그림으로 들어간다**(코드 덩어리로 안 쏟아진다)',
+    /<img[^>]+data-mmd="1"/.test(html), html.slice(0, 160));
+  check('그림이 없을 때 쓸 코드도 같이 남는다', /class="mmd-src"/.test(html));
+  check('뒷글이 흐름도에 안 먹힌다', /뒷글/.test(html));
+  check('mermaid가 아닌 코드는 그냥 코드로',
+    /<pre><code>/.test(renderMarkdown('```js\nlet a = 1;\n```\n')));
+  check('울타리 안의 #는 제목이 아니다',
+    !/<h\d/.test(renderMarkdown('```\n# 샾으로 시작하는 줄\n```\n')));
+}
+
 // --- parser: 파일명 유틸 ---
 check('prettyExamName', prettyExamName('1012_기본소생술BLS_모의고사.html') === '기본소생술BLS',
   prettyExamName('1012_기본소생술BLS_모의고사.html'));

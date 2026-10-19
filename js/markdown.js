@@ -19,6 +19,20 @@ const CALLOUT_LABEL = {
 const imgRatio = new Map();
 
 /**
+ * mermaid 글 → 미리 그려둔 그림의 이름.
+ *
+ * ⚠️ 이 셈은 vault의 `.claude/scripts/render-mermaid.mjs`에 **똑같이** 들어 있다.
+ *    한쪽만 고치면 그림을 영영 못 찾는다 — 달모 쪽 검사가 두 벌이 같은지 본다.
+ * 글을 고치면 이름이 바뀌므로 그림도 다시 그려진다(옛 그림은 남아 있어도 안 쓴다).
+ */
+export function mermaidName(src) {
+  const t = String(src).replace(/\r\n/g, '\n').trim();
+  let h = 5381;
+  for (let k = 0; k < t.length; k++) h = ((h * 33) ^ t.charCodeAt(k)) >>> 0;
+  return `.mermaid/m${h.toString(36)}${t.length.toString(36)}.png`;
+}
+
+/**
  * 임베드 그림 태그.
  *
  * ⚠️ 비율은 **여기서**(HTML을 만들 때) 박아야 한다. 나중에 JS로 붙이면 그 전에 이미
@@ -96,6 +110,32 @@ export function renderMarkdown(md, opts = {}) {
         `<div class="cal-body">${renderMarkdown(body.join('\n'), opts)}</div>` +
         `</details>`
       );
+      continue;
+    }
+
+    // --- 코드 울타리(```) ---
+    // 전에는 아예 안 다뤘다. 그래서 ```mermaid 흐름도가 글자 덩어리로 쏟아졌다
+    // (2026-10-19 신고). mermaid는 **맥에서 미리 그려 둔 그림**으로 바꿔 넣는다 —
+    // 앱은 그리지 않는다(라이브러리가 1MB가 넘는다). 그림이 없으면 코드를 그대로 보인다.
+    const fence = line.match(/^\s*(?:```|~~~)\s*([\w-]*)\s*$/);
+    if (fence) {
+      const lang = (fence[1] || '').toLowerCase();
+      const body = [];
+      i++;
+      while (i < lines.length && !/^\s*(?:```|~~~)\s*$/.test(lines[i])) { body.push(lines[i]); i++; }
+      i++;                                      // 닫는 울타리
+      const src = body.join('\n');
+      if (lang === 'mermaid' && src.trim()) {
+        const name = mermaidName(src);
+        out.push(
+          `<div class="mmd">`
+          + `<img class="embed mmd-img" data-embed="${escapeHtml(name)}" data-mmd="1" alt="흐름도">`
+          + `<pre class="mmd-src"><code>${escapeHtml(src)}</code></pre>`
+          + `</div>`
+        );
+      } else {
+        out.push(`<pre><code>${escapeHtml(src)}</code></pre>`);
+      }
       continue;
     }
 
@@ -354,7 +394,10 @@ export async function hydrateEmbeds(root, resolve) {
     const known = imgRatio.get(name);
     try {
       const url = await resolve(name);
-      if (!url) { im.replaceWith(note(`이미지 없음: ${name}`)); return; }
+      if (!url) {
+        if (im.dataset.mmd) { im.remove(); return; }
+        im.replaceWith(note(`이미지 없음: ${name}`)); return;
+      }
       if (!known) {
         im.addEventListener('load', () => {
           if (im.naturalWidth && im.naturalHeight) {
@@ -364,6 +407,9 @@ export async function hydrateEmbeds(root, resolve) {
       }
       im.src = url;
     } catch {
+      // 미리 그려둔 흐름도가 아직 없으면 **코드를 그대로 보여준다** — 못 읽었다는
+      // 쪽지보다 낫다(맥에서 그리면 다음에 그림으로 바뀐다).
+      if (im.dataset.mmd) { im.remove(); return; }
       im.replaceWith(note(`이미지를 불러오지 못했습니다: ${name}`));
     }
   }));

@@ -371,6 +371,17 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
      정해져 있어야 높이가 잡히고, 그래야 뜨면서 아래 글을 안 민다(2026-10-14). */
   width: 100%; height: auto; background: var(--badge-bg);
 }
+/* ── 흐름도(mermaid) ──
+   앱은 그리지 않는다 — 맥에서 미리 그려 둔 그림을 넣는다(라이브러리가 1MB가 넘는다).
+   그림이 있으면 코드는 숨고, 없으면 코드가 그대로 보인다(못 읽었다는 쪽지보다 낫다). */
+.mmd { margin: 8px 0; }
+.mmd:has(.mmd-img) .mmd-src { display: none; }
+.mmd-src {
+  margin: 0; padding: 10px 12px; overflow-x: auto;
+  background: var(--badge-bg); border: 1px solid var(--border); border-radius: 8px;
+  font-size: 12px; line-height: 1.5; color: var(--sub); white-space: pre;
+}
+pre > code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wiki-body .wikilink { color: var(--accent); }
 .wiki-body hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
 .tablewrap { overflow-x: auto; margin: 10px 0; }
