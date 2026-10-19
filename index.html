@@ -306,16 +306,6 @@
         </div>
       </div>
     </div>
-    <!-- 문서 목록 — 끌어다 놓으면 그 자리에서 열리거나 화면이 갈라진다 -->
-    <aside class="doc-drawer hidden" id="docDrawer" aria-label="문서 목록">
-      <div class="dd-head">
-        <input id="docSearch" type="search" placeholder="노트 찾기" autocapitalize="off" autocorrect="off">
-        <button class="icon-btn" id="docClose" title="닫기">✕</button>
-      </div>
-      <div class="dd-hint muted">끌어서 오른쪽에 놓으면 화면이 갈라집니다</div>
-      <div id="docList" class="dd-list"></div>
-    </aside>
-    <div class="dd-scrim hidden" id="docScrim"></div>
     <div class="navbar">
       <!-- 회독 단추 — 담는 것이 "처음 배우는 것"인지 "인출 실패"인지를 가르는 스위치.
            머리줄 오른쪽에 뒀더니 떠다니는 도구막대에 가렸다(2026-10-17 지적).
@@ -622,6 +612,20 @@
 
 <!-- 도구막대 — 머리줄에 박아두니 창을 줄이면 시스템 버튼에 가렸다.
      떼어내 끌어 옮기고 네 변 중 아무 데나 붙인다(2026-10-13 요청). -->
+<!-- 문서 목록 — 끌어다 놓으면 그 자리에서 열리거나 화면이 갈라진다.
+     ⚠️ **화면(section) 밖에 둔다.** 전에는 readScreen 안에 있어서, 퀴즈·모의고사에서
+     "다른 노트"를 눌러도 그 화면이 통째로 hidden이라 아무 일도 안 일어났다
+     (2026-10-19 신고). position: fixed라 어디에 두든 자리는 같다. -->
+<aside class="doc-drawer hidden" id="docDrawer" aria-label="문서 목록">
+  <div class="dd-head">
+    <input id="docSearch" type="search" placeholder="노트 찾기" autocapitalize="off" autocorrect="off">
+    <button class="icon-btn" id="docClose" title="닫기">✕</button>
+  </div>
+  <div class="dd-hint muted">끌어서 오른쪽에 놓으면 화면이 갈라집니다</div>
+  <div id="docList" class="dd-list"></div>
+</aside>
+<div class="dd-scrim hidden" id="docScrim"></div>
+
 <div class="read-tools" id="readTools" data-dock="tr">
   <span class="rt-grip" id="rtGrip" title="끌어서 옮기기" aria-hidden="true"></span>
   <span class="rt-sep" aria-hidden="true"></span>

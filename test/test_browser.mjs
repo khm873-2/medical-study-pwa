@@ -5822,6 +5822,7 @@ await run('퀴즈 도구막대', async () => {
   document.body.dataset.screen = 'quizScreen';
   await new Promise((r) => setTimeout(r, 40));
 
+  const app = await fetch('/js/app.js').then((r) => r.text());
   const bar = document.getElementById('quizTools');
   out.push({ name: '퀴즈 도구도 떠 있는 막대로 나왔다', ok: !!bar });
   out.push({ name: '화면에 고정된다(스크롤을 안 따라간다)',
@@ -5841,6 +5842,102 @@ await run('퀴즈 도구막대', async () => {
     out.push({ name: '타이머도 안 가린다', ok: pill.getBoundingClientRect().right <= br.left + 1 });
     pill.classList.add('hidden');
   }
+  // ── 선지별 해설도 낱말 단위로 긁히는가 (2026-10-19 신고) ──
+  // "정답쪽 내용 긁기로 하니까 아직도 한 줄 하이라이트 되고 있음"
+  // 글을 찍는 자리마다 따로 낱말을 깔다 보니 .opt-explain에서 빠졌다. 낱말(.tok)이 없으면
+  // 올가미가 집을 게 없어 줄 전체가 잡힌다. 퀴즈·모의고사는 같은 엔진이라 한 번에 낫는다.
+  {
+    const { Quiz } = await import('/js/quiz.js');
+    const qs = [{ num: 1, type: 'mc', q: '어느 것이 독성 대사물인가?',
+      opts: ['NAPQI와 글루타티온', '황산포합체와 알부민'], ans: 0,
+      explain: '해설 글', opt: ['정답. 독성 대사물과 해독 물질의 짝이다.', '황산포합체는 비독성이다.'] }];
+    let qz = null;
+    try {
+      qz = new Quiz({ examKey: 'tok-test', questions: qs, title: '검사',
+        onFinish() {}, onExit() {}, onRender() {}, meta: {} });
+      qz.start();
+      await new Promise((r) => setTimeout(r, 250));
+      qz.select(0);                       // 답을 골라야 선지별 해설이 붙는다
+      await new Promise((r) => setTimeout(r, 300));
+      const ex = document.querySelector('#optsContainer .opt-explain');
+      out.push({ name: '답을 고르면 선지별 해설이 붙는다', ok: !!ex,
+        detail: ex ? ex.textContent.slice(0, 20) : '없음' });
+      if (ex) {
+        const toks = ex.querySelectorAll('.tok');
+        out.push({ name: '**정답 해설도 낱말 단위로 깔린다**(줄째 잡히던 것)',
+          ok: toks.length >= 3, detail: `${toks.length}조각: ${[...toks].slice(0, 3).map((t) => t.textContent).join('|')}` });
+        out.push({ name: '낱말이 글을 안 바꾼다', ok: /독성 대사물과 해독 물질의 짝/.test(ex.textContent) });
+      }
+      const stem = document.querySelectorAll('#qtext .tok').length;
+      const opts = document.querySelectorAll('#optsContainer .opt-text .tok').length;
+      out.push({ name: '문제·선지도 그대로 낱말이 깔린다', ok: stem >= 3 && opts >= 3,
+        detail: `문제 ${stem} · 선지 ${opts}` });
+      out.push({ name: '한 곳에서 통째로 깐다(자리마다 빠뜨리지 않게)',
+        ok: /tokenizeTree\(this\.el\.card\)/.test(
+          await fetch('/js/quiz.js').then((r) => r.text())) });
+    } catch (e) {
+      out.push({ name: '선지 해설 낱말 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 120) });
+    } finally {
+      if (qz && qz.destroy) { try { qz.destroy(); } catch {} }
+      // destroy가 화면을 건드린다 — 뒤 검사가 보는 자리를 되돌려 둔다
+      document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+      document.getElementById('quizScreen').classList.remove('hidden');
+      document.body.dataset.screen = 'quizScreen';
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
+
+  // ── 퀴즈에서도 카드 만들기·다른 노트가 되는가 (2026-10-19 요청·신고) ──
+  {
+    const cardBtn = document.getElementById('toolCard');
+    out.push({ name: '**카드 만들기가 퀴즈 도구에도 있다**', ok: !!cardBtn });
+    if (cardBtn) {
+      const r = cardBtn.getBoundingClientRect();
+      out.push({ name: '눈에 보인다(막대 안에 있다)',
+        ok: r.width > 0 && r.height > 0 && !!cardBtn.closest('#quizTools'),
+        detail: `${Math.round(r.width)}×${Math.round(r.height)}` });
+      cardBtn.click();
+      await new Promise((rr) => setTimeout(rr, 120));
+      out.push({ name: '**눌러서 켜진다**', ok: cardBtn.classList.contains('active') });
+      cardBtn.click();
+      await new Promise((rr) => setTimeout(rr, 120));
+      out.push({ name: '다시 누르면 꺼진다', ok: !cardBtn.classList.contains('active') });
+      out.push({ name: '퀴즈 펜도 카드 만들기를 받는다',
+        ok: /onCard: \(box\) => makeCardsFromBox\(box, pen\)/.test(app) });
+      out.push({ name: '네모 친 자리로 출처를 가른다(문항이냐 옆 노트냐)',
+        ok: /function cardSourceAt/.test(app) && /currentExam\.path/.test(app) });
+      out.push({ name: '"이 노트의 카드"도 화면을 따라간다(퀴즈에선 그 시험)',
+        ok: /function cardScope/.test(app) && /quiz && currentExam/.test(app) });
+    }
+    // "다른 노트" — 서랍이 읽기 화면 **안**에 있으면 퀴즈에선 통째로 숨어 아무 일도 안 난다
+    const dd = document.getElementById('docDrawer');
+    out.push({ name: '노트 서랍이 화면(section) 밖에 있다',
+      ok: !!dd && !dd.closest('section'),
+      detail: dd && dd.closest('section') ? dd.closest('section').id : '밖' });
+    // 목록을 미리 심어둔다 — 서랍이 네트워크를 건드리면 뒤 검사의 fetch 스텁과 엉킨다
+    {
+      const d = await import('/js/db.js');
+      await d.kvSet('note_index_v2', [{ root: '02_Wiki', subject: '응급_중환자', notes: [
+        { name: '응급중환자_기본소생술BLS', path: '02_Wiki/응급_중환자/응급중환자_기본소생술BLS.md' }] }]);
+      await d.kvSet('note_index_at', Date.now());
+    }
+    document.getElementById('wikiDocs').click();
+    await new Promise((r) => setTimeout(r, 400));
+    const dr = dd.getBoundingClientRect();
+    out.push({ name: '**퀴즈에서 "다른 노트"를 누르면 실제로 보인다**',
+      ok: !dd.classList.contains('hidden') && dr.width > 50 && dr.height > 50
+        && getComputedStyle(dd).visibility !== 'hidden',
+      detail: `${Math.round(dr.width)}×${Math.round(dr.height)}` });
+    out.push({ name: '서랍에 노트가 실제로 뜬다',
+      ok: document.querySelectorAll('#docList .dd-item').length > 0
+        || document.querySelectorAll('#docList .dd-group').length > 0 });
+    document.getElementById('docClose').click();
+    await new Promise((r) => setTimeout(r, 150));
+    const d2 = await import('/js/db.js');
+    await d2.kvSet('note_index_v2', null);
+    await d2.kvSet('note_index_at', 0);
+  }
+
   out.push({ name: '머리줄에는 제목·점수만 남는다',
     ok: [...document.querySelectorAll('#quizScreen > header button')]
       .every((b) => !b.classList.contains('tool')),

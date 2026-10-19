@@ -65,6 +65,7 @@ export class Quiz {
     this.el = {
       screen: document.getElementById('quizScreen'),
       title: document.getElementById('quizTitle'),
+      card: document.getElementById('qcard'),      // 낱말 깔기를 여기 통째로 건다
       qnum: document.getElementById('qnum'),
       qsource: document.getElementById('qsource'),
       qtext: document.getElementById('qtext'),
@@ -199,6 +200,13 @@ export class Quiz {
     // 카드 안쪽 끝에 이어서 넘길 수 있는 버튼을 둔다(2026-10-09 피드백).
     this._renderInlineNext(answered);
 
+    // ⚠️ **한 곳에서 통째로** 낱말을 깐다. 전에는 글을 찍는 자리마다 따로 불렀는데,
+    //    선지별 해설(.opt-explain)에서 빠뜨려서 거기만 한 줄씩 통째로 잡혔다
+    //    (2026-10-19 신고: "정답쪽 내용 긁기로 하니까 아직도 한 줄 하이라이트").
+    //    새 글자를 어디에 더해도 저절로 따라오게 여기 하나만 둔다.
+    //    tokenizeTree는 이미 깐 자리를 건너뛰므로 두 번 불러도 안전하다.
+    //    퀴즈와 모의고사는 이 엔진 하나를 같이 쓰므로 여기서 둘 다 낫는다.
+    tokenizeTree(this.el.card);
     window.scrollTo({ top: 0, behavior: 'instant' });
     this.onRender(q, idx, { answered });
   }
@@ -452,8 +460,9 @@ export class Quiz {
     if (Array.isArray(q.opt) && q.opt.some(Boolean) && q.type !== 'mc') {
       this.el.expText.appendChild(mk('오답노트:\n' + q.opt.map((t, i) => (t ? `${CIRCLED[i]} ${t}` : '')).filter(Boolean).join('\n')));
     }
-    // 해설도 밑줄로 긁어서 질문할 수 있게 토큰화한다(2026-10-09 요청)
-    tokenizeTree(this.el.expText);
+    // 답을 고르면 선지별 해설(.opt-explain)이 새로 붙는다 — 문제 카드를 통째로 다시 깐다.
+    // 해설 상자만 깔면 선지 밑에 붙은 글이 빠져 거기만 한 줄씩 잡혔다(2026-10-19).
+    tokenizeTree(this.el.card);
     this.el.explain.style.display = 'block';
   }
 
