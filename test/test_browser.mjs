@@ -4239,6 +4239,106 @@ await run('짝 찾기 — 이름이 달라도', async () => {
   return out;
 });
 
+// ══════════ 그림 크게 보기 + 필기 (2026-10-20 요청) ══════════
+// "그림 눌러서 크게보기 및 필기 해서 저장 이런거 넣자."
+// 필기는 읽기 화면과 **같은 펜**(PenLayer)을 쓴다 — 애플펜슬의 중간 좌표와 필압을
+// 이미 받아 쓰는 그 엔진이다. 두 벌로 갈리면 한쪽만 좋아진다.
+await run('그림 크게 보기', async () => {
+  const out = [];
+  const PNG = await (async () => {
+    const cv = document.createElement('canvas'); cv.width = 400; cv.height = 300;
+    const x = cv.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 400, 300);
+    x.fillStyle = '#333'; x.fillRect(40, 40, 120, 60);
+    return cv.toDataURL();
+  })();
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('readScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'readScreen';
+  // 앞 검사가 열어둔 덮개가 남아 있으면 펜이 "UI 위"로 보고 손을 뗀다(_overUi)
+  document.querySelectorAll('.sheet, .ask-float, .more-menu, #docDrawer, #docScrim, #selPop, #cardFloat')
+    .forEach((x) => x.classList.add('hidden'));
+  const body = document.getElementById('readBody');
+  const keep = body.innerHTML;
+  body.innerHTML = `<p><img class="embed" src="${PNG}" alt="흐름도"></p>`;
+  await new Promise((r) => setTimeout(r, 250));
+
+  const im = body.querySelector('img');
+  im.click();
+  await new Promise((r) => setTimeout(r, 450));
+  const view = document.getElementById('imgView');
+  out.push({ name: '**그림을 누르면 크게 뜬다**', ok: !view.classList.contains('hidden') });
+  const big = document.getElementById('ivImg');
+  const rb = big.getBoundingClientRect();
+  out.push({ name: '화면을 크게 쓴다', ok: rb.width > 200 && rb.height > 150,
+    detail: `${Math.round(rb.width)}×${Math.round(rb.height)}` });
+  out.push({ name: '무슨 그림인지 적힌다',
+    ok: /흐름도/.test(document.getElementById('ivTitle').textContent) });
+
+  const cv = document.querySelector('#ivCard .penlayer');
+  out.push({ name: '**그림 위에 펜이 얹힌다**', ok: !!cv });
+  if (cv) {
+    const rc = cv.getBoundingClientRect();
+    out.push({ name: '펜 자리가 그림에 딱 맞는다(필기가 어긋나지 않게)',
+      ok: Math.abs(rc.width - rb.width) < 2 && Math.abs(rc.height - rb.height) < 2,
+      detail: `펜 ${Math.round(rc.width)}×${Math.round(rc.height)} · 그림 ${Math.round(rb.width)}×${Math.round(rb.height)}` });
+    out.push({ name: '긋는 동안 화면이 안 밀린다',
+      ok: getComputedStyle(cv).touchAction === 'none' });
+
+    // 애플펜슬처럼 **필압을 실어** 긋는다
+    const ev = (t, x, y, pr) => cv.dispatchEvent(new PointerEvent(t, {
+      pointerType: 'pen', pointerId: 21, isPrimary: true,
+      buttons: t === 'pointerup' ? 0 : 1, pressure: pr,
+      clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    ev('pointerdown', rb.left + 30, rb.top + 30, .3);
+    for (let i = 1; i <= 12; i++) ev('pointermove', rb.left + 30 + i * 9, rb.top + 30 + i * 5, .3 + i * .05);
+    ev('pointerup', rb.left + 138, rb.top + 90, 0);
+    // 획은 바로 확정되지 않는다 — 끊어 그은 것을 모으느라 SETTLE_MS(420ms) 기다린다
+    await new Promise((r) => setTimeout(r, 900));
+    const n = window.__ivStrokes ? window.__ivStrokes() : -1;
+    out.push({ name: '**펜으로 그으면 획이 남는다**', ok: n >= 1, detail: `${n}획` });
+
+    // 되돌리기·비우기
+    document.getElementById('ivUndo').click();
+    await new Promise((r) => setTimeout(r, 150));
+    out.push({ name: '한 획 되돌린다', ok: (window.__ivStrokes ? window.__ivStrokes() : 1) === n - 1 });
+  }
+
+  // 색을 고를 수 있다
+  const inks = document.querySelectorAll('#ivColors .iv-ink');
+  out.push({ name: '펜 색을 고른다', ok: inks.length >= 3, detail: `${inks.length}가지` });
+  if (inks.length > 1) {
+    inks[0].click();
+    await new Promise((r) => setTimeout(r, 100));
+    out.push({ name: '고른 색이 켜진 티가 난다', ok: inks[0].classList.contains('on') });
+  }
+
+  // 굽기 — 그림과 필기가 **한 장**으로
+  if (typeof window.__ivFlatten === 'function') {
+    const blob = await window.__ivFlatten();
+    out.push({ name: '**그림과 필기를 한 장으로 굽는다**',
+      ok: blob && blob.type === 'image/png' && blob.size > 500,
+      detail: blob ? `${blob.type} ${blob.size}B` : '없음' });
+    // 원본 크기 그대로여야 나중에 vault에서 봐도 또렷하다
+    const bmp = blob && self.createImageBitmap ? await createImageBitmap(blob) : null;
+    if (bmp) out.push({ name: '원본 크기 그대로 굽는다(흐릿해지지 않게)',
+      ok: bmp.width === 400 && bmp.height === 300, detail: `${bmp.width}×${bmp.height}` });
+  }
+
+  document.getElementById('ivClose').click();
+  await new Promise((r) => setTimeout(r, 150));
+  out.push({ name: '닫으면 사라진다', ok: view.classList.contains('hidden') });
+  out.push({ name: '닫으면 펜도 치운다(다음에 새로 얹게)',
+    ok: !document.querySelector('#ivCard .penlayer') });
+
+  // 카드 편집 중에는 가로채지 않는다 — 거기선 네모 치는 손짓이 먼저다
+  out.push({ name: '카드 편집·네모 치는 그림은 안 가로챈다',
+    ok: /cf-pick.*io-wrap|io-wrap/.test(
+      (await fetch('/js/app.js').then((r) => r.text())).match(/IV_HOSTS[\s\S]{0,600}/)[0]) });
+
+  body.innerHTML = keep;
+  return out;
+});
+
 // ══════════ 노트 서랍 — 새로 만든 노트가 저절로 뜨는가 (2026-10-18) ══════════
 // 실제 신고: 맥에서 암기법 3개를 만들었는데 아이패드에서 "노트 열기"에 13개만 떴다.
 // 목록이 두 겹으로 굳어 있었다 — IndexedDB의 note_index_v2(force 없이는 영영 안 읽음)와

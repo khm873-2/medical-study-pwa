@@ -3072,3 +3072,49 @@ li.task.done .task-box { color: var(--accent); }
 .subject-group > .exam-item:active { border-left-color: var(--accent); }
 /* 펼친 묶음은 머리를 아래 항목과 붙여 한 덩어리로 보이게 */
 .subject-group[open] > summary.subject-head { margin-bottom: 4px; }
+
+
+/* ── 그림 크게 보기 + 필기 (2026-10-20 요청) ──
+   흐름도·슬라이드는 작게 보면 글자가 안 보인다. 눌러서 화면 가득 띄우고 그 위에
+   바로 쓴다. 필기는 읽기 화면과 **같은 펜**을 쓴다(PenLayer) — 두 군데로 갈리면
+   한쪽만 좋아지고 다른 쪽은 늘 뒤처진다. */
+.img-view {
+  position: fixed; inset: 0; z-index: 240;
+  display: flex; flex-direction: column;
+  background: color-mix(in srgb, var(--bg) 94%, #000);
+  padding-top: env(safe-area-inset-top);
+}
+.img-view.hidden { display: none; }
+.iv-bar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--card);
+}
+.iv-title {
+  flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--sub);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.iv-tools { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.iv-btn {
+  min-height: 34px; padding: 6px 11px; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.iv-btn.on { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; }
+.iv-btn.primary { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; }
+.iv-btn:active { transform: scale(.96); }
+.iv-colors { display: flex; gap: 4px; }
+.iv-ink {
+  width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--border);
+  cursor: pointer; padding: 0;
+}
+.iv-ink.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--text); }
+/* 그림 자리 — 가득 채우되 비율은 지킨다. 필기 좌표가 그림과 어긋나지 않게
+   **캔버스는 그림 상자에 딱 맞춘다**(.iv-card가 그림 크기 그대로다). */
+.iv-stage {
+  flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center;
+  padding: 12px; overflow: auto;
+}
+.iv-card { position: relative; display: inline-block; line-height: 0; }
+.iv-card img { display: block; max-width: 100%; max-height: calc(100dvh - 120px); width: auto; height: auto; border-radius: 10px; background: #fff; }
+/* 펜으로 긋는 동안 화면이 밀리면 안 된다 */
+.img-view .penlayer { touch-action: none; }

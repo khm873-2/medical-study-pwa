@@ -20,3 +20,4 @@ secrets.*
 .DS_Store
 node_modules/
 __test_*.mjs
+.artifact-tmp/

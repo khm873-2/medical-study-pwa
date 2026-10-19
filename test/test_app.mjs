@@ -171,6 +171,40 @@ console.log(`  파싱: 시험 ${parsed}개 · 문항 ${qTotal}개 · 이미지 $
       vaultName(SRC.repeat(20)) === mermaidName(SRC.repeat(20)));
   }
 
+  // 흐름도가 **한눈에 들어오는 크기인가**를 재는 셈(2026-10-20)
+  {
+    let shapeOf = null, MAXD = 7, MAXN = 10;
+    try {
+      const src = readFileSync(`${VAULT}/.claude/scripts/render-mermaid.mjs`, 'utf8');
+      const m = src.match(/export function shapeOf\(src\) \{[\s\S]*?\n\}/);
+      if (m) shapeOf = new Function(`${m[0].replace('export ', '')}; return shapeOf;`)();
+      const d = src.match(/MAX_DEPTH = (\d+)/); if (d) MAXD = Number(d[1]);
+      const n = src.match(/MAX_NODES = (\d+)/); if (n) MAXN = Number(n[1]);
+    } catch { /* 아래에서 걸린다 */ }
+    check('흐름도 크기를 재는 셈이 있다', !!shapeOf);
+    if (shapeOf) {
+      check('한도가 7단계 · 마디 10개', MAXD === 7 && MAXN === 10, `${MAXD}단계 ${MAXN}개`);
+      const chain = 'flowchart TD\n' + 'ABCDEFGHIJKLM'.split('').slice(0, 12)
+        .map((c, i, a) => (i < a.length - 1 ? `  ${c} --> ${a[i + 1]}` : '')).filter(Boolean).join('\n');
+      const deep = shapeOf(chain);
+      check('**긴 사슬의 깊이를 잰다**', deep.depth === 12 && deep.nodes === 12,
+        `마디 ${deep.nodes} 깊이 ${deep.depth}`);
+      check('넘치는 것을 넘친다고 본다', deep.depth > MAXD && deep.nodes > MAXN);
+      const wide = shapeOf('flowchart TD\n  A --> B\n  A --> C\n  A --> D\n  B --> E\n  C --> E\n  D --> E');
+      check('**넓게 편 것은 깊이가 얕다**(마디가 같아도)', wide.depth === 3 && wide.nodes === 5,
+        `마디 ${wide.nodes} 깊이 ${wide.depth}`);
+      check('넓은 것은 한도 안', wide.depth <= MAXD && wide.nodes <= MAXN);
+      check('가지 글(-->|예|)이 깊이를 안 늘린다',
+        shapeOf('flowchart TD\n  A -->|"예"| B\n  B -->|"아니오"| C').depth === 3);
+      check('점선(-.->)은 곁다리라 깊이로 안 센다',
+        shapeOf('flowchart TD\n  A --> B\n  B -.-> Z').depth === 2);
+      check('classDef·class 줄은 마디로 안 센다',
+        shapeOf('flowchart TD\n  A --> B\n  classDef x fill:#fff\n  class A,B x').nodes === 2);
+      check('되돌아오는 고리가 있어도 안 멈춘다',
+        shapeOf('flowchart TD\n  A --> B\n  B --> C\n  C --> A').depth >= 3);
+    }
+  }
+
   // 글을 그릴 때 코드 덩어리가 아니라 **그림 자리**가 나와야 한다
   const html = renderMarkdown('# 제목\n\n```mermaid\n' + SRC + '\n```\n\n뒷글\n');
   check('**흐름도가 그림으로 들어간다**(코드 덩어리로 안 쏟아진다)',

@@ -9303,3 +9303,133 @@ function hideSplash() {
 
 // 어떤 이유로든 초기화가 멈추면 3초 뒤엔 무조건 치운다
 setTimeout(hideSplash, 3000);
+
+// ═══════════ 그림 크게 보기 + 필기 (2026-10-20 요청) ═══════════
+//
+// "그림 눌러서 크게보기 및 필기 해서 저장 이런거 넣자. 필기는 애플 기본 필기방식을
+//  사용해서 필기감 좋게하고"
+//
+// 필기는 **읽기 화면과 같은 펜**(PenLayer)을 쓴다. 그 펜은 이미 애플펜슬이 보내는
+// 중간 좌표(getCoalescedEvents)를 다 받아 쓰고, 필압(e.pressure)으로 굵기를 바꾸며,
+// 화면 한 장에 한 번만 그린다. 여기서 따로 만들면 그 공이 두 군데로 갈려서 한쪽만
+// 좋아진다. (웹에서 PencilKit 자체를 부를 길은 없다 — 같은 입력을 같은 방식으로 받는다.)
+let ivPen = null;
+let ivSrc = null;        // 지금 띄운 그림 {el, name}
+const IV_INKS = ['#e8453c', '#2563eb', '#16a34a', '#f59e0b', '#111827'];
+
+function openImgView(im) {
+  if (!im || !im.currentSrc && !im.src) return;
+  ivSrc = { el: im, name: im.dataset.embed || im.alt || '그림' };
+  const view = document.getElementById('imgView');
+  const big = document.getElementById('ivImg');
+  big.src = im.currentSrc || im.src;
+  big.alt = ivSrc.name;
+  document.getElementById('ivTitle').textContent = ivSrc.name;
+  view.classList.remove('hidden');
+  // 그림이 자리를 잡은 **뒤에** 펜을 얹는다 — 먼저 얹으면 캔버스가 0×0으로 잡힌다
+  const put = () => {
+    if (!ivPen) {
+      ivPen = new PenLayer(document.getElementById('ivCard'), {});
+      ivPen.setTool('write');
+    }
+    ivPen.load(null);
+    ivPen.resize();
+    paintIvTools();
+  };
+  if (big.complete) requestAnimationFrame(put);
+  else big.onload = () => requestAnimationFrame(put);
+}
+
+function closeImgView() {
+  document.getElementById('imgView').classList.add('hidden');
+  if (ivPen) { ivPen.destroy(); ivPen = null; }
+  ivSrc = null;
+}
+
+function paintIvTools() {
+  const w = ivPen && ivPen.tool === 'write';
+  document.getElementById('ivPen').classList.toggle('on', w);
+  document.getElementById('ivErase').classList.toggle('on', !!ivPen && ivPen.tool === 'erase');
+  const box = document.getElementById('ivColors');
+  if (box.children.length) {
+    [...box.children].forEach((b) => b.classList.toggle('on', ivPen && b.dataset.ink === ivPen.color));
+    return;
+  }
+  for (const ink of IV_INKS) {
+    const b = document.createElement('button');
+    b.className = 'iv-ink';
+    b.dataset.ink = ink;
+    b.style.background = ink;
+    b.title = '펜 색';
+    b.onclick = () => { if (ivPen) { ivPen.color = ink; ivPen.setTool('write'); } paintIvTools(); };
+    box.appendChild(b);
+  }
+  paintIvTools();
+}
+
+/** 그림 + 필기를 한 장으로 굽는다. 필기가 없으면 그림만. */
+async function ivFlatten() {
+  const big = document.getElementById('ivImg');
+  const cv = document.createElement('canvas');
+  const w = big.naturalWidth || big.width;
+  const h = big.naturalHeight || big.height;
+  cv.width = w; cv.height = h;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, w, h);
+  g.drawImage(big, 0, 0, w, h);
+  if (ivPen && !ivPen.isEmpty) {
+    // 필기는 **화면 크기**로 그려져 있다 — 원본 크기에 맞춰 늘려 얹는다
+    const r = big.getBoundingClientRect();
+    g.drawImage(ivPen.canvas, 0, 0, r.width * (ivPen._dpr || 1), r.height * (ivPen._dpr || 1), 0, 0, w, h);
+  }
+  return new Promise((res) => cv.toBlob(res, 'image/png'));
+}
+
+{
+  const g = (id) => document.getElementById(id);
+  g('ivClose').onclick = closeImgView;
+  g('ivPen').onclick = () => { if (ivPen) ivPen.setTool('write'); paintIvTools(); };
+  g('ivErase').onclick = () => { if (ivPen) ivPen.setTool('erase'); paintIvTools(); };
+  g('ivUndo').onclick = () => { if (ivPen) ivPen.undo(); };
+  g('ivClear').onclick = () => { if (ivPen) ivPen.clear(); };
+  g('ivSave').onclick = async () => {
+    try {
+      const blob = await ivFlatten();
+      openScrap();                                   // 모아두기 창을 열고
+      const ok = await addShot(blob);                // 그림으로 담는다
+      toast(ok ? '모아두기에 담았습니다 — 내용을 적고 올리면 vault로 갑니다.' : '담지 못했습니다.');
+      if (ok) closeImgView();
+    } catch (e) { toast(`저장하지 못했습니다: ${e.message}`); }
+  };
+  g('ivCopy').onclick = async () => {
+    try {
+      const blob = await ivFlatten();
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      toast('복사했습니다.');
+    } catch (e) { toast(`복사하지 못했습니다: ${e.message}`); }
+  };
+}
+
+/**
+ * 글 속 그림을 눌러 크게 본다.
+ *
+ * 한 군데(document)에서 받는다 — 그림이 생기는 길이 여럿이라(노트·카드·퀴즈·옆칸)
+ * 길마다 손잡이를 걸면 반드시 하나를 빠뜨린다. 카드 편집 중에는 가로채지 않는다
+ * (거기선 그림에 네모를 치는 손짓이 먼저다).
+ */
+const IV_HOSTS = '#readBody, #wikiBody, #wiki2Body, #qimgContainer, .card-context, .peek-body';
+document.addEventListener('click', (e) => {
+  const im = e.target.closest && e.target.closest('img');
+  if (!im || !im.closest(IV_HOSTS)) return;
+  if (im.closest('.cf-pick') || im.closest('.io-wrap')) return;   // 카드 편집·네모 치기 중
+  if (!document.getElementById('imgView').classList.contains('hidden')) return;
+  e.preventDefault();
+  openImgView(im);
+});
+window.__openImgView = (im) => openImgView(im);
+window.__ivStrokes = () => (ivPen ? ivPen.strokes.length : -1);   // 검사가 획 수를 센다
+window.__ivFlatten = () => ivFlatten();
+window.__ivTool = () => (ivPen ? ivPen.tool : '-');
+window.__ivCur = () => (ivPen ? String(!!ivPen._cur) : '-');
+window.__ivW = () => (ivPen ? `writing=${ivPen.writing} pend=${(ivPen._pending||[]).length}` : '-');
