@@ -9468,3 +9468,61 @@ window.addEventListener('note-updated', async (e) => {
   if (onWiki2) renderWiki2();
   capToast('노트가 맥에서 바뀌어 새로 불러왔습니다', 1800);
 });
+
+// ═══════════ 섹션 고르기 — 넓게 펴서 읽히게 (2026-10-20 요청) ═══════════
+//
+// "다른 문서? 목차? 나오는 기능 좋은데 좀 옆으로 길게해서 내용 파악이 더 되게하자"
+//
+// 네이티브 <select>의 목록은 **그 select의 폭**을 따라간다. 옆칸이 360px이라
+// "1. xABCDE의 X는 eXsanguination으로, 대량 외부출혈 제…"에서 잘렸다 — 제목이
+// 길수록 정작 뭐가 다른지가 안 보인다.
+//
+// <select>는 **그대로 둔다**(값·change 이벤트를 쓰는 코드가 여럿이다). 누를 때만
+// 가로채서 넓은 목록을 대신 띄우고, 고르면 select에 값을 넣고 change를 쏜다.
+function openSecSheet(sel) {
+  const old = document.getElementById('secSheet');
+  if (old) old.remove();
+  const box = document.createElement('div');
+  box.id = 'secSheet';
+  box.className = 'sec-sheet';
+  const scrim = document.createElement('div');
+  scrim.className = 'sec-scrim';
+  const list = document.createElement('div');
+  list.className = 'sec-list';
+  [...sel.options].forEach((o, i) => {
+    const b = document.createElement('button');
+    b.className = `sec-row${String(i) === sel.value ? ' on' : ''}`;
+    const n = document.createElement('span');
+    n.className = 'sec-n';
+    n.textContent = String(i + 1);
+    const t = document.createElement('span');
+    t.className = 'sec-t';
+    t.textContent = o.textContent;          // **줄여 쓰지 않는다** — 두 줄로 흘려 보여준다
+    b.append(n, t);
+    b.onclick = () => {
+      sel.value = String(i);
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      box.remove();
+    };
+    list.appendChild(b);
+  });
+  box.append(scrim, list);
+  document.body.appendChild(box);
+  scrim.onclick = () => box.remove();
+  // 지금 보는 것이 눈에 들어오게
+  requestAnimationFrame(() => {
+    const on = list.querySelector('.sec-row.on');
+    if (on) on.scrollIntoView({ block: 'center' });
+  });
+}
+
+for (const id of ['wikiSecPick', 'wiki2SecPick']) {
+  const sel = document.getElementById(id);
+  if (!sel) continue;
+  // pointerdown에서 막아야 아이패드가 제 목록을 안 띄운다(click은 이미 늦다)
+  sel.addEventListener('pointerdown', (e) => { e.preventDefault(); openSecSheet(sel); });
+  sel.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSecSheet(sel); }
+  });
+}
+window.__openSecSheet = (id) => openSecSheet(document.getElementById(id));

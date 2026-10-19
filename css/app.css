@@ -3131,3 +3131,34 @@ li.task.done .task-box { color: var(--accent); }
 .iv-card img { display: block; max-width: 100%; max-height: calc(100dvh - 120px); width: auto; height: auto; border-radius: 10px; background: #fff; }
 /* 펜으로 긋는 동안 화면이 밀리면 안 된다 */
 .img-view .penlayer { touch-action: none; }
+
+
+/* ── 섹션 고르기 목록 (2026-10-20 요청) ──
+   네이티브 <select> 목록은 그 select의 폭을 따라가서, 옆칸(360px)에서는 제목이
+   "…대량 외부출혈 제…"처럼 잘렸다. 제목이 길수록 뭐가 다른지가 안 보인다.
+   화면 가운데에 **넓게** 펴고, 긴 제목은 줄여 쓰지 않고 두 줄로 흘린다. */
+.sec-sheet { position: fixed; inset: 0; z-index: 250; display: flex;
+  align-items: center; justify-content: center; padding: 24px; }
+.sec-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, .45); }
+.sec-list {
+  position: relative; width: min(720px, 94vw); max-height: min(70vh, 560px);
+  overflow-y: auto; overscroll-behavior: contain;
+  background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: var(--sh-3); padding: 6px;
+}
+/* 글씨는 본문보다 **한 치수 크게**(1.3배) — 목록은 훑어보는 곳이라
+   작게 넣어 많이 보여주는 것보다 한눈에 읽히는 쪽이 낫다(2026-10-20 요청). */
+.sec-row {
+  display: flex; align-items: flex-start; gap: 12px; width: 100%;
+  padding: 14px 16px; border: none; border-radius: 10px; background: none;
+  color: var(--text); font-family: inherit; font-size: 19px; line-height: 1.45;
+  text-align: left; cursor: pointer;
+}
+.sec-row + .sec-row { border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+.sec-row:hover { background: var(--badge-bg); }
+.sec-row.on { background: color-mix(in srgb, var(--accent) 16%, transparent); font-weight: 700; }
+.sec-n {
+  flex: 0 0 auto; min-width: 28px; text-align: right;
+  color: var(--sub); font-size: 16px; font-variant-numeric: tabular-nums; padding-top: 2px;
+}
+.sec-t { flex: 1 1 auto; min-width: 0; }

@@ -397,6 +397,70 @@ await run('목차 버튼', async () => {
 });
 
 // ══════════ 5c. 위키 섹션 드롭다운 ══════════
+// ══════════ 섹션 고르기 — 넓게 펴서 읽히는가 (2026-10-20 요청) ══════════
+// "다른 문서? 목차? 나오는 기능 좋은데 좀 옆으로 길게해서 내용 파악이 더 되게하자"
+// 네이티브 <select> 목록은 그 select 폭을 따라가서 긴 제목이 "…대량 외부출혈 제…"로
+// 잘렸다. 옆칸은 360px이라 제목이 길수록 뭐가 다른지가 안 보인다.
+await run('섹션 고르기 목록', async () => {
+  const out = [];
+  document.querySelectorAll('section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'quizScreen';
+  document.getElementById('wikiPanel').classList.remove('hidden');
+  const sel = document.getElementById('wikiSecPick');
+  sel.innerHTML = '';
+  const LONG = '1. xABCDE의 X는 eXsanguination으로, 대량 외부출혈 제어가 A보다 앞 또는 동시에 이루어진다';
+  [LONG, '2. ATLS 3대 철학은 ①치명적 위협 우선 ②진단 전 처치 ③병력 청취는 나중에',
+    '3. 외상사망 3봉분포는 즉사·수분 내·수 시간 내'].forEach((t, i) => {
+    const o = document.createElement('option'); o.value = String(i); o.textContent = t;
+    sel.appendChild(o);
+  });
+  sel.value = '1';
+  const panel = document.getElementById('wikiPanel').getBoundingClientRect();
+
+  window.__openSecSheet('wikiSecPick');
+  await new Promise((r) => setTimeout(r, 250));
+  const sheet = document.getElementById('secSheet');
+  out.push({ name: '**목록이 뜬다**', ok: !!sheet });
+  if (!sheet) return out;
+  const list = sheet.querySelector('.sec-list');
+  const rl = list.getBoundingClientRect();
+  out.push({ name: '**옆칸보다 훨씬 넓다**(제목이 안 잘리게)',
+    ok: rl.width > Math.max(panel.width * 1.4, 520),
+    detail: `목록 ${Math.round(rl.width)}px · 옆칸 ${Math.round(panel.width)}px` });
+
+  const rows = [...sheet.querySelectorAll('.sec-row')];
+  out.push({ name: '토막마다 한 줄씩 나온다', ok: rows.length === 3, detail: `${rows.length}개` });
+  const long = rows[0];
+  out.push({ name: '**긴 제목을 줄여 쓰지 않는다**',
+    ok: long.querySelector('.sec-t').textContent === LONG });
+  out.push({ name: '잘리지 않고 흘러서 다 보인다',
+    ok: long.scrollWidth <= long.clientWidth + 2
+      && getComputedStyle(long.querySelector('.sec-t')).textOverflow !== 'ellipsis',
+    detail: `글 ${long.scrollWidth} · 칸 ${long.clientWidth}` });
+  out.push({ name: '읽기 좋은 크기다(본문보다 큼)',
+    ok: parseFloat(getComputedStyle(long).fontSize) >= 17,
+    detail: getComputedStyle(long).fontSize });
+  out.push({ name: '지금 보는 토막이 표시된다',
+    ok: rows[1].classList.contains('on') });
+  out.push({ name: '누를 만한 크기다',
+    ok: long.getBoundingClientRect().height >= 40,
+    detail: `${Math.round(long.getBoundingClientRect().height)}px` });
+
+  // 고르면 select에 값이 들어가고 change가 간다 — 기존 코드가 그걸 듣는다
+  let got = -1;
+  sel.addEventListener('change', (e) => { got = Number(e.target.value); }, { once: true });
+  rows[2].click();
+  await new Promise((r) => setTimeout(r, 150));
+  out.push({ name: '**고르면 그 토막으로 간다**', ok: got === 2 && sel.value === '2',
+    detail: `value=${sel.value}` });
+  out.push({ name: '고르면 목록이 닫힌다', ok: !document.getElementById('secSheet') });
+
+  sel.innerHTML = '';
+  document.getElementById('wikiPanel').classList.add('hidden');
+  return out;
+});
+
 await run('위키 드롭다운', () => {
   const out = [];
   document.querySelectorAll('section').forEach((s) => s.classList.add('hidden'));
