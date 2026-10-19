@@ -243,9 +243,21 @@ export function cleanTitle(raw) {
  * 문항의 이미지 경로를 vault 기준 경로로 바꾼다.
  * HTML 안에서는 "../../attachments/foo.png"처럼 해당 html 파일 기준 상대경로다.
  */
+const IMG_DIR = 'attachments/';
+
 export function imagePaths(q) {
   const raw = q.imgs && q.imgs.length ? q.imgs : q.img ? [q.img] : [];
-  return raw.map((p) => p.replace(/^(\.\.\/)+/, ''));
+  return raw.map((p) => {
+    // `../../attachments/x.png` 처럼 적힌 것 — 올라가는 부분만 뗀다
+    let s = String(p || '').trim().replace(/^(\.\.?\/)+/, '');
+    // ⚠️ **폴더 없이 이름만** 적힌 것도 있다(vault 실측 45건: "응급중환자…NAPQI.png").
+    //    그러면 저장소 꼭대기에서 찾다 못 찾고 "이미지를 불러오지 못했습니다"가 떴다
+    //    — 옆 노트에서는 같은 그림이 멀쩡히 보이는데(2026-10-19 신고). vault에서 그림이
+    //    사는 곳은 attachments 한 군데뿐이니 이름만 있으면 거기로 본다.
+    if (s && !s.includes('/')) s = IMG_DIR + s;
+    // 한글 이름은 자소 분리형(NFD)으로 적혀 올 수 있다 — GitHub은 NFC로 답한다
+    return s.normalize('NFC');
+  });
 }
 
 /**

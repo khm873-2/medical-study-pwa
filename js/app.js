@@ -1196,6 +1196,7 @@ function ensurePen() {
   pen = new PenLayer(host, {
     onSelect: handleSelect,
     onCapture: handleCapture,
+    onCard: (box) => makeCardsFromBox(box, pen),
     onTap: handlePenTap,
     onChange: () => { if (quiz) penStrokes[quiz.qIndex] = pen.serialize(); },
   });
@@ -4046,7 +4047,7 @@ function ensureReaderPen() {
   if (readerPen) return;
   readerPen = new PenLayer(document.getElementById('readCard'), {
     onSelect: (text, info) => { if (text) openAskFromReader(text, info); },
-    onCard: (box) => makeCardsFromBox(box),
+    onCard: (box) => makeCardsFromBox(box, readerPen),
     onCapture: (box) => captureFromPen(readerPen, box),
   });
   window.__penForTest = readerPen;     // 미리보기 동작을 테스트가 들여다본다
@@ -4063,29 +4064,86 @@ function readerCardMode(on) { setTool(on ? 'card' : 'off'); }
 // 카드 버튼 = **네모 치기 모드만** 켠다(2026-10-13). 팝업은 네모를 쳐서 후보가
 // 생겼을 때만 뜬다 — 누르자마자 창이 뜨면 화면만 가린다.
 // 카드를 보고 지우는 건 "카드" 메뉴(readCards)가 따로 맡는다.
-document.getElementById('readMakeCard').onclick = () => setTool(penTool === 'card' ? 'off' : 'card');
+// 카드 만들기 — 읽기 화면과 **퀴즈·모의고사 화면 둘 다**에 둔다(2026-10-19 요청:
+// "퀴즈 만들때도 옆에 보통 노트를 띄워놓고 하니까 카드만들기 메뉴가 여기도 있으면").
+// 길게 누르면 카드 관리로 — 퀴즈 화면에는 더보기 메뉴가 없어서 들어갈 길이 없었다.
+for (const id of ['readMakeCard', 'toolCard']) {
+  const b = document.getElementById(id);
+  if (!b) continue;
+  b.onclick = () => setTool(penTool === 'card' ? 'off' : 'card');
+  longPress(b, () => openCardManager());
+}
 document.getElementById('readCapture').onclick = () => setTool(penTool === 'shot' ? 'off' : 'shot');
 document.getElementById('readShot').onclick = () => setTool(penTool === 'shot' ? 'off' : 'shot');
 
-function makeCardsFromBox(box) {
-  if (!reader) return;
-  const r = readerPen.canvas.getBoundingClientRect();
+/**
+ * 네모 친 자리로 카드 후보를 만든다 — **어디에 쳤느냐가 출처를 정한다**.
+ *
+ * 퀴즈·모의고사 화면에서는 보통 옆에 노트를 띄워놓고 푼다. 그래서 네모가 문항 위에
+ * 떨어질 수도, 옆 노트 위에 떨어질 수도 있다. 둘은 **다른 데 모여야** 한다 —
+ * 문항에서 만든 카드는 그 시험 쪽에, 노트에서 만든 카드는 그 노트 쪽에
+ * (2026-10-19 요청: "당연히 그 페이지쪽에 모아두고 나중에 정리하면 넣는구조로").
+ */
+function makeCardsFromBox(box, layer) {
+  const p = layer || readerPen;
+  if (!p || !p.canvas) return;
+  const r = p.canvas.getBoundingClientRect();
   // 펜 좌표(캔버스 기준) → 뷰포트 좌표
   const vp = { l: r.left + box.l, t: r.top + box.t, r: r.left + box.r, b: r.top + box.b };
-  const sec = reader.note.sections[reader.secIdx];
-  const cards = cardsFromBox(document.getElementById('readBody'), vp, {
-    notePath: reader.note.path,
-    noteTitle: reader.note.title,
-    heading: sec ? sec.heading : '',
-  });
+  const src = cardSourceAt(vp);
+  if (!src) { capToast('카드로 만들 글이 없습니다', 2000); return; }
+  const cards = cardsFromBox(src.root, vp, src.meta);
   if (!cards.length) {
     capToast('그 범위에 강조된 말이 없습니다 — **굵게**·==하이라이트== 를 덮어 보세요', 2600);
     return;
   }
   readerCardMode(false);
+  setTool('select', { quiet: true });        // 한 장 만들면 도구를 놓는다(퀴즈 풀이로 돌아가게)
   // ⚠️ 여기서 저장하지 않는다 — 네모를 치는 족족 카드가 쌓이면 쓸 만한 것만 고를
   //    길이 없다(2026-10-13 요청). 창에 **후보**로 띄우고 "＋ 추가"를 눌러야 들어간다.
   openCardFloat(cards);
+}
+
+/** 네모가 걸친 자리의 글과 그 출처. 겹치는 넓이가 가장 큰 쪽을 고른다. */
+function cardSourceAt(vp) {
+  const over = (el) => {
+    if (!el || !el.isConnected) return 0;
+    const b = el.getBoundingClientRect();
+    if (!b.width || !b.height) return 0;
+    const w = Math.min(vp.r, b.right) - Math.max(vp.l, b.left);
+    const h = Math.min(vp.b, b.bottom) - Math.max(vp.t, b.top);
+    return w > 0 && h > 0 ? w * h : 0;
+  };
+  const cand = [];
+  // ① 읽고 있는 노트
+  if (reader && reader.note) {
+    const sec = reader.note.sections[reader.secIdx];
+    cand.push({ root: document.getElementById('readBody'),
+      meta: { notePath: reader.note.path, noteTitle: reader.note.title,
+        heading: sec ? sec.heading : '' } });
+  }
+  // ② 문제 옆에 띄워둔 노트 — 여기서 만든 카드는 **그 노트** 것이다
+  if (wikiState && wikiState.refs) {
+    const w = wikiState.refs;
+    const sec = w.sections[wikiState.secIdx];
+    cand.push({ root: document.getElementById('wikiBody'),
+      meta: { notePath: w.notePath || '', noteTitle: w.noteName || '',
+        heading: sec ? sec.heading : '' } });
+  }
+  // ③ 문항 자체 — 그 시험 쪽에 모인다(모아두기가 쓰는 맥락과 같은 기준)
+  if (quiz && currentExam) {
+    const q = quiz.all[quiz.qIndex];
+    cand.push({ root: document.getElementById('qcard'),
+      meta: { notePath: currentExam.path, noteTitle: currentExam.title,
+        heading: q ? `${q.num}번` : '' } });
+  }
+  let best = null;
+  let area = 0;
+  for (const c of cand) {
+    const a = over(c.root);
+    if (a > area) { area = a; best = c; }
+  }
+  return area > 0 ? best : null;
 }
 
 // ---- 모아두기: 공부하다 알게 된 것 (2026-10-12) ----
@@ -4595,11 +4653,29 @@ function closeCardFloat() {
 }
 
 /** 이 노트에 저장된 카드를 다시 읽고 전체를 그린다. */
+/**
+ * "이 노트의 카드"가 가리키는 곳 — 화면마다 다르다.
+ *
+ * 전에는 `reader.note.path`만 봤다. 퀴즈·모의고사 화면에는 reader가 없어서 그 쪽에서
+ * 카드 관리를 열면 **늘 비어 있었다**. 지금 만든 후보가 있으면 그게 기준이고,
+ * 없으면 지금 보고 있는 것(노트 → 시험) 기준이다(2026-10-19).
+ */
+function cardScope() {
+  const made = cfDeck && cfDeck.cards.length ? cfDeck.cards[0] : null;
+  if (made && made.notePath) return { path: made.notePath, title: made.noteTitle || '' };
+  if (reader && reader.note) return { path: reader.note.path, title: reader.note.title };
+  if (quiz && currentExam) return { path: currentExam.path, title: currentExam.title };
+  if (wikiState && wikiState.refs && wikiState.refs.notePath) {
+    return { path: wikiState.refs.notePath, title: wikiState.refs.noteName || '' };
+  }
+  return { path: '', title: '' };
+}
+
 async function refreshCardFloat() {
   try {
     const all = await allCards();
-    const path = reader && reader.note ? reader.note.path : '';
-    cfSaved = all.filter((c) => c.notePath === path);
+    const { path } = cardScope();
+    cfSaved = path ? all.filter((c) => c.notePath === path) : [];
   } catch { cfSaved = []; }
   renderCardFloat();
 }
@@ -5061,8 +5137,7 @@ function renderCfNew() {
 function renderCfList() {
   const list = document.getElementById('cfList');
   list.innerHTML = '';
-  document.getElementById('cfStatus').textContent =
-    reader && reader.note ? reader.note.title : '';
+  document.getElementById('cfStatus').textContent = cardScope().title;
   if (!cfSaved.length) {
     list.appendChild(muted('이 노트에서 만든 카드가 아직 없습니다.'));
     document.getElementById('cfStudy').disabled = true;
@@ -5231,7 +5306,9 @@ function initCardFloat() {
     if (!cfSaved.length) return;
     const cards = cfSaved.slice();
     closeCardFloat();
-    startDeck(cards, reader ? reader.note.title : '카드', { backTo: 'reader' });
+    // 풀던 자리로 돌아가야 한다 — 퀴즈를 풀다 외우고 나서 목록으로 튕기면 안 된다
+    const onQuiz = document.body.dataset.screen === 'quizScreen';
+    startDeck(cards, cardScope().title || '카드', { backTo: onQuiz ? 'quiz' : 'reader' });
   };
 }
 
@@ -5304,7 +5381,7 @@ const TOOL_BTNS = [
   ['select', 'readSelect', 'toolSelect'],
   ['write', 'readPen', 'toolWrite'],
   ['erase', 'readPen', 'toolErase'],
-  ['card', 'readMakeCard', null],
+  ['card', 'readMakeCard', 'toolCard'],
   ['shot', 'readShot', 'toolCapture'],
 ];
 
@@ -5331,6 +5408,7 @@ function setTool(tool, { quiet = false } = {}) {
   on('toolWrite', penTool === 'write');
   on('toolErase', penTool === 'erase');
   on('readMakeCard', penTool === 'card');
+  on('toolCard', penTool === 'card');
   on('readShot', penTool === 'shot');
   on('readCapture', penTool === 'shot');
   on('toolCapture', penTool === 'shot');
@@ -6148,6 +6226,7 @@ document.getElementById('cardBack').onclick = () => {
   cardDeck = null;
   // 읽다가 만든 카드면 읽던 자리로 돌아간다
   if (back === 'reader' && reader) { show('readScreen'); if (readerPen) requestAnimationFrame(() => readerPen.resize()); }
+  else if (back === 'quiz' && quiz) { show('quizScreen'); if (pen) requestAnimationFrame(() => pen.resize()); }
   else if (back === 'deck') openDeck();
   else show('listScreen');
 };
@@ -6176,6 +6255,9 @@ function finishDeck() {
   if (back === 'reader' && reader) {
     show('readScreen');
     if (readerPen) requestAnimationFrame(() => readerPen.resize());
+  } else if (back === 'quiz' && quiz) {
+    show('quizScreen');
+    if (pen) requestAnimationFrame(() => pen.resize());
   } else if (back === 'deck') openDeck();
   else show('listScreen');
 }

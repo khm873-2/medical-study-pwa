@@ -103,6 +103,45 @@ for (const d of readdirSync(`${VAULT}/06_모의고사`)) {
 check('50개 시험 전부 파싱', parsed === 50, `실제 ${parsed}`);
 console.log(`  파싱: 시험 ${parsed}개 · 문항 ${qTotal}개 · 이미지 ${imgCount}장`);
 
+// --- 문제 그림이 **실제로 있는 파일**을 가리키는가 (2026-10-19 신고) ---
+// "퀴즈 풀 때 왜 이미지 못불러옴?" — 옆 노트에선 같은 그림이 멀쩡히 보이는데 문항에서만
+// 안 떴다. 퀴즈 HTML 45건이 폴더 없이 **이름만** 적어뒀고(`"img": "응급중환자….png"`),
+// 그러면 저장소 꼭대기에서 찾다 못 찾는다. 경로를 만드는 것만 보면 안 된다 —
+// **그 자리에 파일이 있는지**까지 봐야 이런 게 걸린다.
+{
+  const have = new Set();
+  try {
+    for (const f of readdirSync(`${VAULT}/attachments`)) have.add(f.normalize('NFC'));
+  } catch { /* 첨부 폴더가 없으면 아래에서 걸린다 */ }
+  check('vault에 그림 보관함이 있다', have.size > 0, `${have.size}개`);
+  let seen = 0;
+  const missing = [];
+  for (const root of ['06_모의고사', '05_퀴즈']) {
+    let dirs;
+    try { dirs = readdirSync(`${VAULT}/${root}`); } catch { continue; }
+    for (const d of dirs) {
+      let files;
+      try { files = readdirSync(`${VAULT}/${root}/${d}`).filter((f) => f.endsWith('.html')); }
+      catch { continue; }
+      for (const f of files) {
+        let qs;
+        try { qs = parseExamHtml(readFileSync(`${VAULT}/${root}/${d}/${f}`, 'utf8')).questions; }
+        catch { continue; }
+        for (const q of qs) {
+          for (const p of imagePaths(q)) {
+            seen++;
+            if (!p.startsWith('attachments/')) { missing.push(`${f} #${q.num}: 경로가 이상 — ${p}`); continue; }
+            if (!have.has(p.slice('attachments/'.length))) missing.push(`${f} #${q.num}: 없음 — ${p}`);
+          }
+        }
+      }
+    }
+  }
+  check('**문제 그림이 전부 실제 파일을 가리킨다**', missing.length === 0,
+    `${missing.length}/${seen}장 어긋남 — ${missing.slice(0, 3).join(' / ')}`);
+  console.log(`  문제 그림 ${seen}장 — vault에서 전부 찾음${missing.length ? ` (못 찾음 ${missing.length})` : ''}`);
+}
+
 // --- parser: 파일명 유틸 ---
 check('prettyExamName', prettyExamName('1012_기본소생술BLS_모의고사.html') === '기본소생술BLS',
   prettyExamName('1012_기본소생술BLS_모의고사.html'));
