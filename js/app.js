@@ -1491,6 +1491,9 @@ async function loadWiki(q, answered) {
  */
 let wikiHome = null;        // 원래 걸려 있던 연계노트 — ↩로 돌아간다
 
+window.__openWikiNote = (note) => openNoteInWikiPanel(note);   // 검사가 옆 패널을 세우는 통로
+window.__resetWiki = () => { wikiState = null; wikiHome = null; closeWiki(); };
+
 async function openNoteInWikiPanel(note) {
   if (!wikiHome && wikiState) wikiHome = wikiState;
   wikiState = {
@@ -3370,6 +3373,17 @@ function initDocDrop() {
 
 document.getElementById('readDocs').onclick = openDocDrawer;
 document.getElementById('wikiDocs').onclick = openDocDrawer;
+// 옆에 띄운 노트의 카드로 바로 — 보고 있는 것과 카드가 끊기지 않게(2026-10-19 요청)
+{
+  const b = document.getElementById('wikiCards');
+  if (b) {
+    b.onclick = () => {
+      const w = wikiState && wikiState.refs;
+      openCardManager(w && w.notePath
+        ? { path: w.notePath, title: w.noteName || '' } : null);
+    };
+  }
+}
 document.getElementById('wikiBack').onclick = restoreWikiHome;
 
 // ---------- 더보기 메뉴 (2026-10-13) ----------
@@ -4642,6 +4656,10 @@ let cfSel = new Set();
 
 function openCardFloat(cards) {
   cfDeck = { cards: cards || [], idx: 0, shown: false };
+  // 이 후보들이 어느 노트 것인지 붙들어 둔다 — 추가해서 후보가 비어도 목록이 안 끊기게
+  const first = cfDeck.cards[0];
+  cfScope = first && first.notePath
+    ? { path: first.notePath, title: first.noteTitle || '' } : hereScope();
   cfTab = cfDeck.cards.length ? 'new' : 'all';
   document.getElementById('cardFloat').classList.remove('hidden');
   if (cardFloat) cardFloat.place();
@@ -4650,6 +4668,7 @@ function openCardFloat(cards) {
 function closeCardFloat() {
   document.getElementById('cardFloat').classList.add('hidden');
   cfDeck = null;
+  cfScope = null;        // 다음에 열 때는 그때 보고 있는 것으로 다시 잡는다
 }
 
 /** 이 노트에 저장된 카드를 다시 읽고 전체를 그린다. */
@@ -4660,14 +4679,41 @@ function closeCardFloat() {
  * 카드 관리를 열면 **늘 비어 있었다**. 지금 만든 후보가 있으면 그게 기준이고,
  * 없으면 지금 보고 있는 것(노트 → 시험) 기준이다(2026-10-19).
  */
+let cfScope = null;        // 카드 창이 지금 보고 있는 곳 {path, title} — 아래 설명
+
+/**
+ * "이 노트의 카드"가 가리키는 곳.
+ *
+ * ⚠️ **전역 변수를 순서대로 보면 안 된다.** 전에는 reader를 먼저 봤는데, reader는 읽기
+ *    화면을 떠나도 안 비워진다. 그래서 퀴즈를 풀며 옆 노트에서 카드를 만들어 넣어도
+ *    목록은 **아까 읽던 딴 노트**를 보고 있어서 늘 0장이었다 — "뭔가 떨어진 느낌,
+ *    원래 노트랑 연결이 안 된다"(2026-10-19 신고). 지금 **어느 화면에서 무엇을 보고
+ *    있는지**가 기준이어야 한다.
+ *
+ * 순서: 손에 쥔 후보 → 창을 연 그 자리(cfScope) → 지금 화면이 보여주는 것.
+ */
 function cardScope() {
   const made = cfDeck && cfDeck.cards.length ? cfDeck.cards[0] : null;
   if (made && made.notePath) return { path: made.notePath, title: made.noteTitle || '' };
-  if (reader && reader.note) return { path: reader.note.path, title: reader.note.title };
-  if (quiz && currentExam) return { path: currentExam.path, title: currentExam.title };
-  if (wikiState && wikiState.refs && wikiState.refs.notePath) {
-    return { path: wikiState.refs.notePath, title: wikiState.refs.noteName || '' };
+  if (cfScope && cfScope.path) return cfScope;       // 추가해서 후보가 비어도 그 자리를 지킨다
+  return hereScope();
+}
+
+/** 지금 화면이 보여주고 있는 것. */
+function hereScope() {
+  const screen = document.body.dataset.screen;
+  if (screen === 'quizScreen') {
+    // 옆에 노트를 띄워놓고 푸는 중이면 **그 노트**가 기준이다 — 보고 있는 게 그것이다
+    if (wikiState && wikiState.refs && wikiState.refs.notePath) {
+      return { path: wikiState.refs.notePath, title: wikiState.refs.noteName || '' };
+    }
+    if (currentExam) return { path: currentExam.path, title: currentExam.title };
   }
+  if (screen === 'readScreen' && reader && reader.note) {
+    return { path: reader.note.path, title: reader.note.title };
+  }
+  if (reader && reader.note) return { path: reader.note.path, title: reader.note.title };
+  if (currentExam) return { path: currentExam.path, title: currentExam.title };
   return { path: '', title: '' };
 }
 
@@ -5313,8 +5359,9 @@ function initCardFloat() {
 }
 
 /** "카드" 메뉴 — 이 노트의 카드를 보고 지운다(만들기는 연필 네모 버튼이 따로 맡는다). */
-function openCardManager() {
+function openCardManager(scope) {
   if (!cfDeck) cfDeck = { cards: [], idx: 0, shown: false };
+  cfScope = scope && scope.path ? scope : hereScope();
   cfTab = cfDeck.cards.length ? 'new' : 'all';
   document.getElementById('cardFloat').classList.remove('hidden');
   if (cardFloat) cardFloat.place();

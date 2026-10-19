@@ -5887,6 +5887,78 @@ await run('퀴즈 도구막대', async () => {
     }
   }
 
+  // ── 보고 있는 노트와 카드가 **안 끊기는가** (2026-10-19 신고) ──
+  // "퀴즈에서 노트에서 카드 만들었는데 새 카드로 추가가 안 되고, 기존 카드는 보이지도
+  //  않음. 뭔가 떨어진 느낌임 원래 노트랑 연결이 안 되고."
+  // 까닭: reader는 읽기 화면을 떠나도 안 비워진다. 그걸 먼저 보니 퀴즈에서 옆 노트의
+  // 카드를 넣어도 목록은 **아까 읽던 딴 노트**를 보고 있어 늘 0장이었다.
+  {
+    const d = await import('/js/db.js');
+    const Rr = await import('/js/reader.js');
+    const NOTE = '02_Wiki/응급_중환자/암기법/연결검사_암기법.md';
+    const real = window.fetch;
+    window.fetch = async (u, i) => {
+      const t = String(u);
+      if (!t.includes('api.github.com')) return real(u, i);
+      return { ok: true, status: 200, json: async () => ({}),
+        text: async () => '# 연결검사\n\n## 요령\n**아트로핀**은 **서맥**에 쓴다.\n' };
+    };
+    try {
+      // ① 먼저 딴 노트를 읽어둔다 — reader가 남는다(사람이 늘 하는 순서)
+      await window.__openNote('02_Wiki/응급_중환자/딴노트.md');
+      await new Promise((r) => setTimeout(r, 350));
+      // ② 퀴즈 화면으로 옮기고 옆에 **이** 노트를 띄운다
+      document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+      document.getElementById('quizScreen').classList.remove('hidden');
+      document.body.dataset.screen = 'quizScreen';
+      await window.__openWikiNote(await Rr.loadNote(NOTE));
+      await new Promise((r) => setTimeout(r, 300));
+      const wb = document.getElementById('wikiBody');
+      const rb = wb.getBoundingClientRect();
+      const made = Rr.cardsFromBox(wb, { l: rb.left, t: rb.top, r: rb.right, b: rb.bottom },
+        { notePath: NOTE, noteTitle: '연결검사', heading: '요령' });
+      out.push({ name: '옆 노트에서 카드가 만들어진다', ok: made.length === 1,
+        detail: `${made.length}장` });
+      if (made.length) {
+        window.__openCardFloat(made);
+        await new Promise((r) => setTimeout(r, 350));
+        out.push({ name: '새 카드로 올라온다', ok: document.getElementById('cfNewN').textContent === '1',
+          detail: document.getElementById('cfNewN').textContent });
+        document.getElementById('cfAdd').click();
+        await new Promise((r) => setTimeout(r, 600));
+        out.push({ name: '**넣고 나면 "이 노트의 카드"에 보인다**(끊기던 것)',
+          ok: document.getElementById('cfAllN').textContent === '1',
+          detail: `${document.getElementById('cfAllN').textContent}장` });
+        out.push({ name: '어느 노트를 보고 있는지 적힌다',
+          ok: /연결검사/.test(document.getElementById('cfStatus').textContent),
+          detail: document.getElementById('cfStatus').textContent });
+        // ③ 창을 닫았다 다시 열어도 **그 노트**를 본다 — 아까 읽던 딴 노트가 아니라
+        document.getElementById('cfClose').click();
+        await new Promise((r) => setTimeout(r, 200));
+        document.getElementById('wikiCards').click();
+        await new Promise((r) => setTimeout(r, 500));
+        out.push({ name: '**옆 패널의 "카드"로 바로 들어간다**',
+          ok: !document.getElementById('cardFloat').classList.contains('hidden') });
+        out.push({ name: '다시 열어도 그 노트의 카드를 본다(읽던 딴 노트로 안 샌다)',
+          ok: document.getElementById('cfAllN').textContent === '1',
+          detail: `${document.getElementById('cfAllN').textContent}장 · ${document.getElementById('cfStatus').textContent}` });
+        document.getElementById('cfClose').click();
+        for (const c of await d.allCards()) await d.deleteCard(c.id);
+      }
+      out.push({ name: '카드가 보는 자리를 전역 변수 순서로 안 정한다',
+        ok: /function hereScope/.test(app) && /dataset\.screen/.test(app) });
+    } catch (e) {
+      out.push({ name: '노트-카드 연결 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 140) });
+    } finally {
+      window.fetch = real;
+      if (window.__resetWiki) window.__resetWiki();   // 뒤 검사가 보는 옆 패널을 비워둔다
+      document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+      document.getElementById('quizScreen').classList.remove('hidden');
+      document.body.dataset.screen = 'quizScreen';
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
+
   // ── 퀴즈에서도 카드 만들기·다른 노트가 되는가 (2026-10-19 요청·신고) ──
   {
     const cardBtn = document.getElementById('toolCard');
