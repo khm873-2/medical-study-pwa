@@ -103,13 +103,24 @@ async function rememberCached(path) {
 
 function refreshInBackground(path) {
   // 조용한 갱신 — 실패해도 사용자에게 보이지 않는다.
+  //
+  // ⚠️ 다만 **바뀐 걸 알리기는 해야 한다.** 전에는 캐시만 몰래 갈아놓고 끝이라,
+  //    보고 있던 노트가 맥에서 바뀌어도 화면은 닫았다 다시 열기 전까지 옛 글이었다
+  //    (2026-10-20 신고: 흐름도를 그려 넣었는데 앱엔 코드가 그대로 보였다).
+  //    바뀌었을 때만 알린다 — 같은 글이면 아무 일도 없던 것처럼 둔다.
   (async () => {
     try {
       const repo = await getRepo();
       const res = await fetch(`${API}/repos/${repo}/contents/${encPath(path)}`, {
         headers: await headers({ Accept: 'application/vnd.github.raw' }),
       });
-      if (res.ok) await cacheSet(path, await res.text());
+      if (!res.ok) return;
+      const text = await res.text();
+      const was = await cacheGet(path);
+      await cacheSet(path, text);
+      if (was && was.data !== text) {
+        window.dispatchEvent(new CustomEvent('note-updated', { detail: { path, text } }));
+      }
     } catch (_) {}
   })();
 }

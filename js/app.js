@@ -9433,3 +9433,38 @@ window.__ivFlatten = () => ivFlatten();
 window.__ivTool = () => (ivPen ? ivPen.tool : '-');
 window.__ivCur = () => (ivPen ? String(!!ivPen._cur) : '-');
 window.__ivW = () => (ivPen ? `writing=${ivPen.writing} pend=${(ivPen._pending||[]).length}` : '-');
+
+// ═══════════ 맥에서 노트가 바뀌면 보고 있던 화면도 따라간다 (2026-10-20) ═══════════
+//
+// 캐시는 "일단 보여주고 뒤에서 새로 받는" 꼴이다. 그런데 새로 받은 걸 **알려주지
+// 않아서**, 맥에서 노트를 고쳐도 아이패드는 닫았다 다시 열기 전까지 옛 글을 보여줬다
+// (신고: 흐름도를 그려 넣었는데 앱에는 코드가 그대로 보였다 — 옛 글에는 그림이 없다).
+// 이제 github.js가 'note-updated'를 쏘고, 지금 그 노트를 보고 있으면 조용히 다시 그린다.
+window.addEventListener('note-updated', async (e) => {
+  const { path } = e.detail || {};
+  if (!path) return;
+  const open = [];
+  for (const p of panes) for (const t of p.tabs) if (t.note && t.note.path === path) open.push(t);
+  const onWiki = wikiState && wikiState.refs && wikiState.refs.notePath === path;
+  const onWiki2 = wiki2State && wiki2State.refs && wiki2State.refs.notePath === path;
+  if (!open.length && !onWiki && !onWiki2) return;
+  let fresh;
+  try { fresh = await loadNote(path); } catch { return; }
+  for (const t of open) {
+    // 읽던 자리는 지킨다 — 글이 길어졌다고 맨 위로 튕기면 안 된다
+    t.note = fresh;
+    t.secIdx = Math.min(t.secIdx, fresh.sections.length - 1);
+  }
+  if (onWiki) {
+    wikiState.refs.sections = fresh.sections;
+    wikiState.secIdx = Math.min(wikiState.secIdx, fresh.sections.length - 1);
+  }
+  if (onWiki2) {
+    wiki2State.refs.sections = fresh.sections;
+    wiki2State.secIdx = Math.min(wiki2State.secIdx, fresh.sections.length - 1);
+  }
+  if (open.length) { syncReader(); renderPanes(); }
+  if (onWiki) renderWikiSection();
+  if (onWiki2) renderWiki2();
+  capToast('노트가 맥에서 바뀌어 새로 불러왔습니다', 1800);
+});

@@ -210,6 +210,8 @@ console.log(`  파싱: 시험 ${parsed}개 · 문항 ${qTotal}개 · 이미지 $
   check('**흐름도가 그림으로 들어간다**(코드 덩어리로 안 쏟아진다)',
     /<img[^>]+data-mmd="1"/.test(html), html.slice(0, 160));
   check('그림이 없을 때 쓸 코드도 같이 남는다', /class="mmd-src"/.test(html));
+  check('**왜 코드가 보이는지 적어준다**(안 그러면 버그로 보인다)',
+    /mmd-why/.test(html) && /render-mermaid/.test(html));
   check('뒷글이 흐름도에 안 먹힌다', /뒷글/.test(html));
   check('mermaid가 아닌 코드는 그냥 코드로',
     /<pre><code>/.test(renderMarkdown('```js\nlet a = 1;\n```\n')));

@@ -127,9 +127,13 @@ export function renderMarkdown(md, opts = {}) {
       const src = body.join('\n');
       if (lang === 'mermaid' && src.trim()) {
         const name = mermaidName(src);
+        // 그림이 아직 없으면 코드가 보인다 — 그때 **왜 그런지**는 적어둔다.
+        // 안 그러면 "왜 코드가 들어가 있냐"가 된다(2026-10-20 신고).
         out.push(
           `<div class="mmd">`
           + `<img class="embed mmd-img" data-embed="${escapeHtml(name)}" data-mmd="1" alt="흐름도">`
+          + `<div class="mmd-why muted">흐름도 그림이 아직 없습니다 — 맥에서 `
+          + `<code>node .claude/scripts/render-mermaid.mjs</code> 를 돌리면 그림으로 바뀝니다.</div>`
           + `<pre class="mmd-src"><code>${escapeHtml(src)}</code></pre>`
           + `</div>`
         );

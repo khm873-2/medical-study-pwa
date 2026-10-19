@@ -6035,6 +6035,37 @@ await run('퀴즈 도구막대', async () => {
           && gr.getBoundingClientRect().top >= r1.bottom - 20
           && gr.getBoundingClientRect().bottom <= r2.top + 20 });
 
+      // ── 아래 칸이 **실제로 스크롤되는가** (2026-10-20 신고) ──
+      // "아래로 암기법 열면 스크롤이 안되는 문제가 있음"
+      // 까닭: 새 칸을 세로 flex 규칙에 빠뜨리면 안쪽 본문이 flex 자식이 못 되고,
+      // 칸은 overflow: hidden이라 넘친 글이 **막대도 없이 그냥 잘린다**.
+      // ⚠️ 규칙이 있는지만 보면 안 된다 — 글을 길게 넣고 **스크롤을 시켜 본다**.
+      {
+        const b2 = document.getElementById('wiki2Body');
+        b2.innerHTML = Array.from({ length: 60 },
+          (_, i) => `<p>${i + 1}번째 줄 — 아래 칸이 내려가는지 보는 글입니다.</p>`).join('');
+        await new Promise((r) => setTimeout(r, 250));
+        const fits = b2.scrollHeight > b2.clientHeight + 10;
+        out.push({ name: '글이 칸보다 길다(스크롤할 거리가 있다)', ok: fits,
+          detail: `글 ${b2.scrollHeight} · 칸 ${b2.clientHeight}` });
+        b2.scrollTop = 300;
+        await new Promise((r) => setTimeout(r, 120));
+        out.push({ name: '**아래 칸이 실제로 내려간다**', ok: b2.scrollTop > 100,
+          detail: `scrollTop ${Math.round(b2.scrollTop)}` });
+        out.push({ name: '내려갈 수 있게 overflow가 열려 있다',
+          ok: /auto|scroll/.test(getComputedStyle(b2).overflowY),
+          detail: getComputedStyle(b2).overflowY });
+        // 칸 밖으로 글이 삐져나가 잘리지 않아야 한다
+        const rp = p2.getBoundingClientRect(), rbody = b2.getBoundingClientRect();
+        out.push({ name: '글이 칸 밖으로 안 넘친다', ok: rbody.bottom <= rp.bottom + 2,
+          detail: `글 밑 ${Math.round(rbody.bottom)} · 칸 밑 ${Math.round(rp.bottom)}` });
+        // 위 칸도 같이 멀쩡한지 — 한쪽 고치고 다른 쪽 깨면 안 된다
+        const b1 = document.getElementById('wikiBody');
+        out.push({ name: '위 칸도 그대로 내려간다',
+          ok: /auto|scroll/.test(getComputedStyle(b1).overflowY) });
+        b2.scrollTop = 0;
+      }
+
       // 손잡이를 **실제로 끌어** 높이가 바뀌는지 — 규칙만 있고 안 먹는 일이 잦다
       {
         const h0 = p1.getBoundingClientRect().height;

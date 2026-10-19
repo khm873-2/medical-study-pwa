@@ -375,7 +375,12 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
    앱은 그리지 않는다 — 맥에서 미리 그려 둔 그림을 넣는다(라이브러리가 1MB가 넘는다).
    그림이 있으면 코드는 숨고, 없으면 코드가 그대로 보인다(못 읽었다는 쪽지보다 낫다). */
 .mmd { margin: 8px 0; }
-.mmd:has(.mmd-img) .mmd-src { display: none; }
+.mmd:has(.mmd-img) .mmd-src, .mmd:has(.mmd-img) .mmd-why { display: none; }
+.mmd-why {
+  font-size: 12px; padding: 8px 10px; margin-bottom: 6px;
+  background: var(--badge-bg); border: 1px dashed var(--border); border-radius: 8px;
+}
+.mmd-why code { font-size: 11.5px; }
 .mmd-src {
   margin: 0; padding: 10px 12px; overflow-x: auto;
   background: var(--badge-bg); border: 1px solid var(--border); border-radius: 8px;
@@ -838,8 +843,12 @@ body.boxing .resize-grip { pointer-events: none; }
     display: flex; flex-direction: column; gap: 0;
     max-height: calc(100vh - 80px);
   }
+  /* ⚠️ **새 칸을 여기에 빠뜨리면 그 칸은 스크롤이 죽는다.** 칸이 세로 flex가 아니면
+     안쪽 본문이 flex 자식이 못 되고, 칸은 overflow: hidden이라 넘친 글이 그냥 잘린다
+     — 스크롤 막대도 안 생긴다(2026-10-20 신고: 아래 칸에 암기법을 열면 안 내려감). */
   #quizScreen .side-col > #aiPanel,
   #quizScreen .side-col > #wikiPanel,
+  #quizScreen .side-col > #wikiPanel2,
   #quizScreen .side-col > #overviewPanel {
     margin-top: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
   }
@@ -862,6 +871,10 @@ body.boxing .resize-grip { pointer-events: none; }
 @media (max-width: 899px) {
   #quizScreen .split { display: block; }
   #quizScreen .side-col { display: block; }
+  /* 좁은 화면에서는 칸을 나누지 않는다 — 페이지가 통째로 스크롤되므로
+     본문 높이를 묶어두면 오히려 두 번 스크롤하게 된다 */
+  #quizScreen .side-col.two-notes > #wikiPanel { flex: none; }
+  #quizScreen #wikiPanel2 .wiki-body { max-height: 52vh; }
   #quizScreen .col-resizer, #quizScreen .pane-resizer { display: none; }
   body[data-screen="quizScreen"] { overflow: hidden; }
   body[data-screen="quizScreen"] #app {
