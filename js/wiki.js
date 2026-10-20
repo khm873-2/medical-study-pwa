@@ -10,7 +10,7 @@
 // 그래서 "1등만 보여주고 끝"이 아니라 다른 섹션으로 넘겨볼 수 있게 UI를 만든다.
 
 import { listDir, getText } from './github.js';
-import { linkedNoteFromMd } from './parser.js';
+import { linkedNoteFromMd, prettyExamName } from './parser.js';
 
 // `01_임종평_전범위`도 넣는다 — build_mock_exam_html.py는 이미 여기까지 뒤져서
 // wikiRefs를 검증한다. 앱만 안 보면 빌드는 통과했는데 화면에선 조용히 자동매칭으로
@@ -142,15 +142,48 @@ export async function noteForJokbo(path) {
   return bestScore >= DICE_MIN ? best : null;
 }
 
-/** 모의고사 html 경로 → 짝이 되는 md에서 연계노트 이름을 얻는다. */
+/**
+ * 모의고사·퀴즈 html 경로 → 짝이 되는 노트 이름.
+ *
+ * 먼저 짝 md의 `연계노트: "[[...]]"`를 본다. 그런데 **그게 없는 파일이 있다**
+ * (2026-10-20 신고: PALS 퀴즈에서 "연계노트가 지정돼 있지 않습니다").
+ * vault를 세어 보니 퀴즈 4개가 그 꼴이었다 — 적어줄 때 빠뜨린 것이다.
+ *
+ * 그럴 때 그냥 포기하면 옆칸이 통째로 쓸모없어진다. 퀴즈 **파일 이름**이
+ * 이미 강의 이름이므로(`261016_조태진_소아전문소생술PALS_퀴즈`), 족보 챕터에
+ * 쓰던 이름 맞추기를 그대로 써서 노트를 찾는다. 문턱(0.5) 아래면 포기한다 —
+ * 억지로 붙이면 엉뚱한 노트가 뜬다.
+ */
 export async function linkedNoteName(examHtmlPath) {
   const mdPath = examHtmlPath.replace(/\.html$/, '.md');
   try {
     const md = await getText(mdPath);
-    return linkedNoteFromMd(md);
-  } catch {
-    return null;
+    const named = linkedNoteFromMd(md);
+    if (named) return named;
+  } catch { /* 짝 md가 아예 없을 수도 있다 — 아래 이름 맞추기로 간다 */ }
+  return noteByExamName(examHtmlPath);
+}
+
+/** 시험 파일 이름으로 노트를 찾는다(연계노트가 안 적혀 있을 때). */
+export async function noteByExamName(examHtmlPath) {
+  const parts = String(examHtmlPath).split('/');
+  const subject = parts.length >= 3 ? parts[1] : '';
+  const topic = prettyExamName(parts[parts.length - 1] || '');
+  if (!topic) return null;
+  const cands = [];
+  for (const root of NOTE_DIRS) {
+    for (const f of await listNoteFiles(root)) {
+      // 같은 과목의 **산문 노트**만 본다(암기법·QA는 짝이 아니다)
+      if (!f.group && (!subject || f.subject === subject)) cands.push(f.name);
+    }
   }
+  let best = null;
+  let bestScore = 0;
+  for (const n of cands) {
+    const sc = nameSimilarity(topic, n);
+    if (sc > bestScore) { bestScore = sc; best = n; }
+  }
+  return bestScore >= DICE_MIN ? best : null;
 }
 
 /** 노트 본문을 `## 대단원` 단위로 쪼갠다(### 소제목은 섹션 안에 그대로 둔다). */

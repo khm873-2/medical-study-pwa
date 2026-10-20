@@ -142,6 +142,49 @@ console.log(`  파싱: 시험 ${parsed}개 · 문항 ${qTotal}개 · 이미지 $
   console.log(`  문제 그림 ${seen}장 — vault에서 전부 찾음${missing.length ? ` (못 찾음 ${missing.length})` : ''}`);
 }
 
+// --- 모든 퀴즈·모의고사가 **연계노트를 찾을 수 있는가** (2026-10-20 신고) ---
+// "PALS는 왜 퀴즈 푸는데 연계노트가 지정돼 있지 않다고 나옴?"
+// 짝 md의 `연계노트: "[[...]]"`가 빠져 있으면 옆칸이 통째로 쓸모없어진다.
+// vault를 세어 보니 퀴즈 4개가 그 꼴이었다 — 적어줄 때 빠뜨린 것이다.
+// ⚠️ 앞머리만 보면 안 된다. 적힌 **그 노트가 실제로 있는지**까지 봐야 한다.
+{
+  const notes = new Set();
+  for (const root of ['02_Wiki', '98_예습노트_보관']) {
+    let subs;
+    try { subs = readdirSync(`${VAULT}/${root}`); } catch { continue; }
+    for (const d of subs) {
+      let files;
+      try { files = readdirSync(`${VAULT}/${root}/${d}`); } catch { continue; }
+      for (const f of files) if (f.endsWith('.md')) notes.add(f.slice(0, -3).normalize('NFC'));
+    }
+  }
+  check('vault에서 노트 이름을 읽었다', notes.size > 50, `${notes.size}개`);
+
+  const bad = [];
+  let seen = 0;
+  for (const root of ['05_퀴즈', '06_모의고사']) {
+    let dirs;
+    try { dirs = readdirSync(`${VAULT}/${root}`); } catch { continue; }
+    for (const d of dirs) {
+      let files;
+      try { files = readdirSync(`${VAULT}/${root}/${d}`); } catch { continue; }
+      for (const f of files) {
+        // 실제 시험만 본다 — 목록·기록 파일(_로 시작)은 시험이 아니다
+        if (!f.endsWith('.md') || f.startsWith('_')) continue;
+        if (!files.includes(f.replace(/\.md$/, '.html'))) continue;   // 풀이용 html이 있어야 시험
+        seen++;
+        const md = readFileSync(`${VAULT}/${root}/${d}/${f}`, 'utf8');
+        const name = linkedNoteFromMd(md);
+        if (!name) { bad.push(`${f}: 연계노트가 안 적혀 있음`); continue; }
+        if (!notes.has(name.normalize('NFC'))) bad.push(`${f}: 가리키는 노트가 없음 — ${name}`);
+      }
+    }
+  }
+  check('**퀴즈·모의고사가 전부 연계노트를 가리킨다**', bad.length === 0,
+    `${bad.length}/${seen}개 어긋남 — ${bad.slice(0, 3).join(' / ')}`);
+  console.log(`  시험 ${seen}개 — 연계노트 전부 확인${bad.length ? ` (어긋남 ${bad.length})` : ''}`);
+}
+
 // --- 흐름도(mermaid): 앱과 vault 스크립트가 **같은 이름**을 부르는가 (2026-10-19) ---
 // 맥에서 그린 그림을 앱이 찾으려면 이름 짓는 셈이 두 군데에서 똑같아야 한다.
 // 한쪽만 고치면 그림을 영영 못 찾는데, 화면에는 코드가 그대로 보일 뿐이라 알아채기 어렵다.
