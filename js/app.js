@@ -2078,6 +2078,11 @@ async function captureFromPen(penLayer, box) {
 
   try {
     const cv = await captureRect(rect);
+    // 그림을 한 장도 못 그렸으면 **빈 그림**이 복사된다 — 조용히 넘기지 않는다
+    const shots = cv.__shots;
+    if (shots && shots.total && shots.failed === shots.total) {
+      throw new Error(`그림 ${shots.total}장을 못 그렸습니다 — 조금 기다렸다 다시 해 보세요.`);
+    }
     const blob = await canvasToBlob(cv);
     if (!blob) throw new Error('이미지를 만들지 못했습니다.');
     lastCapture = blob;                       // 복사에 실패해도 손에 남겨둔다

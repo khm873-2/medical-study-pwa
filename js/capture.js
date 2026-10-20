@@ -87,7 +87,10 @@ function stubImages(host, clone, rect) {
       c.style.height = `${b.height}px`;
       c.style.objectFit = 'fill';
     }
-    if (seen && im.complete && im.naturalWidth) draw.push({ el: im, box: b });
+    // ⚠️ 아직 다 안 받아진 그림도 **세어는 둔다**. 전에는 조건에서 걸러 목록에서
+    //    통째로 빠뜨렸는데, 그러면 "한 장도 안 그렸다"는 사실조차 알 수 없어
+    //    빈 회색이 조용히 복사됐다(2026-10-20 신고).
+    if (seen) draw.push({ el: im, box: b, ready: !!(im.complete && im.naturalWidth) });
   });
   return draw;
 }
@@ -128,6 +131,14 @@ export async function captureRect(rect) {
     host = host.parentElement;
   }
   host = host || document.body;
+  // ⚠️ **그림 자신이 host가 되면 안 된다.** 네모를 그림 안쪽에만 치면 공통 조상 찾기가
+  //    바로 그 `<img>`에서 멈춘다. 그러면 아래 stubImages가 "속에 든 그림"을 하나도
+  //    못 찾아 그대로 SVG에 실리는데, 달모 그림은 `blob:` 주소라 **SVG 안에서는 안
+  //    열린다** — 그래서 빈 회색만 복사됐다(2026-10-20 신고: "캡쳐가 하나도 안됨").
+  //    한 칸 올라가 그림을 품은 상자를 host로 삼는다.
+  while (host !== document.body && host.tagName === 'IMG' && host.parentElement) {
+    host = host.parentElement;
+  }
   const hb = host.getBoundingClientRect();
 
   const clone = host.cloneNode(true);
@@ -135,6 +146,15 @@ export async function captureRect(rect) {
   // ⚠️ 그림 짝짓기는 **지우기 전에** 한다 — 원본과 복제본을 차례로 맞춰 보는데,
   //    복제본에서 먼저 뭔가를 들어내면 그 안에 그림이 있었을 때 차례가 어긋난다.
   const pictures = stubImages(host, clone, rect);
+  // 아직 안 받아진 그림이 있으면 잠깐 기다린다 — 바로 포기하면 빈 그림이 나온다.
+  // (느린 그물에서 흐름도를 캡처하면 실제로 이 자리에 걸린다)
+  await Promise.all(pictures.filter((p) => !p.ready).map((p) => new Promise((res) => {
+    const done = () => { p.ready = !!(p.el.complete && p.el.naturalWidth); res(); };
+    if (p.el.complete) { done(); return; }
+    const t = setTimeout(done, 1500);
+    p.el.addEventListener('load', () => { clearTimeout(t); done(); }, { once: true });
+    p.el.addEventListener('error', () => { clearTimeout(t); done(); }, { once: true });
+  })));
   clone.querySelectorAll('canvas, .penlayer, #selPop, .toc-scrim, script').forEach((n) => n.remove());
 
   // 잘라낼 위치만큼 밀어 넣는다
@@ -173,12 +193,19 @@ export async function captureRect(rect) {
 
   // 글을 다 그린 뒤 **그림을 그 위에 올린다**(위 stubImages 참고).
   // 화면 좌표를 자른 자리 기준으로 옮겨서, 보이는 그대로의 위치·크기로 들어간다.
-  for (const { el, box } of pictures) {
+  //
+  // ⚠️ 전에는 실패를 `catch {}`로 **조용히 삼켰다**. 그래서 그림이 한 장도 안 들어간
+  //    빈 회색만 복사되고도 "캡처했습니다"가 떴다(2026-10-20 신고: "캡쳐가 하나도 안됨").
+  //    이제 몇 장을 못 그렸는지 세어 부른 쪽에 알린다 — 조용히 틀리느니 말해준다.
+  let failed = 0;
+  for (const { el, box, ready } of pictures) {
+    if (!ready) { failed++; continue; }        // 아직 안 받아진 그림
     const f = fitBox(el, box);
     try {
       cx.drawImage(el, f.left - rect.left, f.top - rect.top, f.width, f.height);
-    } catch { /* 한 장이 안 그려져도 나머지는 살린다 */ }
+    } catch { failed++; }
   }
+  cv.__shots = { total: pictures.length, failed };
   return cv;
 }
 

@@ -4488,6 +4488,56 @@ await run('펜 캔버스 자리', async () => {
   return out;
 });
 
+// ══════════ 그림 **안쪽**을 캡처해도 담기는가 (2026-10-20 신고) ══════════
+// "저 부분을 긁어서 했는데 왜 캡쳐가 하나도 안됨?" — 흐름도 안쪽만 네모 쳤을 때다.
+// 까닭: 공통 조상 찾기가 그 `<img>` 자신에서 멈춘다 ➔ stubImages가 속에 든 그림을
+// 하나도 못 찾는다 ➔ `blob:` 주소가 그대로 SVG에 실리는데 **SVG 안에서는 안 열린다**
+// ➔ 빈 회색만 복사된다. 달모 그림은 전부 blob: 주소라 늘 이 길로 샜다.
+await run('그림 안쪽 캡처', async () => {
+  const out = [];
+  const { captureRect } = await import('/js/capture.js');
+  const c = document.createElement('canvas');
+  c.width = 900; c.height = 600;
+  const g = c.getContext('2d');
+  g.fillStyle = '#e8453c';
+  g.fillRect(0, 0, 900, 600);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+  const url = URL.createObjectURL(blob);          // ★ 달모가 실제로 쓰는 꼴
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;left:40px;top:40px;width:900px;height:620px;'
+    + 'background:#fff;z-index:9999';
+  box.innerHTML = `<img src="${url}" style="width:880px;height:580px;display:block">`;
+  document.body.appendChild(box);
+  try {
+    await new Promise((r) => setTimeout(r, 500));
+    const ir = box.querySelector('img').getBoundingClientRect();
+    // 네모를 **그림 안쪽에만** 친다 — 이래야 host가 img 자신이 된다
+    const rect = { left: ir.left + 100, top: ir.top + 100, width: 400, height: 300 };
+    out.push({ name: '네모 한가운데가 그림이다(이 조건이라야 버그가 난다)',
+      ok: (document.elementFromPoint(rect.left + 200, rect.top + 150) || {}).tagName === 'IMG' });
+    const cv = await captureRect(rect);
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let red = 0, total = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      total++;
+      if (d[i] > 180 && d[i + 1] < 110 && d[i + 2] < 110) red++;
+    }
+    out.push({ name: '**그림 안쪽을 캡처해도 그림이 담긴다**', ok: red / total > 0.8,
+      detail: `빨강 ${(red / total * 100).toFixed(1)}%` });
+    out.push({ name: '그림을 세어서 들고 있다(0장이면 샌 것이다)',
+      ok: !!(cv.__shots && cv.__shots.total >= 1),
+      detail: cv.__shots ? `${cv.__shots.total}장 · 못 그림 ${cv.__shots.failed}` : '안 셈' });
+    out.push({ name: '그림 자신을 host로 삼지 않는다',
+      ok: /host\.tagName === 'IMG'/.test(await fetch('/js/capture.js').then((r) => r.text())) });
+  } catch (e) {
+    out.push({ name: '그림 안쪽 캡처 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 120) });
+  } finally {
+    box.remove();
+    URL.revokeObjectURL(url);
+  }
+  return out;
+});
+
 // ══════════ 캡처가 **스크롤을 따라가는가** (2026-10-20 신고) ══════════
 // "이 범위를 선택해서 캡쳐했는데 다른 범위가 선택되어서 복사되는 버그"
 // cloneNode는 scrollTop을 안 가져오고, SVG로 넘길 때 스크롤 위치는 적어 보낼 수도 없다.
