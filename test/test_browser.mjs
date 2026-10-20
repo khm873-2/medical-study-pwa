@@ -4722,6 +4722,61 @@ await run('그림 크게 보기', async () => {
   return out;
 });
 
+// ══════════ 새로 만든 **퀴즈**도 저절로 뜨는가 (2026-10-21 신고) ══════════
+// "장기공여자관리 퀴즈는 보이지도 않음" — 그날 만들어진 파일이었다.
+// 시험 목록도 노트 목록과 똑같이 `force` 없이는 영영 다시 안 읽고 있었다.
+await run('새 퀴즈가 저절로 뜬다', async () => {
+  const out = [];
+  const d = await import('/js/db.js');
+  const a = await import('/js/auth.js');
+  await a.setToken('fake'); await a.setRepo('me/v');
+  const real = window.fetch;
+  let files = ['261019_김승준_CRRT_퀴즈.html'];
+  let hits = 0;
+  window.fetch = async (u, i) => {
+    const t = String(u);
+    if (!t.includes('api.github.com')) return real(u, i);
+    const p = decodeURIComponent((t.split('/contents/')[1] || '').split('?')[0]);
+    if (p === '05_퀴즈') {
+      return { ok: true, status: 200,
+        json: async () => ([{ name: '응급_중환자', type: 'dir', path: '05_퀴즈/응급_중환자' }]) };
+    }
+    if (p === '05_퀴즈/응급_중환자') {
+      hits++;
+      return { ok: true, status: 200,
+        json: async () => files.map((f) => ({ name: f, type: 'file', path: `05_퀴즈/응급_중환자/${f}` })) };
+    }
+    return { ok: true, status: 200, json: async () => ([]), text: async () => '' };
+  };
+  try {
+    await d.kvSet('exam_index_v3', null);
+    await d.kvSet('exam_index_at', 0);
+    const first = await window.__examIndex();
+    const quizOf = (idx) => (idx.find((g) => g.kind === '퀴즈') || { exams: [] }).exams.length;
+    out.push({ name: '목록을 받아온다', ok: quizOf(first) === 1, detail: `${quizOf(first)}개` });
+
+    // 맥에서 퀴즈를 하나 더 만들었다 — 앱을 끄지 않고 다시 묻는다
+    files = files.concat('261019_김윤호_장기공여자관리_퀴즈.html');
+    const cached = await window.__examIndex();
+    out.push({ name: '갓 받은 뒤에는 다시 안 읽는다(쓸데없이 묻지 않게)',
+      ok: quizOf(cached) === 1, detail: `${quizOf(cached)}개` });
+
+    await d.kvSet('exam_index_at', Date.now() - 10 * 60 * 1000);   // 10분 전 것이라 치면
+    const fresh = await window.__examIndex();
+    out.push({ name: '**새로 만든 퀴즈가 저절로 뜬다**', ok: quizOf(fresh) === 2,
+      detail: `${quizOf(fresh)}개` });
+    out.push({ name: '목록이 스스로 낡는다(force 없이도)',
+      ok: /exam_index_at/.test(await fetch('/js/app.js').then((r) => r.text())) });
+  } catch (e) {
+    out.push({ name: '새 퀴즈 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 130) });
+  } finally {
+    window.fetch = real;
+    await d.kvSet('exam_index_v3', null);
+    await d.kvSet('exam_index_at', 0);
+  }
+  return out;
+});
+
 // ══════════ 노트 서랍 — 새로 만든 노트가 저절로 뜨는가 (2026-10-18) ══════════
 // 실제 신고: 맥에서 암기법 3개를 만들었는데 아이패드에서 "노트 열기"에 13개만 떴다.
 // 목록이 두 겹으로 굳어 있었다 — IndexedDB의 note_index_v2(force 없이는 영영 안 읽음)와

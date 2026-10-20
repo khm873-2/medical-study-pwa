@@ -612,6 +612,8 @@ async function loadList(force) {
  */
 let examIndexInFlight = null;
 
+window.__examIndex = (force) => buildExamIndex(force);   // 검사가 목록을 직접 묻는다
+
 async function buildExamIndex(force) {
   // 같은 새로고침에서 두 곳(목록·오늘 탭)이 동시에 부른다. 합쳐주지 않으면
   // 폴더를 두 번 훑어 GitHub API 호출이 배로 든다(2026-10-10).
@@ -624,7 +626,17 @@ async function _buildExamIndex(force) {
   // v3: 정렬이 날짜 오름차순으로 바뀌었다. 키를 안 올리면 **이미 저장된 역순 목록**이
   // 그대로 떠서 "안 고쳐졌다"가 된다(캐시가 정렬 결과까지 담고 있다).
   const cacheKey = 'exam_index_v3';
+  const stampKey = 'exam_index_at';
+  // ⚠️ 캐시가 **스스로 낡아야 한다**. 전에는 ↻ 같은 force가 없으면 영영 다시 안 읽어서,
+  //    맥에서 퀴즈를 새로 만들어도 아이패드에는 영영 안 떴다(2026-10-21 신고:
+  //    "장기공여자관리 퀴즈는 보이지도 않음" — 그날 만든 파일이었다).
+  //    노트 목록에서 먼저 겪은 것과 같은 일이라 같은 처방을 쓴다(reader.js noteList).
+  const EXAM_TTL = 3 * 60 * 1000;
   let index = force ? null : await kvGet(cacheKey);
+  if (index) {
+    const at = Number((await kvGet(stampKey)) || 0);
+    if (Date.now() - at >= EXAM_TTL) index = null;     // 낡았으면 다시 읽는다
+  }
   if (!index) {
     const byKey = new Map();            // "과목 · 종류" 단위로 묶는다
     for (const { root, kind, ext = '.html', only } of EXAM_ROOTS) {
@@ -657,6 +669,7 @@ async function _buildExamIndex(force) {
     index.sort((a, b) => (a.kind === b.kind ? a.subject.localeCompare(b.subject, 'ko')
       : a.kind === '모의고사' ? -1 : 1));
     await kvSet(cacheKey, index);
+    await kvSet(stampKey, Date.now());
   }
   return index;
 }
