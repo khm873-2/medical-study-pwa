@@ -4378,6 +4378,69 @@ await run('누른 칸의 노트로 간다', async () => {
   return out;
 });
 
+// ══════════ 빈칸이 **어느 카드 자리에서든** 가려지고 읽히는가 (2026-10-20 신고) ══════════
+// "경식도초음파 안보임 거의" — 하이라이트(==글==) 안에 빈칸이 들어간 카드였다.
+// 빈칸 규칙을 `.cf-q`에만 적어둬서 외우기 화면·묶음 미리보기에서는 **가려지지도 않고**
+// mark의 연노랑 글씨를 그대로 물려받아, 노란 바탕에 연노랑으로 안 읽혔다.
+await run('카드 빈칸 색', async () => {
+  const out = [];
+  const lum = (c) => {
+    const m = (c.match(/[\d.]+/g) || [0, 0, 0]).map(Number);
+    const f = (v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * f(m[0]) + 0.7152 * f(m[1]) + 0.0722 * f(m[2]);
+  };
+  const ratio = (a, b) => {
+    const l1 = lum(a), l2 = lum(b);
+    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+  };
+  const mix = (fg, bg, a) => {
+    const f = (fg.match(/[\d.]+/g) || [0, 0, 0]).map(Number);
+    const g = (bg.match(/[\d.]+/g) || [0, 0, 0]).map(Number);
+    return `rgb(${f.slice(0, 3).map((v, i) => Math.round(v * a + (g[i] ?? 0) * (1 - a))).join(',')})`;
+  };
+  // vault 원문 그대로: ==**글 … 빈칸**== (하이라이트 안에 굵게, 그 안에 빈칸)
+  const look = (cls, filled) => {
+    const box = document.createElement('div');
+    box.className = cls;
+    box.style.cssText = 'position:fixed;left:20px;top:20px;width:900px;'
+      + 'background:var(--card);padding:16px;z-index:9999';
+    box.innerHTML = '<p>🌟 <mark><strong>평가의 gold standard는 '
+      + `<span class="cloze${filled ? ' filled' : ''}"><i>경식도심초음파(TEE)</i></span></strong></mark></p>`;
+    document.body.appendChild(box);
+    const cz = box.querySelector('.cloze');
+    const it = cz.querySelector('i');
+    const mk = getComputedStyle(box.querySelector('mark'));
+    const czs = getComputedStyle(cz);
+    const a = parseFloat((czs.backgroundColor.match(/[\d.]+/g) || [0, 0, 0, 1])[3] ?? 1);
+    const bg = mix(czs.backgroundColor, mk.backgroundColor, Number.isNaN(a) ? 1 : a);
+    const fg = getComputedStyle(it).color;
+    const vis = getComputedStyle(it).visibility;
+    box.remove();
+    return { fg, bg, vis, r: ratio(fg, bg) };
+  };
+
+  // 카드를 그리는 **네 자리 전부** — 하나라도 빠지면 그 자리에서 샌다
+  const WHERE = ['cf-q', 'cf-row-q', 'card-context', 'deck-q'];
+  const leaky = [];
+  const dim = [];
+  for (const cls of WHERE) {
+    const hid = look(cls, false);
+    const shown = look(cls, true);
+    const isHidden = hid.vis === 'hidden' || /rgba\(0, 0, 0, 0\)/.test(hid.fg);
+    if (!isHidden) leaky.push(`${cls}(${hid.fg})`);
+    if (shown.r < 4.5) dim.push(`${cls} ${shown.r.toFixed(1)}:1`);
+  }
+  out.push({ name: '**가려진 빈칸은 어느 자리에서도 안 비친다**', ok: leaky.length === 0,
+    detail: leaky.length ? leaky.join(' / ') : `${WHERE.length}자리 모두 가려짐` });
+  out.push({ name: '**답을 들추면 어느 자리에서도 읽힌다**(하이라이트 안이어도)',
+    ok: dim.length === 0,
+    detail: dim.length ? dim.join(' / ') : `${WHERE.length}자리 모두 4.5:1 넘음` });
+  out.push({ name: '빈칸 규칙을 자리마다 흩어 적지 않는다',
+    ok: /\.cf-q \.cloze, \.cf-row-q \.cloze, \.card-context \.cloze, \.deck-q \.cloze/
+      .test(await fetch('/css/app.css').then((r) => r.text())) });
+  return out;
+});
+
 // ══════════ 펜 캔버스가 제 칸에 **딱 맞는가** (2026-10-20 신고) ══════════
 // "위에서부터 아래까지 선택하려고 하는데 맨 아래쪽은 선택이 안됨"
 // 까닭: 캔버스는 `position:absolute; inset:0`이라 **자리를 가진 가장 가까운 조상**을

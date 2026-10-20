@@ -2083,14 +2083,23 @@ mark.peek-hit.on {
 .cf-body { display: flex; flex-direction: column; gap: 12px; justify-content: center; }
 .cf-topic { font-size: 11.5px; font-weight: 700; color: var(--accent); line-height: 1.5; }
 .cf-q { font-size: calc(17px * var(--ui-scale)); line-height: var(--read-line); word-break: keep-all; }
-.cf-q .cloze {
+/* ⚠️ 빈칸 규칙을 **자리마다 따로** 적으면 안 된다. 전에는 `.cf-q`에만 적어서
+   외우기 화면(.card-context)과 묶음 미리보기(.deck-q)에서는 가려지지 않고 답이
+   그대로 비쳤다 — 하이라이트 안이면 연노랑 글씨가 그대로 읽혔다(2026-10-20 신고).
+   카드를 그리는 **네 자리를 한 줄에** 적어 둔다. 새 자리가 생기면 여기에 더한다. */
+.cf-q .cloze, .cf-row-q .cloze, .card-context .cloze, .deck-q .cloze {
   display: inline-block; min-width: 54px; border-bottom: 2px solid var(--accent);
   color: transparent; vertical-align: baseline;
 }
-.cf-q .cloze.filled {
+.cf-q .cloze.filled, .cf-row-q .cloze.filled,
+.card-context .cloze.filled, .deck-q .cloze.filled {
   background: color-mix(in srgb, var(--correct) 16%, transparent);
   border-bottom-color: var(--correct); color: var(--text); font-weight: 700;
 }
+/* 하이라이트 **안**의 빈칸은 mark의 글자색을 물려받으면 안 된다 —
+   노란 바탕에 연노랑 글씨가 되어 안 읽힌다. 본문 글자색으로 되돌린다. */
+.cf-q mark .cloze.filled, .cf-row-q mark .cloze.filled,
+.card-context mark .cloze.filled, .deck-q mark .cloze.filled { color: var(--text); }
 .cf-q table { border-collapse: collapse; font-size: 13.5px; }
 .cf-q th, .cf-q td { border: 1px solid var(--border); padding: 6px 8px; }
 .cf-a {
