@@ -226,13 +226,23 @@ console.log(`  파싱: 시험 ${parsed}개 · 문항 ${qTotal}개 · 이미지 $
     } catch { /* 아래에서 걸린다 */ }
     check('흐름도 크기를 재는 셈이 있다', !!shapeOf);
     if (shapeOf) {
-      check('한도가 7단계 · 마디 10개', MAXD === 7 && MAXN === 10, `${MAXD}단계 ${MAXN}개`);
+      // 마디 한도는 느슨하다 — 분기 트리는 원래 마디가 많고 **옆으로** 퍼진다.
+      // 세로 길이를 정하는 건 깊이다(2026-10-20에 18장 재어 고친 기준).
+      check('깊이 한도가 7단계', MAXD === 7, `${MAXD}단계`);
+      check('마디 한도는 느슨하게(옆으로 퍼지는 건 괜찮다)', MAXN >= 14, `${MAXN}개`);
       const chain = 'flowchart TD\n' + 'ABCDEFGHIJKLM'.split('').slice(0, 12)
         .map((c, i, a) => (i < a.length - 1 ? `  ${c} --> ${a[i + 1]}` : '')).filter(Boolean).join('\n');
       const deep = shapeOf(chain);
       check('**긴 사슬의 깊이를 잰다**', deep.depth === 12 && deep.nodes === 12,
         `마디 ${deep.nodes} 깊이 ${deep.depth}`);
-      check('넘치는 것을 넘친다고 본다', deep.depth > MAXD && deep.nodes > MAXN);
+      check('깊은 것을 깊다고 본다', deep.depth > MAXD, `깊이 ${deep.depth} > ${MAXD}`);
+      // 다 그린 그림 높이가 진짜 잣대다 — 그 한도도 있는지 본다
+      {
+        const src = readFileSync(`${VAULT}/.claude/scripts/render-mermaid.mjs`, 'utf8');
+        check('**그린 뒤 높이도 잰다**(진짜 잣대)',
+          /MAX_PX\s*=\s*\d{4}/.test(src) && /pngTall/.test(src),
+          (src.match(/MAX_PX = \d+/) || ['없음'])[0]);
+      }
       const wide = shapeOf('flowchart TD\n  A --> B\n  A --> C\n  A --> D\n  B --> E\n  C --> E\n  D --> E');
       check('**넓게 편 것은 깊이가 얕다**(마디가 같아도)', wide.depth === 3 && wide.nodes === 5,
         `마디 ${wide.nodes} 깊이 ${wide.depth}`);

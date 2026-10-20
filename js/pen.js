@@ -120,7 +120,10 @@ export class PenLayer {
       return isUiTarget(el);
     }
     for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
-      if (el === this.canvas || el === this.host || el.contains(this.host)) break;
+      // 내 캔버스·host를 만나면 멈춘다. host를 **품고 있는** 것(바깥 틀)도 마찬가지 —
+      // 그 뒤로는 전부 내 밑이다. (contains가 없는 것도 올 수 있다 — 그냥 넘긴다)
+      if (el === this.canvas || el === this.host) break;
+      if (typeof el.contains === 'function' && el.contains(this.host)) break;
       if (isUiTarget(el)) return true;
     }
     return false;

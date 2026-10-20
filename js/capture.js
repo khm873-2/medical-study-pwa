@@ -29,6 +29,29 @@ function inlineStyles(src, dst) {
   dst.setAttribute('style', css);
   const sk = src.children, dk = dst.children;
   for (let i = 0; i < sk.length && i < dk.length; i++) inlineStyles(sk[i], dk[i]);
+  // ⚠️ 자식을 **다 훑은 뒤에** 민다. 먼저 감싸면 아래 재귀가 짝을 잃는다
+  //    (복제본 자식이 감싼 것 하나로 바뀌므로).
+  carryScroll(src, dst);
+}
+
+/**
+ * 안에서 스크롤된 칸의 **스크롤 위치를 복제본에 옮긴다**.
+ *
+ * ⚠️ `cloneNode`는 scrollTop을 안 가져온다. 게다가 SVG로 넘길 때 스크롤 위치는
+ *    적어 보낼 수가 없다 — 그래서 옆칸처럼 **안에서 스크롤되는 곳**을 캡처하면
+ *    복제본이 맨 위부터 그려져서, 내가 고른 데가 아니라 **한참 위의 글**이 떠졌다
+ *    (2026-10-20 신고: 고른 범위와 복사된 범위가 다름).
+ * 스크롤 대신 **속엣것을 그만큼 밀어 올린다** — 보이는 결과는 같고, 이건 적어 보낼 수 있다.
+ */
+function carryScroll(src, dst) {
+  const top = src.scrollTop || 0;
+  const left = src.scrollLeft || 0;
+  if (!top && !left) return;
+  const shift = document.createElement('div');
+  shift.setAttribute('style',
+    `transform:translate(${-left}px,${-top}px);will-change:transform;`);
+  while (dst.firstChild) shift.appendChild(dst.firstChild);
+  dst.appendChild(shift);
 }
 
 // 자리만 차지하고 아무것도 안 그리는 1x1 투명 그림

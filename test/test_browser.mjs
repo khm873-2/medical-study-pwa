@@ -4311,6 +4311,53 @@ await run('짝 찾기 — 이름이 달라도', async () => {
   return out;
 });
 
+// ══════════ 캡처가 **스크롤을 따라가는가** (2026-10-20 신고) ══════════
+// "이 범위를 선택해서 캡쳐했는데 다른 범위가 선택되어서 복사되는 버그"
+// cloneNode는 scrollTop을 안 가져오고, SVG로 넘길 때 스크롤 위치는 적어 보낼 수도 없다.
+// 그래서 옆칸처럼 **안에서 스크롤되는 곳**을 캡처하면 늘 맨 위가 떠졌다.
+await run('캡처와 스크롤', async () => {
+  const out = [];
+  const { captureRect } = await import('/js/capture.js');
+  const box = document.createElement('div');
+  box.id = 'capScrollTest';
+  box.style.cssText = 'position:fixed;left:40px;top:40px;width:420px;height:240px;'
+    + 'overflow-y:auto;background:#fff;z-index:9999';
+  box.innerHTML = Array.from({ length: 40 }, (_, i) =>
+    `<p style="margin:0;padding:8px;font:16px/1.4 sans-serif;color:#000">줄번호 ${i + 1}</p>`).join('');
+  document.body.appendChild(box);
+  await new Promise((r) => setTimeout(r, 150));
+  const br = box.getBoundingClientRect();
+  const shot = () => captureRect({ left: br.left, top: br.top, width: br.width, height: br.height });
+  const pixels = (cv) => cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+
+  try {
+    box.scrollTop = 0;
+    await new Promise((r) => setTimeout(r, 150));
+    const d0 = pixels(await shot());
+    box.scrollTop = 600;
+    await new Promise((r) => setTimeout(r, 180));
+    // 눈에 보이는 줄이 실제로 바뀌었는지 먼저 확인한다(검사가 헛돌지 않게)
+    const seen = [...box.querySelectorAll('p')].filter((p) => {
+      const r = p.getBoundingClientRect();
+      return r.top >= br.top - 2 && r.bottom <= br.bottom + 2;
+    });
+    out.push({ name: '스크롤하면 보이는 줄이 바뀐다', ok: seen.length > 0 && !/줄번호 1$/.test(seen[0].textContent),
+      detail: seen.length ? seen[0].textContent : '없음' });
+    const d1 = pixels(await shot());
+    let diff = 0;
+    for (let i = 0; i < d1.length; i += 4) if (Math.abs(d1[i] - d0[i]) > 30) diff++;
+    out.push({ name: '**캡처가 스크롤을 따라간다**(늘 맨 위를 뜨지 않는다)',
+      ok: diff > 500, detail: `다른 화소 ${diff}` });
+    out.push({ name: '속엣것을 밀어서 옮긴다(스크롤 위치는 적어 보낼 수 없다)',
+      ok: /carryScroll/.test(await fetch('/js/capture.js').then((r) => r.text())) });
+  } catch (e) {
+    out.push({ name: '캡처 스크롤 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 120) });
+  } finally {
+    box.remove();
+  }
+  return out;
+});
+
 // ══════════ 그림 크게 보기 + 필기 (2026-10-20 요청) ══════════
 // "그림 눌러서 크게보기 및 필기 해서 저장 이런거 넣자."
 // 필기는 읽기 화면과 **같은 펜**(PenLayer)을 쓴다 — 애플펜슬의 중간 좌표와 필압을
