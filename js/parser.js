@@ -38,12 +38,29 @@ function sliceArray(html, name) {
   return null;
 }
 
-/** JSON이면 JSON으로, 아니면 JS 리터럴로 읽는다. */
-function readLiteral(text) {
+/**
+ * JSON이면 JSON으로, 아니면 JS 리터럴로 읽는다.
+ *
+ * ⚠️ 리터럴이 **그 파일 안의 도우미**를 쓸 수 있다. 실제로 CRRT 퀴즈는
+ *    `function wr(h){...}` 와 `const H1 = "..."` 를 만들어 `wikiRefs: wr(H1)` 로
+ *    쓴다 — 배열만 떼어 평가하면 "wr is not defined"로 통째로 실패하고,
+ *    앱에는 "문항 데이터를 찾지 못했습니다"로 떠서 **퀴즈가 아예 안 열렸다**
+ *    (2026-10-21 신고). 그럴 땐 앞에 선언된 것들을 함께 읽는다(`head`).
+ */
+function readLiteral(text, head) {
   try { return JSON.parse(text); } catch { /* JS 리터럴로 재시도 */ }
   try {
     // eslint-disable-next-line no-new-func
     const v = new Function(`"use strict"; return (${text});`)();
+    return Array.isArray(v) ? v : null;
+  } catch { /* 도우미를 쓰는 파일이다 — 아래에서 같이 읽는다 */ }
+  if (!head) return null;
+  try {
+    // 앞쪽의 **선언만** 추린다(const·let·var·function). document를 만지는 줄은
+    // 섞이면 안 되므로 가져오지 않는다 — 선언은 불러야 돌아가니 안전하다.
+    const decls = (head.match(/^[ \t]*(?:const|let|var|function)\s[\s\S]*?$/gm) || []).join('\n');
+    // eslint-disable-next-line no-new-func
+    const v = new Function(`"use strict"; ${decls}\nreturn (${text});`)();
     return Array.isArray(v) ? v : null;
   } catch { return null; }
 }
@@ -160,7 +177,11 @@ export function parseExamHtml(html) {
   // ① 표준·변형 A/B
   for (const name of ['QUESTIONS', 'questions']) {
     const lit = sliceArray(html, name);
-    const arr = lit && readLiteral(lit);
+    // 리터럴 **앞쪽**을 같이 넘긴다 — 거기 도우미가 선언돼 있을 수 있다.
+    // ⚠️ 자르는 자리는 `const QUESTIONS` **문장 앞**이다. 리터럴(`[`) 앞에서 자르면
+    //    `const QUESTIONS = ` 토막이 끼어들어 그 자체가 문법 오류가 된다.
+    const stmt = new RegExp(`(?:const|let|var)\\s+${name}\\s*=\\s*\\[`).exec(html);
+    const arr = lit && readLiteral(lit, stmt ? html.slice(0, stmt.index) : '');
     if (arr && arr.length) { items = arr.map((r, i) => normalize(r, i)); break; }
   }
   // ② Q + OX 분할 형식

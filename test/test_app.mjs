@@ -142,6 +142,53 @@ console.log(`  파싱: 시험 ${parsed}개 · 문항 ${qTotal}개 · 이미지 $
   console.log(`  문제 그림 ${seen}장 — vault에서 전부 찾음${missing.length ? ` (못 찾음 ${missing.length})` : ''}`);
 }
 
+// --- 모든 시험이 **실제로 열리는가** (2026-10-21 신고) ---
+// "CRRT 퀴즈 안 들어가짐" — 그 파일은 `function wr(h){...}` 도우미를 만들어
+// `wikiRefs: wr(H1)` 로 쓴다. 배열만 떼어 평가하니 "wr is not defined"로 통째로
+// 실패했고, 앱에는 "문항 데이터를 찾지 못했습니다"로 떠서 퀴즈가 안 열렸다.
+// ⚠️ 50개만 세던 옛 검사로는 못 잡는다 — **있는 시험을 전부** 열어본다.
+{
+  let opened = 0;
+  const broken = [];
+  for (const root of ['05_퀴즈', '06_모의고사']) {
+    let dirs;
+    try { dirs = readdirSync(`${VAULT}/${root}`); } catch { continue; }
+    for (const d of dirs) {
+      let files;
+      try { files = readdirSync(`${VAULT}/${root}/${d}`); } catch { continue; }
+      for (const f of files.filter((x) => x.endsWith('.html'))) {
+        try {
+          const r = parseExamHtml(readFileSync(`${VAULT}/${root}/${d}/${f}`, 'utf8'));
+          if (r.questions.length) opened++;
+          else broken.push(`${f}: 문항 0개`);
+        } catch (e) { broken.push(`${f}: ${String(e.message).slice(0, 40)}`); }
+      }
+    }
+  }
+  check('**vault의 시험이 전부 열린다**', broken.length === 0,
+    `${broken.length}개 못 열림 — ${broken.slice(0, 3).join(' / ')}`);
+  console.log(`  시험 ${opened}개 — 전부 열림${broken.length ? ` (못 열림 ${broken.length})` : ''}`);
+
+  // 도우미를 쓰는 꼴을 손으로 만들어서도 확인한다(vault가 바뀌어도 이 길은 지킨다)
+  const withHelper = [
+    '<script>',
+    'const NOTE = "응급중환자_테스트";',
+    'const H1 = "1. 첫 장";',
+    'function wr(h){return [{note:NOTE, heading:h}];}',
+    'const QUESTIONS = [',
+    ' {num:1,type:"mc",q:"물음?",opts:["가","나"],ans:1,explain:"해설",wikiRefs:wr(H1)}',
+    '];',
+    '</script>',
+  ].join('\n');
+  let got = null;
+  try { got = parseExamHtml(withHelper).questions; } catch { /* 아래에서 걸린다 */ }
+  check('**도우미(wr·H1)를 쓰는 파일도 읽는다**', !!got && got.length === 1,
+    got ? `${got.length}문항` : '못 읽음');
+  check('도우미가 만든 wikiRefs도 살아 있다',
+    !!got && got[0].wikiRefs && got[0].wikiRefs[0].heading === '1. 첫 장',
+    got && got[0].wikiRefs ? JSON.stringify(got[0].wikiRefs[0]) : '없음');
+}
+
 // --- 모든 퀴즈·모의고사가 **연계노트를 찾을 수 있는가** (2026-10-20 신고) ---
 // "PALS는 왜 퀴즈 푸는데 연계노트가 지정돼 있지 않다고 나옴?"
 // 짝 md의 `연계노트: "[[...]]"`가 빠져 있으면 옆칸이 통째로 쓸모없어진다.
