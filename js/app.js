@@ -37,6 +37,10 @@ import { weakQueue, weakBySubject, examProgress } from './attempts.js';
 const EXAM_ROOTS = [
   { root: '06_모의고사', kind: '모의고사' },
   { root: '05_퀴즈', kind: '퀴즈' },
+  // 드릴 — 강의 하나에 매이지 않고 **헷갈리는 축만 골라 만든** 훈련용 묶음.
+  // 퀴즈(강의 1개 = 시험 1개)와 성격이 달라 탭을 나눈다(2026-10-20 요청).
+  // 나중에 문제은행에서 무작위로 뽑아 즉석으로 만드는 시험도 여기로 들어온다.
+  { root: '07_드릴', kind: '드릴' },
   // 족보(학교 기출)는 HTML이 아니라 **가공된 마크다운**이고 과목별 가공 상태가 제각각이다.
   // 지금 가공이 끝난 응급_중환자만 연다(2026-10-12 요청) — `only`를 늘리면 과목이 늘어난다.
   { root: JOKBO_ROOT, kind: '족보', ext: '.md', only: ['응급_중환자'] },
@@ -576,7 +580,7 @@ async function loadList(force) {
   // 로딩·오류 문구는 **지금 보고 있는 탭**에 띄운다
   const active = document.querySelector('.tab.active')?.dataset.tab;
   const body = document.getElementById(TAB_BODY[active] || 'todayBody');
-  if (active === 'quizzes' || active === 'exams' || active === 'jokbo') {
+  if (active === 'quizzes' || active === 'exams' || active === 'jokbo' || active === 'drills') {
     body.innerHTML = '<p class="muted">불러오는 중…</p>';
   }
 
@@ -586,6 +590,7 @@ async function loadList(force) {
     renderList(index, sessions, '퀴즈');
     renderList(index, sessions, '모의고사');
     renderList(index, sessions, '족보');
+    renderList(index, sessions, '드릴');
   } catch (e) {
     body.innerHTML = '';
     const box = document.createElement('div');
@@ -625,7 +630,9 @@ async function buildExamIndex(force) {
 async function _buildExamIndex(force) {
   // v3: 정렬이 날짜 오름차순으로 바뀌었다. 키를 안 올리면 **이미 저장된 역순 목록**이
   // 그대로 떠서 "안 고쳐졌다"가 된다(캐시가 정렬 결과까지 담고 있다).
-  const cacheKey = 'exam_index_v3';
+  // v4: 07_드릴이 EXAM_ROOTS에 들어왔다. 캐시에는 드릴이 아예 없으므로 키를 올려야
+  //     TTL(3분)을 기다리지 않고 바로 뜬다.
+  const cacheKey = 'exam_index_v4';
   const stampKey = 'exam_index_at';
   // ⚠️ 캐시가 **스스로 낡아야 한다**. 전에는 ↻ 같은 force가 없으면 영영 다시 안 읽어서,
   //    맥에서 퀴즈를 새로 만들어도 아이패드에는 영영 안 떴다(2026-10-21 신고:
@@ -666,8 +673,9 @@ async function _buildExamIndex(force) {
         || a.file.localeCompare(b.file, 'ko'));
     }
     // 모의고사를 먼저, 그 다음 퀴즈. 같은 종류 안에서는 과목 이름순.
+    const KIND_ORDER = { 모의고사: 0, 퀴즈: 1, 족보: 2, 드릴: 3 };
     index.sort((a, b) => (a.kind === b.kind ? a.subject.localeCompare(b.subject, 'ko')
-      : a.kind === '모의고사' ? -1 : 1));
+      : (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9)));
     await kvSet(cacheKey, index);
     await kvSet(stampKey, Date.now());
   }
@@ -679,7 +687,8 @@ async function _buildExamIndex(force) {
  * @param {string} kind '모의고사' | '퀴즈'
  */
 function renderList(index, sessions, kind = '모의고사') {
-  const bodyId = kind === '퀴즈' ? 'quizBody' : kind === '족보' ? 'jokboBody' : 'listBody';
+  const bodyId = kind === '퀴즈' ? 'quizBody' : kind === '족보' ? 'jokboBody'
+    : kind === '드릴' ? 'drillBody' : 'listBody';
   const body = document.getElementById(bodyId);
   body.innerHTML = '';
   index = index.filter((g) => (g.kind || '모의고사') === kind);
@@ -692,6 +701,7 @@ function renderList(index, sessions, kind = '모의고사') {
       퀴즈: 'vault의 05_퀴즈/{과목}/ 에 파일이 생기면 여기에 나옵니다.',
       족보: `vault의 ${JOKBO_ROOT}/{과목}/NN_챕터.md 를 읽습니다.`,
       모의고사: 'vault의 06_모의고사/{과목}/ 에 파일이 생기면 여기에 나옵니다.',
+      드릴: 'vault의 07_드릴/{과목}/ 에 파일이 생기면 여기에 나옵니다.',
     };
     body.appendChild(muted(`${kind}를 찾지 못했습니다. ${WHERE[kind] || ''}`.trim()));
     const b = document.createElement('button');
@@ -2693,6 +2703,7 @@ function curPane() { return panes[activePane] || null; }
 // ---- 탭 ----
 const TAB_BODY = {
   today: 'todayBody', quizzes: 'quizBody', exams: 'listBody', jokbo: 'jokboBody',
+  drills: 'drillBody',
   notes: 'notesBody', cards: 'cardsBody',
 };
 
@@ -2715,10 +2726,10 @@ function showTab(which, { remember = true, force = false } = {}) {
   // 퀴즈·모의고사·족보는 **숨겼다 보여주기만** 하고 있었다. 그래서 시험을 열다 만 뒤
   // 돌아오면 "시험을 불러오는 중…"이 그대로 남아 있었다(2026-10-14 점검).
   // 캐시해둔 목록으로 다시 그린다 — 네트워크를 타지 않으니 공짜다.
-  if (['quizzes', 'exams', 'jokbo'].includes(which)) redrawList(which).catch(() => {});
+  if (['quizzes', 'exams', 'jokbo', 'drills'].includes(which)) redrawList(which).catch(() => {});
 }
 
-const KIND_OF = { quizzes: '퀴즈', exams: '모의고사', jokbo: '족보' };
+const KIND_OF = { quizzes: '퀴즈', exams: '모의고사', jokbo: '족보', drills: '드릴' };
 
 /** 캐시된 목록으로 그 탭을 다시 그린다. 캐시가 없으면 vault에서 한 번 읽는다. */
 async function redrawList(which) {

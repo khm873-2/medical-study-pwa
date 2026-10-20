@@ -1066,19 +1066,19 @@ await run('탭 분리', () => {
   document.getElementById('listScreen').classList.remove('hidden');
 
   const tabs = [...document.querySelectorAll('.tab')];
-  const WANT = ['오늘', '퀴즈', '모의고사', '족보', '노트 읽기', '카드'];
+  const WANT = ['오늘', '퀴즈', '모의고사', '족보', '드릴', '노트 읽기', '카드'];
   out.push({ name: `탭이 ${WANT.length}개`, ok: tabs.length === WANT.length, detail: tabs.map((t) => t.textContent).join('·') });
   out.push({ name: `순서가 ${WANT.join(' → ')}`,
     ok: WANT.every((w, i) => tabs[i] && tabs[i].textContent === w),
     detail: tabs.map((t) => t.textContent).join(' ') });
   out.push({ name: '오늘 탭이 기본', ok: tabs[0].classList.contains('active') });
   out.push({ name: '탭마다 담을 자리가 있다',
-    ok: ['todayBody', 'quizBody', 'listBody', 'jokboBody', 'notesBody', 'cardsBody']
+    ok: ['todayBody', 'quizBody', 'listBody', 'jokboBody', 'drillBody', 'notesBody', 'cardsBody']
       .every((id) => !!document.getElementById(id)) });
   // 어느 탭을 눌러도 그 탭 하나만 보여야 한다 — 탭을 추가하며 hidden 처리를 빼먹으면 겹친다.
   // (앞선 검사들이 탭을 옮겨놨을 수 있으므로 눌러서 상태를 만들고 본다.)
   const BODY = { today: 'todayBody', quizzes: 'quizBody', exams: 'listBody', jokbo: 'jokboBody',
-    notes: 'notesBody', cards: 'cardsBody' };
+    drills: 'drillBody', notes: 'notesBody', cards: 'cardsBody' };
   for (const t of tabs) {
     const key = t.dataset.tab;
     t.click();
@@ -2558,7 +2558,7 @@ const LECTURE_NAME = "전체보기 테스트";
     // 앞선 검사들이 남긴 상태를 치운다 — 특히 last_tab이 'cards'면 카드 화면으로 가버리고,
     // exam_index 캐시가 남아 있으면 가짜 시험이 목록에 안 들어온다.
     localStorage.setItem('last_tab', 'exams');
-    await d.kvSet('exam_index_v3', null);
+    await d.kvSet('exam_index_v4', null);
     await d.kvSet('schedule_cache', null);
   });
   await page.reload({ waitUntil: 'networkidle0' });
@@ -4749,7 +4749,7 @@ await run('새 퀴즈가 저절로 뜬다', async () => {
     return { ok: true, status: 200, json: async () => ([]), text: async () => '' };
   };
   try {
-    await d.kvSet('exam_index_v3', null);
+    await d.kvSet('exam_index_v4', null);
     await d.kvSet('exam_index_at', 0);
     const first = await window.__examIndex();
     const quizOf = (idx) => (idx.find((g) => g.kind === '퀴즈') || { exams: [] }).exams.length;
@@ -4771,7 +4771,7 @@ await run('새 퀴즈가 저절로 뜬다', async () => {
     out.push({ name: '새 퀴즈 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 130) });
   } finally {
     window.fetch = real;
-    await d.kvSet('exam_index_v3', null);
+    await d.kvSet('exam_index_v4', null);
     await d.kvSet('exam_index_at', 0);
   }
   return out;
@@ -7533,7 +7533,7 @@ await run('아이콘 통일', () => {
 await run('빈 화면 안내', async () => {
   const out = [];
   const d = await import('/js/db.js');
-  await d.kvSet('exam_index_v3', []);
+  await d.kvSet('exam_index_v4', []);
   await d.kvSet('note_index_v2', []);
   const says = {};
   const bodyOf = () => document.querySelector('#quizBody:not(.hidden), #listBody:not(.hidden), #jokboBody:not(.hidden), #notesBody:not(.hidden)');
