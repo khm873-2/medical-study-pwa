@@ -4311,6 +4311,73 @@ await run('짝 찾기 — 이름이 달라도', async () => {
   return out;
 });
 
+// ══════════ 체크·카드가 **누른 칸의 노트**로 가는가 (2026-10-20 신고) ══════════
+// "바꾸지 못했습니다: \"채택 (안 1)\" 줄을 원본에서 못 찾았습니다"
+// 까닭: 노트를 띄우는 자리가 넷인데(읽기·옆칸 위·옆칸 아래·들러보기) 전역 상태로
+// "지금 노트"를 물었다. 아래 칸에서 체크해도 **위 칸** 노트에서 줄을 찾다 실패했다.
+await run('누른 칸의 노트로 간다', async () => {
+  const out = [];
+  const R = await import('/js/reader.js');
+  const real = window.fetch;
+  let put = null;
+  const 산문 = '# 산문\n\n## 토막\n덱스메데토미딘은 알파2 작용제다.\n';
+  const 암기 = '# 암기법\n\n## 요령\n- [ ] 채택 (안 1)\n- [ ] 채택 (안 2)\n';
+  window.fetch = async (u, i) => {
+    const t = String(u);
+    if (!t.includes('api.github.com')) return real(u, i);
+    const p = decodeURIComponent((t.split('/contents/')[1] || '').split('?')[0]);
+    // ⚠️ 노트에 쓰는 PUT만 잡는다 — 백업 같은 다른 PUT이 끼어들면 엉뚱한 걸 본다
+    if (i && i.method === 'PUT') {
+      if (/암기법/.test(p)) put = JSON.parse(i.body);
+      return { ok: true, status: 200, json: async () => ({ content: { sha: 'z' } }) };
+    }
+    const body = p.includes('암기법') ? 암기 : 산문;
+    return { ok: true, status: 200,
+      json: async () => ({ sha: 'x', content: btoa(unescape(encodeURIComponent(body))) }),
+      text: async () => body };
+  };
+  try {
+    document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+    document.getElementById('quizScreen').classList.remove('hidden');
+    document.body.dataset.screen = 'quizScreen';
+    await window.__openWikiNote(await R.loadNote('02_Wiki/응급_중환자/산문.md'));
+    await window.__openWikiNote2(await R.loadNote('02_Wiki/응급_중환자/암기법/암기법.md'));
+    await new Promise((r) => setTimeout(r, 450));
+
+    const boxes = [...document.querySelectorAll('#wiki2Body [role="checkbox"], #wiki2Body .task-box')];
+    out.push({ name: '아래 칸에 체크 상자가 그려진다', ok: boxes.length === 2, detail: `${boxes.length}개` });
+    if (boxes.length) {
+      let err = null;
+      const obs = new MutationObserver((ms) => {
+        for (const m of ms) for (const n of m.addedNodes) {
+          if (n.nodeType === 1 && /못했|못 찾/.test(n.textContent || '')) err = n.textContent;
+        }
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
+      boxes[0].click();
+      await new Promise((r) => setTimeout(r, 1100));
+      obs.disconnect();
+      out.push({ name: '**아래 칸에서 체크해도 안 깨진다**', ok: !err, detail: err || '오류 없음' });
+      const sent = put && put.content
+        ? decodeURIComponent(escape(atob(put.content))) : '';
+      out.push({ name: '**그 줄이 실제로 [x]로 바뀌어 올라간다**',
+        ok: /\[x\] 채택 \(안 1\)/.test(sent), detail: sent ? sent.split('\n').slice(-3).join(' / ') : '안 올라감' });
+      out.push({ name: '위 칸 노트(산문)가 아니라 아래 칸 노트에 쓴다',
+        ok: !!put && /암기법/.test(String(put.message || '') + String(put.path || '') + sent),
+        detail: sent.slice(0, 24) });
+    }
+    out.push({ name: '누른 자리로 노트를 가린다(전역 상태로 묻지 않는다)',
+      ok: /function docOfNode/.test(await fetch('/js/app.js').then((r) => r.text())) });
+  } catch (e) {
+    out.push({ name: '칸별 노트 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 130) });
+  } finally {
+    window.fetch = real;
+    if (window.__resetWiki) window.__resetWiki();
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  return out;
+});
+
 // ══════════ 캡처가 **스크롤을 따라가는가** (2026-10-20 신고) ══════════
 // "이 범위를 선택해서 캡쳐했는데 다른 범위가 선택되어서 복사되는 버그"
 // cloneNode는 scrollTop을 안 가져오고, SVG로 넘길 때 스크롤 위치는 적어 보낼 수도 없다.
@@ -4422,6 +4489,18 @@ await run('그림 크게 보기', async () => {
     out.push({ name: '한 획 되돌린다', ok: (window.__ivStrokes ? window.__ivStrokes() : 1) === n - 1 });
   }
 
+  // 펜 굵기 — 동그라미 크기로 고른다(2026-10-20 요청)
+  const nibs = [...document.querySelectorAll('#ivNibs .iv-nib')];
+  out.push({ name: '펜 굵기를 고를 수 있다', ok: nibs.length >= 3, detail: `${nibs.length}단계` });
+  if (nibs.length >= 2 && window.__ivPenWidth) {
+    nibs[nibs.length - 1].click();
+    await new Promise((r) => setTimeout(r, 120));
+    out.push({ name: '**고른 굵기가 펜에 들어간다**',
+      ok: window.__ivPenWidth() === Number(nibs[nibs.length - 1].dataset.nib),
+      detail: `${window.__ivPenWidth()}` });
+    out.push({ name: '고른 티가 난다', ok: nibs[nibs.length - 1].classList.contains('on') });
+  }
+
   // 색을 고를 수 있다
   const inks = document.querySelectorAll('#ivColors .iv-ink');
   out.push({ name: '펜 색을 고른다', ok: inks.length >= 3, detail: `${inks.length}가지` });
@@ -4441,6 +4520,31 @@ await run('그림 크게 보기', async () => {
     const bmp = blob && self.createImageBitmap ? await createImageBitmap(blob) : null;
     if (bmp) out.push({ name: '원본 크기 그대로 굽는다(흐릿해지지 않게)',
       ok: bmp.width === 400 && bmp.height === 300, detail: `${bmp.width}×${bmp.height}` });
+  }
+
+  // ── 두 손가락으로 **잡은 자리**를 중심으로 커지는가 (2026-10-20 신고) ──
+  // "두 손가락으로 잡은 부분이 확대가 돼야지 일괄적으로 한 점 중심으로 확대되는 버그"
+  // transform-origin을 한 점으로 박아두면 손가락을 어디에 두든 늘 같은 데가 중심이 된다.
+  if (typeof window.__ivZoom === 'function') {
+    const b0 = big.getBoundingClientRect();
+    const fx = b0.left + b0.width * 0.25;        // 왼쪽 위 1/4 지점을 잡는다
+    const fy = b0.top + b0.height * 0.25;
+    const u = (fx - b0.left) / b0.width;         // 그 점이 그림 안 어디인지(비율)
+    const v = (fy - b0.top) / b0.height;
+    window.__ivZoom(2.5, fx, fy);
+    await new Promise((r) => setTimeout(r, 200));
+    const b1 = big.getBoundingClientRect();
+    const nx = b1.left + u * b1.width;           // 같은 그림 지점이 지금 어디 있나
+    const ny = b1.top + v * b1.height;
+    const off = Math.hypot(nx - fx, ny - fy);
+    out.push({ name: '**잡은 자리가 제자리에 붙들린다**', ok: off < 6,
+      detail: `어긋남 ${Math.round(off)}px` });
+    out.push({ name: '배율이 실제로 커진다', ok: b1.width > b0.width * 2,
+      detail: `${Math.round(b0.width)} → ${Math.round(b1.width)}px` });
+    document.getElementById('ivFit').click();
+    await new Promise((r) => setTimeout(r, 150));
+    out.push({ name: '"맞춤"을 누르면 되돌아온다',
+      ok: Math.abs(big.getBoundingClientRect().width - b0.width) < 2 });
   }
 
   document.getElementById('ivClose').click();

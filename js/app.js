@@ -1820,8 +1820,11 @@ document.getElementById('selCopy').onclick = async () => {
 // 전에는 퀴즈에서만 되는 "메모"였고 아이콘도 필기와 같은 ✎라 뭘 하는 건지 알 수 없었다.
 document.getElementById('selCloze').onclick = () => {
   const t = selTerm();
-  // 블록을 **지금** 잡아둔다 — 팝업을 닫으면 선택이 풀려 못 찾는다
-  const root = document.getElementById('readBody') || document.getElementById('wikiBody');
+  // 블록을 **지금** 잡아둔다 — 팝업을 닫으면 선택이 풀려 못 찾는다.
+  // ⚠️ 어느 칸에서 긁었는지부터 본다 — 아래 칸에서 긁었는데 위 칸 노트에 붙으면
+  //    카드가 엉뚱한 노트에 쌓인다(2026-10-20에 체크 상자에서 같은 실수를 찾았다).
+  const root = scrapRoot() || document.getElementById('readBody')
+    || document.getElementById('wikiBody');
   let ctxBlock = null;
   try {
     const sel = window.getSelection();
@@ -1838,8 +1841,8 @@ document.getElementById('selCloze').onclick = () => {
   }
   hideSelPop();
   if (!t) return;
-  const doc = currentDoc();
-  const sec = doc && doc.sections ? doc.sections[currentSecIdx()] : null;
+  const doc = docOfNode(root);
+  const sec = doc && doc.sections ? doc.sections[doc.secIdx] : null;
   openClozeMaker(t, {
     notePath: (doc && doc.path) || '',
     noteTitle: (doc && doc.title) || '',
@@ -4645,7 +4648,10 @@ function alertSheet(title, body, onFix) {
  *    원본을 다시 읽어 그 줄이 그대로인지 확인한다.
  */
 async function toggleTask(btn) {
-  const doc = currentDoc();
+  // ⚠️ **어느 칸에서 눌렀는지**로 노트를 정한다. 전역 상태를 보면 안 된다 —
+  //    퀴즈 옆칸을 둘로 나눠 쓸 때, 아래 칸에서 체크해도 currentDoc()은 **위 칸**
+  //    노트를 돌려줘서 "그 줄을 원본에서 못 찾았습니다"가 났다(2026-10-20 신고).
+  const doc = docOfNode(btn);
   if (!(doc && doc.path)) { toast('어느 노트인지 알 수 없습니다.'); return; }
   const want = btn.getAttribute('aria-checked') !== 'true';
   const label = btn.dataset.text || '';
@@ -4663,7 +4669,7 @@ async function toggleTask(btn) {
     //    이제 **앞 섹션들의 상자 수를 더해** 전체에서 몇 번째인지로 바로 간다 —
     //    섹션 본문은 앱이 이미 들고 있으니 셈이 어긋날 데가 없다.
     const BOX = /^\s*[-*+]\s*\[([ xX])\]\s*(.*)$/;
-    const secIdx = currentSecIdx();
+    const secIdx = doc.secIdx;
     let before = 0;
     for (let k = 0; k < secIdx; k++) {
       before += (doc.sections[k].text.split('\n').filter((l) => BOX.test(l))).length;
@@ -4724,6 +4730,38 @@ async function toggleTask(btn) {
 function currentSecIdx() {
   if (document.body.dataset.screen === 'readScreen' && reader) return reader.secIdx;
   return (wikiState && wikiState.secIdx) || 0;
+}
+
+/**
+ * 이 요소가 **어느 노트** 안에 있는가 — 지금 보고 있는 토막 번호까지 함께.
+ *
+ * 노트를 띄우는 자리가 넷이다(읽기 본문·옆칸 위·옆칸 아래·들러보기). 전역 상태로
+ * "지금 노트"를 물으면 **누른 자리와 다른 노트**가 나올 수 있다 — 실제로 아래 칸에서
+ * 체크하면 위 칸 노트에서 줄을 찾다 실패했다(2026-10-20).
+ */
+/** 지금 글이 잡혀 있는 본문 칸. 없으면 null. */
+function scrapRoot() {
+  const sel = window.getSelection();
+  const node = sel && sel.rangeCount ? sel.getRangeAt(0).commonAncestorContainer : null;
+  const el = node && (node.nodeType === 1 ? node : node.parentElement);
+  const host = el && el.closest
+    ? el.closest('#wiki2Body, #wikiBody, #readBody, .peek-body') : null;
+  return host || null;
+}
+
+function docOfNode(el) {
+  const inWiki2 = el && el.closest && el.closest('#wikiPanel2');
+  if (inWiki2 && wiki2State && wiki2State.refs) {
+    const w = wiki2State.refs;
+    return { title: w.noteName, path: w.notePath || '', sections: w.sections, secIdx: wiki2State.secIdx || 0 };
+  }
+  const inWiki = el && el.closest && el.closest('#wikiPanel');
+  if (inWiki && wikiState && wikiState.refs) {
+    const w = wikiState.refs;
+    return { title: w.noteName, path: w.notePath || '', sections: w.sections, secIdx: wikiState.secIdx || 0 };
+  }
+  const d = currentDoc();
+  return d ? { ...d, secIdx: currentSecIdx() } : null;
 }
 
 /**
@@ -9368,30 +9406,69 @@ function bindIvZoom() {
   const stage = document.getElementById('ivStage');
   const card = document.getElementById('ivCard');
   const pts = new Map();
-  let base = 0;        // 벌리기 시작했을 때의 손가락 사이 거리
-  let from = 1;
+  let base = 0;              // 벌리기 시작했을 때의 손가락 사이 거리
+  let fromZoom = 1;
+  let fromMid = null;        // 그때 손가락 한가운데(화면 좌표)
+  let fromPan = { x: 0, y: 0 };
+  let pan = { x: 0, y: 0 };  // 확대한 그림을 끌어 옮긴 양
+
+  const mid = () => {
+    const [a, b] = [...pts.values()];
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  };
   const span = () => {
     const [a, b] = [...pts.values()];
     return Math.hypot(a.x - b.x, a.y - b.y);
   };
   const apply = () => {
-    card.style.transform = ivZoom === 1 ? '' : `scale(${ivZoom})`;
-    card.style.transformOrigin = 'center top';
+    // ⚠️ 기준점을 왼쪽 위로 두고 **옮긴 뒤 키운다**. transform-origin을 가운데로 두면
+    //    손가락을 어디에 두든 늘 같은 점을 중심으로 커진다(2026-10-20 신고).
+    card.style.transformOrigin = '0 0';
+    card.style.transform = (ivZoom === 1 && !pan.x && !pan.y)
+      ? '' : `translate(${pan.x}px, ${pan.y}px) scale(${ivZoom})`;
     document.getElementById('ivZoomLabel').textContent = `${Math.round(ivZoom * 100)}%`;
-    // 캔버스가 함께 늘어나므로 굵기를 배율로 나눠 **보이는 굵기**를 지킨다
-    if (ivPen) ivPen.width = ivPen.width;         // 값은 그대로, 아래 CSS 배율이 처리
   };
+  /** 화면의 한 점(fx, fy)을 **그 자리에 붙들어 둔 채** 배율만 바꾼다. */
+  const zoomAround = (next, fx, fy) => {
+    const r = card.getBoundingClientRect();
+    const cardLeft = r.left - pan.x;          // 옮기기 전 카드의 왼쪽 위
+    const cardTop = r.top - pan.y;
+    // 손가락 밑에 있는 **내용 좌표**(배율 1 기준) — 이게 안 움직여야 한다
+    const cx = (fx - cardLeft - pan.x) / ivZoom;
+    const cy = (fy - cardTop - pan.y) / ivZoom;
+    ivZoom = next;
+    pan.x = fx - cardLeft - cx * next;
+    pan.y = fy - cardTop - cy * next;
+    apply();
+  };
+
   stage.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'pen') return;          // 펜은 그리는 쪽이다
+    if (e.pointerType === 'pen') return;              // 펜은 그리는 쪽이다
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pts.size === 2) { base = span(); from = ivZoom; }
+    if (pts.size === 2) {
+      base = span();
+      fromZoom = ivZoom;
+      fromMid = mid();
+      fromPan = { ...pan };
+    }
   });
   stage.addEventListener('pointermove', (e) => {
     if (!pts.has(e.pointerId)) return;
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.size !== 2 || !base) return;
     e.preventDefault();
-    ivZoom = Math.max(1, Math.min(5, from * (span() / base)));
+    const m = mid();
+    const next = Math.max(1, Math.min(5, fromZoom * (span() / base)));
+    // 손가락이 **잡은 자리**를 붙들고 키운다 + 두 손가락을 함께 끌면 그림도 따라 옮긴다
+    const r = card.getBoundingClientRect();
+    const cardLeft = r.left - pan.x;
+    const cardTop = r.top - pan.y;
+    const cx = (fromMid.x - cardLeft - fromPan.x) / fromZoom;
+    const cy = (fromMid.y - cardTop - fromPan.y) / fromZoom;
+    ivZoom = next;
+    pan.x = m.x - cardLeft - cx * next;
+    pan.y = m.y - cardTop - cy * next;
+    if (ivZoom === 1) pan = { x: 0, y: 0 };           // 원래대로면 자리도 되돌린다
     apply();
   }, { passive: false });
   const drop = (e) => {
@@ -9400,15 +9477,22 @@ function bindIvZoom() {
   };
   stage.addEventListener('pointerup', drop);
   stage.addEventListener('pointercancel', drop);
-  // 맥에서 쓸 때 — 트랙패드 핀치는 ctrl+wheel로 온다
+  // 맥에서 쓸 때 — 트랙패드 핀치는 ctrl+wheel로 온다. 커서 자리를 중심으로.
   stage.addEventListener('wheel', (e) => {
     if (!e.ctrlKey) return;
     e.preventDefault();
-    ivZoom = Math.max(1, Math.min(5, ivZoom * (1 - e.deltaY / 300)));
-    apply();
+    const next = Math.max(1, Math.min(5, ivZoom * (1 - e.deltaY / 300)));
+    zoomAround(next, e.clientX, e.clientY);
+    if (ivZoom === 1) { pan = { x: 0, y: 0 }; apply(); }
   }, { passive: false });
-  document.getElementById('ivFit').onclick = () => { ivZoom = 1; apply(); };
-  window.__ivZoom = (z) => { if (z != null) { ivZoom = z; apply(); } return ivZoom; };
+  document.getElementById('ivFit').onclick = () => { ivZoom = 1; pan = { x: 0, y: 0 }; apply(); };
+  window.__ivZoom = (z, fx, fy) => {
+    if (z != null) {
+      if (fx == null) { ivZoom = z; pan = { x: 0, y: 0 }; apply(); }
+      else zoomAround(z, fx, fy);
+    }
+    return { zoom: ivZoom, pan: { ...pan } };
+  };
   apply();
 }
 
@@ -9523,6 +9607,7 @@ document.addEventListener('click', (e) => {
 window.__openImgView = (im) => openImgView(im);
 window.__ivStrokes = () => (ivPen ? ivPen.strokes.length : -1);   // 검사가 획 수를 센다
 window.__ivFlatten = () => ivFlatten();
+window.__ivPenWidth = () => (ivPen ? ivPen.width : -1);
 window.__ivTool = () => (ivPen ? ivPen.tool : '-');
 window.__ivCur = () => (ivPen ? String(!!ivPen._cur) : '-');
 window.__ivW = () => (ivPen ? `writing=${ivPen.writing} pend=${(ivPen._pending||[]).length}` : '-');
