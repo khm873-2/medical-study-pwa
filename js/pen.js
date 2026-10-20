@@ -55,6 +55,11 @@ export class PenLayer {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'penlayer';
     this.ctx = this.canvas.getContext('2d');
+    // ⚠️ 캔버스는 `position:absolute; inset:0`이라 **자리를 가진 가장 가까운 조상**을
+    //    기준으로 깔린다. host가 static이면 엉뚱한 조상에 붙어 자리가 어긋난다 —
+    //    재어 보니 퀴즈 화면에서 host는 60~974인데 캔버스는 0~914였다. 그만큼
+    //    아래쪽이 캔버스 밖이라 거기서는 네모가 안 그려졌다(2026-10-20 신고).
+    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
     host.appendChild(this.canvas);
 
     this._ro = new ResizeObserver(() => this.resize());
@@ -190,7 +195,12 @@ export class PenLayer {
     if (isUiTarget(e.target) || this._overUi(e)) return;
     // 이 레이어가 담당하는 영역 근처에서 시작한 것만 받는다(여러 화면이 동시에 떠 있을 때 혼선 방지).
     // 바깥 여백에서 시작하는 경우가 흔하므로 넉넉히 본다.
-    if (!this._nearHost(e, 160)) return;
+    //
+    // ⚠️ **영역 복사는 경계를 안 둔다**(2026-10-20 요청: "캡쳐는 그냥 어디든 다 돼야
+    //    하지 않겠어? 경계 없이"). 보이는 그대로를 뜨는 일이라 "어느 칸 안인가"를
+    //    따질 까닭이 없다. 다만 도구막대·팝업 위는 위에서 이미 걸렀다 — 거기서 시작하면
+    //    모드를 바꾸려다 네모가 그려진다.
+    if (!this.capturing && !this._nearHost(e, 160)) return;
     e.preventDefault();
     e.stopPropagation();
     // 포인터를 캔버스에 묶어둔다 — 이게 있어야 손이 카드 밖으로 나가도 move가 계속 온다.

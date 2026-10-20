@@ -4378,6 +4378,53 @@ await run('누른 칸의 노트로 간다', async () => {
   return out;
 });
 
+// ══════════ 펜 캔버스가 제 칸에 **딱 맞는가** (2026-10-20 신고) ══════════
+// "위에서부터 아래까지 선택하려고 하는데 맨 아래쪽은 선택이 안됨"
+// 까닭: 캔버스는 `position:absolute; inset:0`이라 **자리를 가진 가장 가까운 조상**을
+// 기준으로 깔린다. host가 static이면 엉뚱한 조상에 붙어 어긋난다 — 재어 보니
+// host 60~974인데 캔버스 0~914였다. 그 아래는 캔버스 밖이라 미리보기가 안 그려졌다.
+await run('펜 캔버스 자리', async () => {
+  const out = [];
+  const { PenLayer } = await import('/js/pen.js');
+  // 자리를 안 가진(static) 상자를 일부러 만들어 거기에 펜을 얹는다
+  const outer = document.createElement('div');
+  outer.style.cssText = 'position:fixed;left:0;top:0;width:600px;height:500px;z-index:9000';
+  const host = document.createElement('div');
+  host.style.cssText = 'margin-top:80px;height:300px;background:#fff';   // position 없음(static)
+  outer.appendChild(host);
+  document.body.appendChild(outer);
+  await new Promise((r) => setTimeout(r, 150));
+  let pen = null;
+  try {
+    out.push({ name: '일부러 자리 없는(static) 상자를 쓴다',
+      ok: host.style.position !== 'relative' });
+    pen = new PenLayer(host, {});
+    await new Promise((r) => setTimeout(r, 200));
+    const cv = host.querySelector('.penlayer');
+    out.push({ name: '캔버스가 생긴다', ok: !!cv });
+    if (cv) {
+      const hr = host.getBoundingClientRect();
+      const cr = cv.getBoundingClientRect();
+      out.push({ name: '**캔버스가 제 칸에 딱 맞는다**(위)',
+        ok: Math.abs(cr.top - hr.top) < 2, detail: `칸 ${Math.round(hr.top)} · 캔버스 ${Math.round(cr.top)}` });
+      out.push({ name: '**아래도 맞는다**(여기가 모자라면 아래쪽이 안 그려진다)',
+        ok: Math.abs(cr.bottom - hr.bottom) < 2,
+        detail: `칸 ${Math.round(hr.bottom)} · 캔버스 ${Math.round(cr.bottom)}` });
+      out.push({ name: '칸에 자리를 쥐여준다(static이면 relative로)',
+        ok: getComputedStyle(host).position !== 'static', detail: getComputedStyle(host).position });
+    }
+  } catch (e) {
+    out.push({ name: '캔버스 자리 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 120) });
+  } finally {
+    if (pen) { try { pen.destroy(); } catch {} }
+    outer.remove();
+  }
+  // 영역 복사는 **칸 밖에서 시작해도** 받는다(경계 없이)
+  out.push({ name: '영역 복사는 칸 경계를 안 둔다',
+    ok: /!this\.capturing && !this\._nearHost/.test(await fetch('/js/pen.js').then((r) => r.text())) });
+  return out;
+});
+
 // ══════════ 캡처가 **스크롤을 따라가는가** (2026-10-20 신고) ══════════
 // "이 범위를 선택해서 캡쳐했는데 다른 범위가 선택되어서 복사되는 버그"
 // cloneNode는 scrollTop을 안 가져오고, SVG로 넘길 때 스크롤 위치는 적어 보낼 수도 없다.
