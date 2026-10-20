@@ -105,13 +105,25 @@ export class PenLayer {
     return e.pointerType === 'pen' || (e.pointerType === 'mouse' && e.buttons === 1 && this.mouseDraws);
   }
 
-  /** 그 좌표에 UI(팝업·버튼)가 있는가? — 캔버스 밖 요소까지 좌표로 확인한다. */
+  /**
+   * 그 좌표에 UI(팝업·버튼)가 있는가? — 캔버스 밖 요소까지 좌표로 확인한다.
+   *
+   * ⚠️ **내 뒤에 깔린 것은 세지 않는다.** `elementsFromPoint`는 앞에서 뒤로 **전부**
+   *    돌려주므로, 그림 크게 보기처럼 화면을 덮고 뜬 것 위에서 그으면 그 **뒤에 깔린
+   *    읽기 화면 목차**가 UI로 잡혀 펜이 손을 뗐다 — 왼쪽 목차 폭만큼(약 1/5) 펜이
+   *    안 먹었다(2026-10-20 신고). 내 host·canvas를 만나는 순간 멈춘다. 그 뒤는
+   *    내가 덮고 있으니 사람 손이 닿을 수 없는 것들이다.
+   */
   _overUi(e) {
     if (!document.elementsFromPoint) {
       const el = document.elementFromPoint ? document.elementFromPoint(e.clientX, e.clientY) : null;
       return isUiTarget(el);
     }
-    return document.elementsFromPoint(e.clientX, e.clientY).some(isUiTarget);
+    for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
+      if (el === this.canvas || el === this.host || el.contains(this.host)) break;
+      if (isUiTarget(el)) return true;
+    }
+    return false;
   }
 
   /**
@@ -121,7 +133,11 @@ export class PenLayer {
   _paneAt(box) {
     const cr = this.canvas.getBoundingClientRect();
     const cx = (box.l + box.r) / 2;
-    const panes = this.host.querySelectorAll('#qcard, #wikiPanel, #aiPanel, #readCard, .card');
+    // ⚠️ **새 칸을 여기 빠뜨리면 그 칸에서 긁기가 깨진다.** 어느 칸인지 모르면 아래
+    //    `_textInBox`가 가로 범위로 거르지 못해 **옆 칸 글까지 함께** 딸려온다
+    //    (2026-10-20 신고: 두 번째 노트에서 긁으면 "잔뜩 깨짐").
+    const panes = this.host.querySelectorAll(
+      '#qcard, #wikiPanel, #wikiPanel2, #aiPanel, #readCard, .card');
     let best = null;
     panes.forEach((el) => {
       const b = el.getBoundingClientRect();

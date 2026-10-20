@@ -3410,8 +3410,9 @@ await run('분할 읽기', async () => {
       search.dispatchEvent(new Event('input', { bubbles: true }));
       await new Promise((r) => setTimeout(r, 150));
       const first = document.querySelector('.dd-group');
+      // 이름표가 아니라 **표시(.here)**로 본다 — 이름은 언제나 똑같이 적는다(2026-10-20).
       out.push({ name: '지금 보는 과목이 맨 위에 온다',
-        ok: !!first && /지금 보는 과목/.test(first.textContent), detail: first ? first.textContent : '없음' });
+        ok: !!first && first.classList.contains('here'), detail: first ? first.textContent : '없음' });
 
       // 눌러서 열면 지금 창의 새 탭이 된다 — **지금 안 열려 있는** 노트로 확인한다
       const open = new Set([...document.querySelectorAll('.pane-tab .pt-name')].map((x) => x.textContent));
@@ -4188,8 +4189,15 @@ await run('노트 서랍', async () => {
   const first3 = names2.slice(0, 3).join(' | ');
   out.push({ name: '**암기법·QA가 맨 위로 올라온다**(별도 묶음이라 안 걸리던 것)',
     ok: /암기법/.test(names2[0] || '') && /QA/.test(names2[1] || ''), detail: first3 });
-  out.push({ name: '지금 과목 묶음은 이름을 짧게(무엇이 다른지가 보이게)',
-    ok: names2[0] === '암기법' && names2[2] === '지금 보는 과목', detail: names2.slice(0, 4).join(' | ') });
+  // ── 이름은 **언제나 똑같이** 적는다 (2026-10-20 신고) ──
+  // "다른 노트 띄우기 위해 그 제목 누르면 고르는 순서가 일정하지 않음"
+  // 전에는 지금 보는 묶음만 "지금 보는 과목"으로 바꿔 불러서, 노트를 옮길 때마다
+  // 같은 줄의 이름이 달라졌다. "여기"라는 표시는 테두리 색(.here)이 이미 한다.
+  out.push({ name: '**묶음 이름이 상황 따라 안 바뀐다**',
+    ok: names2.every((n) => /^(위키|예습노트|임종평 전범위) · /.test(n)),
+    detail: names2.slice(0, 3).join(' | ') });
+  out.push({ name: '지금 보는 묶음은 테두리로 알린다(이름을 바꾸지 않고)',
+    ok: [...document.querySelectorAll('#docList .dd-group')].some((g) => g.classList.contains('here')) });
 
   // 짝 — 같은 강의의 다른 얼굴
   const pairHead = document.querySelector('#docList .dd-pair-head');

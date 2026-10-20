@@ -3294,18 +3294,25 @@ function renderDocList(groups, q) {
     || (document.body.dataset.screen === 'quizScreen' && currentExam ? currentExam.subject : '');
   const hereRoot = here[0] || '02_Wiki';
   const base = (x) => String(x).split(' · ')[0];
-  const sorted = [...groups].sort((a, b) => {
-    const sa = base(a.subject) === hereSubject, sb = base(b.subject) === hereSubject;
-    if (sa !== sb) return sa ? -1 : 1;
-    // 같은 과목 안에서는 암기법 → Q&A → 본문 순 — 자주 여는 것이 위로
-    if (sa && sb) {
-      const r = (x) => (/암기법$/.test(x.subject) ? 0 : /QA$/.test(x.subject) ? 1 : 2);
-      if (r(a) !== r(b)) return r(a) - r(b);
-    }
-    const ra = a.root === hereRoot, rb = b.root === hereRoot;
-    if (ra !== rb) return ra ? -1 : 1;
-    return 0;
-  });
+  // 바탕 순서는 **언제나 같아야 한다.** 전에는 git이 준 순서를 그대로 쓰고 그 위에
+  // "지금 보는 뿌리"까지 끌어올려서, 노트를 하나 열 때마다 목록이 통째로 뒤집혔다
+  // (2026-10-20 신고: "고르는 순서가 일정하지 않음" — 재어 보니 네 번 열어 네 번 다
+  // 달랐다). 손이 자리를 기억할 수 있어야 하므로 **뿌리 차례 → 과목 이름** 순으로 박는다.
+  const rootOrder = (r) => {
+    const i = ROOT_RANK.indexOf(r);
+    return i < 0 ? ROOT_RANK.length : i;
+  };
+  const fixed = [...groups].sort((a, b) =>
+    rootOrder(a.root) - rootOrder(b.root)
+    || base(a.subject).localeCompare(base(b.subject), 'ko')
+    || a.subject.localeCompare(b.subject, 'ko'));
+  // 지금 보는 과목만 맨 위로 올린다 — 이것 하나만 자리를 바꾼다.
+  // 그 안에서는 암기법 → Q&A → 본문 순(자주 여는 것이 위로).
+  const kindRank = (x) => (/암기법$/.test(x.subject) ? 0 : /QA$/.test(x.subject) ? 1 : 2);
+  const mine = fixed.filter((g) => base(g.subject) === hereSubject)
+    .sort((a, b) => kindRank(a) - kindRank(b));
+  const rest = fixed.filter((g) => base(g.subject) !== hereSubject);
+  const sorted = [...mine, ...rest];
 
   // ── 지금 문서의 짝 ──
   if (!needle) {
@@ -3335,12 +3342,11 @@ function renderDocList(groups, q) {
     head.className = `dd-group${isHere ? ' here' : ''}${open ? ' open' : ''}`;
     head.innerHTML = `<span class="dd-caret">${open ? '▾' : '▸'}</span>`
       + `<span class="dd-gname"></span><span class="dd-gn">${hits.length}</span>`;
+    // 이름은 **언제나 똑같이** 적는다. 전에는 지금 보는 묶음만 "지금 보는 과목"으로
+    // 바꿔 불렀는데, 노트를 옮길 때마다 같은 줄의 이름이 달라져서 뭐가 뭔지 알 수가
+    // 없었다(2026-10-20 신고). "여기"라는 표시는 테두리 색(.here)이 이미 하고 있다.
     head.querySelector('.dd-gname').textContent =
-      // 지금 과목의 묶음들은 이름을 짧게 — `위키 · 응급 중환자 · 암기법 — 지금 보는 과목`이
-      // 네 줄 연달아 나오면 정작 무엇이 다른지가 안 보인다. 테두리 색이 이미 "여기"를 말한다.
-      (isHere
-        ? (g.subject.includes(' · ') ? g.subject.split(' · ').slice(1).join(' · ') : '지금 보는 과목')
-        : `${ROOT_LABEL[g.root] || g.root} · ${g.subject.replace(/_/g, ' ')}`);
+      `${ROOT_LABEL[g.root] || g.root} · ${g.subject.replace(/_/g, ' ')}`;
     head.onclick = () => {
       if (docOpenGroups.has(key)) docOpenGroups.delete(key); else docOpenGroups.add(key);
       renderDocList(groups, document.getElementById('docSearch').value);
@@ -6549,6 +6555,9 @@ const ROOT_LABEL = {
   '02_Wiki': '위키',
   '01_임종평_전범위': '임종평 전범위',
 };
+// 서랍에서 뿌리를 늘어놓는 차례 — 정리된 위키가 먼저, 날것인 예습노트가 뒤.
+// **박아둔다**. 상황 따라 바뀌면 손이 자리를 못 외운다(2026-10-20).
+const ROOT_RANK = ['02_Wiki', '01_임종평_전범위', '98_예습노트_보관'];
 
 /** 다가오는 시험과 얼마나 겹치나 — 과목 순서를 정하는 데만 쓴다(정확할 필요는 없다). */
 function overlapScore(subject, lectures) {
@@ -9316,6 +9325,9 @@ setTimeout(hideSplash, 3000);
 let ivPen = null;
 let ivSrc = null;        // 지금 띄운 그림 {el, name}
 const IV_INKS = ['#e8453c', '#2563eb', '#16a34a', '#f59e0b', '#111827'];
+// 펜 굵기 — 동그라미 크기로 고른다(2026-10-20 요청). 가는 쪽은 글씨, 굵은 쪽은 동그라미용.
+const IV_NIBS = [1.6, 2.6, 4, 6.5];
+let ivZoom = 1;        // 두 손가락으로 벌린 배율
 
 function openImgView(im) {
   if (!im || !im.currentSrc && !im.src) return;
@@ -9331,13 +9343,73 @@ function openImgView(im) {
     if (!ivPen) {
       ivPen = new PenLayer(document.getElementById('ivCard'), {});
       ivPen.setTool('write');
+      bindIvZoom();
     }
+    ivZoom = 1;
+    document.getElementById('ivCard').style.transform = '';
+    document.getElementById('ivZoomLabel').textContent = '100%';
     ivPen.load(null);
     ivPen.resize();
     paintIvTools();
   };
   if (big.complete) requestAnimationFrame(put);
   else big.onload = () => requestAnimationFrame(put);
+}
+
+/**
+ * 두 손가락으로 벌려 확대한다 (2026-10-20 요청).
+ *
+ * 브라우저 기본 확대에 맡기면 캔버스 좌표가 어긋나 **필기가 그림과 따로 논다**.
+ * 그래서 우리가 받아서 그림 상자(.iv-card)를 통째로 키운다 — 캔버스가 그 안에 있으니
+ * 필기도 같이 커지고, 굵기만 배율만큼 나눠 실제 선 굵기를 유지한다.
+ * 손가락 **하나**는 건드리지 않는다 — 그건 펜·스크롤 몫이다.
+ */
+function bindIvZoom() {
+  const stage = document.getElementById('ivStage');
+  const card = document.getElementById('ivCard');
+  const pts = new Map();
+  let base = 0;        // 벌리기 시작했을 때의 손가락 사이 거리
+  let from = 1;
+  const span = () => {
+    const [a, b] = [...pts.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  const apply = () => {
+    card.style.transform = ivZoom === 1 ? '' : `scale(${ivZoom})`;
+    card.style.transformOrigin = 'center top';
+    document.getElementById('ivZoomLabel').textContent = `${Math.round(ivZoom * 100)}%`;
+    // 캔버스가 함께 늘어나므로 굵기를 배율로 나눠 **보이는 굵기**를 지킨다
+    if (ivPen) ivPen.width = ivPen.width;         // 값은 그대로, 아래 CSS 배율이 처리
+  };
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'pen') return;          // 펜은 그리는 쪽이다
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2) { base = span(); from = ivZoom; }
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size !== 2 || !base) return;
+    e.preventDefault();
+    ivZoom = Math.max(1, Math.min(5, from * (span() / base)));
+    apply();
+  }, { passive: false });
+  const drop = (e) => {
+    pts.delete(e.pointerId);
+    if (pts.size < 2) base = 0;
+  };
+  stage.addEventListener('pointerup', drop);
+  stage.addEventListener('pointercancel', drop);
+  // 맥에서 쓸 때 — 트랙패드 핀치는 ctrl+wheel로 온다
+  stage.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    ivZoom = Math.max(1, Math.min(5, ivZoom * (1 - e.deltaY / 300)));
+    apply();
+  }, { passive: false });
+  document.getElementById('ivFit').onclick = () => { ivZoom = 1; apply(); };
+  window.__ivZoom = (z) => { if (z != null) { ivZoom = z; apply(); } return ivZoom; };
+  apply();
 }
 
 function closeImgView() {
@@ -9350,6 +9422,9 @@ function paintIvTools() {
   const w = ivPen && ivPen.tool === 'write';
   document.getElementById('ivPen').classList.toggle('on', w);
   document.getElementById('ivErase').classList.toggle('on', !!ivPen && ivPen.tool === 'erase');
+  document.querySelectorAll('#ivNibs .iv-nib').forEach((b) => {
+    b.classList.toggle('on', !!ivPen && Number(b.dataset.nib) === ivPen.width);
+  });
   const box = document.getElementById('ivColors');
   if (box.children.length) {
     [...box.children].forEach((b) => b.classList.toggle('on', ivPen && b.dataset.ink === ivPen.color));
@@ -9363,6 +9438,22 @@ function paintIvTools() {
     b.title = '펜 색';
     b.onclick = () => { if (ivPen) { ivPen.color = ink; ivPen.setTool('write'); } paintIvTools(); };
     box.appendChild(b);
+  }
+  const nibs = document.getElementById('ivNibs');
+  nibs.innerHTML = '';
+  for (const w of IV_NIBS) {
+    const b = document.createElement('button');
+    b.className = 'iv-nib';
+    b.dataset.nib = String(w);
+    b.title = `펜 굵기 ${w}`;
+    const dot = document.createElement('i');
+    // 가장 가는 것도 눈에 보이게 — 실제 굵기보다 조금 키워 그린다
+    const d = Math.max(4, Math.round(w * 2.2));
+    dot.style.width = `${d}px`;
+    dot.style.height = `${d}px`;
+    b.appendChild(dot);
+    b.onclick = () => { if (ivPen) { ivPen.width = w; ivPen.setTool('write'); } paintIvTools(); };
+    nibs.appendChild(b);
   }
   paintIvTools();
 }
@@ -9379,9 +9470,11 @@ async function ivFlatten() {
   g.fillRect(0, 0, w, h);
   g.drawImage(big, 0, 0, w, h);
   if (ivPen && !ivPen.isEmpty) {
-    // 필기는 **화면 크기**로 그려져 있다 — 원본 크기에 맞춰 늘려 얹는다
-    const r = big.getBoundingClientRect();
-    g.drawImage(ivPen.canvas, 0, 0, r.width * (ivPen._dpr || 1), r.height * (ivPen._dpr || 1), 0, 0, w, h);
+    // 필기는 **화면 크기**로 그려져 있다 — 원본 크기에 맞춰 늘려 얹는다.
+    // ⚠️ 여기서 getBoundingClientRect를 쓰면 안 된다 — 두 손가락으로 확대한 동안에는
+    //    **배율이 곱해진 크기**가 나와서 필기가 어긋난 자리에 구워진다(2026-10-20).
+    //    캔버스가 제 속에 들고 있는 픽셀 크기는 배율과 무관하다.
+    g.drawImage(ivPen.canvas, 0, 0, ivPen.canvas.width, ivPen.canvas.height, 0, 0, w, h);
   }
   return new Promise((res) => cv.toBlob(res, 'image/png'));
 }

@@ -3121,11 +3121,27 @@ li.task.done .task-box { color: var(--accent); }
   cursor: pointer; padding: 0;
 }
 .iv-ink.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--text); }
+/* 펜 두께 — 동그라미 크기가 곧 굵기다(글로 적으면 눈으로 못 고른다) */
+.iv-nibs { display: flex; align-items: center; gap: 4px; }
+.iv-nib {
+  width: 28px; height: 28px; border-radius: 9px; padding: 0; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.iv-nib i { display: block; border-radius: 50%; background: var(--text); }
+.iv-nib.on { border-color: var(--accent-fill); background: color-mix(in srgb, var(--accent) 16%, var(--bg)); }
+.iv-zoom {
+  min-width: 46px; text-align: right; font-size: 12px; color: var(--sub);
+  font-variant-numeric: tabular-nums;
+}
 /* 그림 자리 — 가득 채우되 비율은 지킨다. 필기 좌표가 그림과 어긋나지 않게
    **캔버스는 그림 상자에 딱 맞춘다**(.iv-card가 그림 크기 그대로다). */
 .iv-stage {
   flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center;
   padding: 12px; overflow: auto;
+  /* 두 손가락 확대는 **우리가** 받는다 — 브라우저에 맡기면 캔버스 좌표가 어긋나
+     필기가 그림과 따로 논다(2026-10-20 요청). */
+  touch-action: none; overscroll-behavior: contain;
 }
 .iv-card { position: relative; display: inline-block; line-height: 0; }
 .iv-card img { display: block; max-width: 100%; max-height: calc(100dvh - 120px); width: auto; height: auto; border-radius: 10px; background: #fff; }
