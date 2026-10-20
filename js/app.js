@@ -1583,7 +1583,8 @@ async function loadWiki(q, answered) {
     body.innerHTML = '<p class="muted">이 모의고사에 연계노트가 지정돼 있지 않습니다.</p>';
     return;
   }
-  wikiState = { refs, secIdx: 0, unlocked: !!answered };
+  // 목록은 문서 차례지만, **처음 펴는 곳은 가장 잘 맞는 토막**이다(2026-10-20)
+  wikiState = { refs, secIdx: refs.bestIdx || 0, unlocked: !!answered };
   renderWikiSection();
 }
 

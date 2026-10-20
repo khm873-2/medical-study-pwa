@@ -230,6 +230,38 @@ ok('족보 오답 선지가 매칭을 끌고 가지 않는다',
   delete globalThis.__FS;
 }
 
+// ── 옆칸 목차는 **문서 차례 그대로** (2026-10-20 신고) ──
+// "아니 이렇게 순서가 없다니까?" — 관련도 순으로 섞어 줘서 목차가
+// "2 · 12 · 🗺️ · 6 · 7 · 10 · 3 · 4 · 5 · 8"처럼 나왔다. 목차인데 차례가 없으면
+// 지금 어디쯤인지 가늠이 안 된다. 맞추는 셈은 **어디를 먼저 펼지**에만 쓴다.
+{
+  const secs = ['1. 들머리', '2. 심전도 감시', '3. 혈압 비침습', '4. 동맥 파형', '5. 용적 평가']
+    .map((h) => ({ heading: h, text: `${h}에 대한 내용. 심전도 유도 V5 좌심실 측벽 허혈.` }));
+  const q = { q: '5유도 심전도에서 추가로 보는 유도는?', opts: ['V5 좌심실 측벽'], explain: 'V5' };
+
+  // rankSections 자체는 여전히 **맞는 것부터** 준다(여러 곳이 [0]을 쓴다)
+  const ranked = W.rankSections(q, secs);
+  ok('맞추는 셈은 그대로 — 가장 맞는 토막이 맨 앞',
+    ranked[0].heading.startsWith('2.'), ranked[0].heading);
+  ok('관련도 순은 문서 차례와 다르다(그래서 목차로 쓰면 안 된다)',
+    ranked.map((x) => x.heading).join() !== secs.map((x) => x.heading).join());
+
+  // wikiFor가 돌려주는 목록은 **문서 차례**여야 한다 — 그 자리에서 셈만 떼어 확인
+  const scoreOf = new Map(ranked.map((r) => [r.heading, r]));
+  const inOrder = secs.map((x) => ({ ...x, score: (scoreOf.get(x.heading) || {}).score || 0 }));
+  const best = inOrder.findIndex((x) => x.heading === ranked[0].heading);
+  ok('**목차는 문서 차례 그대로**',
+    inOrder.map((x) => x.heading).join() === secs.map((x) => x.heading).join());
+  ok('처음 펴는 곳은 가장 맞는 토막을 가리킨다', inOrder[best].heading.startsWith('2.'), String(best));
+  ok('차례를 바꿔도 점수는 따라간다', inOrder[best].score >= Math.max(...inOrder.map((x) => x.score)));
+
+  // 실제 wiki.js가 그렇게 짜여 있는지 — 글로도 확인한다(돌려보기 어려운 자리라)
+  const src = readFileSync(`${PWA}/js/wiki.js`, 'utf8');
+  ok('wikiFor가 문서 차례로 돌려준다', /sections: \[\.\.\.inOrder, \.\.\.extra\]/.test(src));
+  ok('어디를 먼저 펼지는 bestIdx로 알린다', /bestIdx/.test(src));
+}
+
 console.log(`\n통과 ${pass}건`);
 if (fail.length) { console.log(`실패 ${fail.length}건:`); fail.forEach((f) => console.log('  ✗ ' + f)); process.exit(1); }
 console.log('✅ 전부 통과');
+

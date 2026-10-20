@@ -434,8 +434,20 @@ export async function wikiFor(question, examHtmlPath) {
   const extra = all
     .filter((s) => !secs.some((c) => c.heading === s.heading))
     .map((s) => ({ ...s, score: 0, fit: 0, extra: true }));
+  // ⚠️ 목록은 **문서 차례 그대로** 준다. 전에는 관련도 순으로 섞어 줘서 목차가
+  //    "2 · 한눈에 · 4 · 8 · 7 · 5 · 3 …"처럼 나왔다 — 목차인데 차례가 없으니
+  //    어디쯤인지 가늠이 안 된다(2026-10-20 신고). 맞추는 셈(rankSections)은 그대로
+  //    쓰되, 그 결과는 **어디를 먼저 펼지**(bestIdx)에만 쓴다.
+  const ranked = rankSections(question, secs);
+  const scoreOf = new Map(ranked.map((r) => [r.heading, r]));
+  const inOrder = secs.map((x) => {
+    const r = scoreOf.get(x.heading);
+    return { ...x, score: r ? r.score : 0, fit: r ? r.fit : 0 };
+  });
+  const best = ranked[0] ? inOrder.findIndex((x) => x.heading === ranked[0].heading) : 0;
   return {
     noteName, notePath: path, auto: true,
-    sections: [...rankSections(question, secs), ...extra],
+    bestIdx: Math.max(0, best),
+    sections: [...inOrder, ...extra],
   };
 }
