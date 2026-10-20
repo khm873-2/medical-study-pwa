@@ -59,7 +59,11 @@ export class PenLayer {
     //    기준으로 깔린다. host가 static이면 엉뚱한 조상에 붙어 자리가 어긋난다 —
     //    재어 보니 퀴즈 화면에서 host는 60~974인데 캔버스는 0~914였다. 그만큼
     //    아래쪽이 캔버스 밖이라 거기서는 네모가 안 그려졌다(2026-10-20 신고).
-    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    // (브라우저 밖 검사 환경에는 getComputedStyle이 없다 — 있을 때만 본다)
+    try {
+      if (typeof getComputedStyle === 'function'
+        && getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    } catch { /* 스타일을 못 읽으면 그냥 둔다 */ }
     host.appendChild(this.canvas);
 
     this._ro = new ResizeObserver(() => this.resize());
