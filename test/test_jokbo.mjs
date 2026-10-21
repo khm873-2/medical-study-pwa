@@ -149,6 +149,59 @@ if (!existsSync(DIR)) {
   ok('빈 선지가 섞이면 세우지 않는다',
     J.splitInlineOptions('1. / 2. 나 / 3. / 4. 라 / 5.') === null);
 
+  // ── 선지는 있는데 **정답만** 번호가 아니어서 못 풀던 것 (2026-10-22 지적) ──
+  // "이런 문제도 선지가 없이 서술로 복원되면 어떡하냐" — 선지 1~5가 멀쩡히 있는데
+  // `정답 (족보)`가 "(원문에 기재되어 있지 않음)"이라 채점에서 빠졌다. 전과목 107문항.
+  ok('답을 말로 적어둔 것을 선지와 맞춘다',
+    J.answerByText('육아종입술염', ['구순포진', '단순포진', '구각염', '육아종입술염']) === 3);
+  ok('대소문자·공백은 무시한다',
+    J.answerByText('all of above', ['A', 'B', 'C', 'All of above']) === 3);
+  ok('**어느 선지에도 안 맞으면 포기한다**(억지로 붙이지 않는다)',
+    J.answerByText('모르겠음', ['가', '나', '다', '라']) === -1);
+  ok('짧은 글자가 우연히 겹치는 것은 안 집는다',
+    J.answerByText('가', ['가나다', '라마바', '사아자', '차카타']) === -1);
+  ok('두 선지에 똑같이 맞으면 포기한다',
+    J.answerByText('c5', ['c5', 'c5', 'c6', 'c7']) === -1);
+
+  ok('"정답은 5번으로 추정된다"를 읽는다', J.answerFromPhrase('정답은 5번으로 추정된다') === 4);
+  ok('"①이 정답으로 판단됨"도 읽는다(번호가 먼저 와도)',
+    J.answerFromPhrase('아래 검증 근거로 ①이 정답으로 판단됨') === 0);
+  ok('**문항 번호를 정답으로 착각하지 않는다**',
+    J.answerFromPhrase('60번(2023)이 "22년도에 나왔던 문제가 똑같이 나왔다"고 명시') === -1);
+  ok('"정답 표기 없음"을 정답으로 읽지 않는다',
+    J.answerFromPhrase('(원문에 정답 표기 없음)') === -1);
+  ok('서로 다른 번호가 나오면 못 믿는다(포기)',
+    J.answerFromPhrase('정답은 3번 … 아니 정답은 5번') === -1);
+
+  {
+    // 신고에 찍힌 바로 그 문항 — 선지 5개, 원문에 답 없음, 검증에 "5번으로 추정"
+    const atls = `${DIR}/07_전문외상소생술_ATLS.md`;
+    const qs = J.parseJokbo(readFileSync(atls, 'utf8'), `${REL}/07_전문외상소생술_ATLS.md`).questions;
+    const q = qs.find((x) => /소아 중증외상에 대한 설명/.test(x.q));
+    ok('**신고된 문항이 풀린다**(선지가 있는데 서술형으로 안 떨어진다)',
+      q && q.type === 'mc' && q.opts.length === 5, q ? `${q.type}/${q.opts.length}` : '못 찾음');
+    ok('검증에 적힌 추정 정답(5번)이 붙는다', q && q.ans === 4, q ? String(q.ans + 1) : '');
+    ok('**추정이라고 표시가 남는다**(추측을 정답으로 외우지 않게)',
+      q && q.guessed === 'phrase', q ? String(q.guessed) : '');
+    // 번호가 또렷이 적힌 문항은 추정 표시가 붙으면 안 된다
+    const sure = qs.find((x) => x.type === 'mc' && !x.guessed);
+    ok('족보가 번호로 못 박은 답에는 추정 표시가 안 붙는다', !!sure);
+  }
+
+  {
+    let guessed = 0, bad = 0;
+    for (const f of files) {
+      for (const q of J.parseJokbo(readFileSync(`${DIR}/${f}`, 'utf8'), `${REL}/${f}`).questions) {
+        if (!q.guessed) continue;
+        guessed++;
+        // 추정이라도 **선지 범위 안**이어야 한다
+        if (!(q.ans >= 0 && q.ans < q.opts.length)) bad++;
+      }
+    }
+    ok('추정으로 살려낸 답이 선지 범위를 벗어나지 않는다', bad === 0, `${bad}개`);
+    console.log(`  실측: 추정으로 살려낸 문항 ${guessed}개`);
+  }
+
   // ── 모두 고르시오는 체크로 (2026-10-21 요청) ──
   // "모두 고르시오도 체크로 해서 풀 수 있게 해야지. 그래야 정답을 맞히지."
   // 전에는 전부 'mc'라 정답 중 **아무거나 하나**만 찍어도 맞다고 쳤다.

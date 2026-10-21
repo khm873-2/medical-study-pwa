@@ -195,6 +195,70 @@ export function answerIndices(raw) {
   return out;
 }
 
+/** 견주기 좋게 다듬는다 — 공백·기호·대소문자를 지운다. */
+const keyOf = (s) => String(s || '').toLowerCase().replace(/[^0-9a-z가-힣]/g, '');
+
+/**
+ * 정답을 **번호가 아니라 말로** 적어둔 경우를 선지와 맞춰 본다 → 0-based 또는 -1.
+ *
+ *   정답: "육아종입술염"              선지 ③ 육아종입술염        → 2
+ *   정답: "Tympanostomy tube insertion"                       → 그 선지
+ *
+ * 복원자가 번호 대신 답 자체를 적어둔 것인데, 번호만 찾던 파서는 이걸 "정답 없음"으로
+ * 보고 문항을 통째로 못 풀게 만들었다(2026-10-22). 한 선지에만 맞을 때 쓴다 —
+ * 둘 이상에 걸리면 어느 쪽인지 알 수 없으니 포기한다.
+ */
+export function answerByText(raw, opts) {
+  const a = keyOf(raw);
+  if (!a || a.length < 2 || !Array.isArray(opts)) return -1;
+  const keys = opts.map(keyOf);
+  let hit = -1;
+  for (let i = 0; i < keys.length; i++) {
+    if (!keys[i]) continue;
+    if (keys[i] !== a) continue;
+    if (hit >= 0) return -1;                 // 같은 선지가 둘이면 못 고른다
+    hit = i;
+  }
+  if (hit >= 0) return hit;
+  // 완전히 같지 않으면 **한쪽이 다른 쪽을 품는** 경우만 — 짧은 글자는 우연히 겹친다
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    if (!k || k.length < 4 || a.length < 4) continue;
+    if (!(k === a || k.includes(a) || a.includes(k))) continue;
+    if (hit >= 0) return -1;
+    hit = i;
+  }
+  return hit;
+}
+
+/**
+ * 글 속에 적힌 "정답은 N번" 꼴을 찾는다 → 0-based 또는 -1.
+ *
+ * 족보 원문에 답이 없어도 가공하면서 **검증란에 추론을 적어둔 것**이 있다
+ * (2026-10-22 신고: "소아 중증외상 … 정답은 5번으로 추정된다"가 해설에 또박또박
+ * 적혀 있는데 화면에는 "서술로만 복원"으로 떴다).
+ *
+ * ⚠️ 아무 숫자나 집으면 안 된다 — "60번(2023)이 …"처럼 **문항 번호**가 섞여 있다.
+ * 그래서 ① 앞에 '정답/답' 이라는 말이 있고 ② 숫자 앞뒤에 다른 숫자가 없을 때만 본다.
+ */
+export function answerFromPhrase(text) {
+  const t = String(text || '');
+  const found = new Set();
+  const take = (m) => {
+    const c = '①②③④⑤⑥'.indexOf(m);
+    found.add(c >= 0 ? c : Number(m) - 1);
+  };
+  // "정답은 5번" — 답이라는 말이 먼저. 사이에 끼는 말은 **짧게**만 허용한다
+  // (넓게 두면 "정답은 3번 … 정답은 5번"에서 앞엣것을 건너뛰고 하나만 집는다).
+  const fwd = /(?:정답|답)(?:은|이|는)?\s*(?:(?:아마|대략|아무래도|약)\s*)?[.…\s]{0,4}(?<!\d)([1-6①②③④⑤⑥])\s*번?(?!\d)/g;
+  // "①이 정답으로 판단됨" — 번호가 먼저(가공자가 검증란에 자주 이렇게 적는다)
+  const bwd = /(?<!\d)([1-6①②③④⑤⑥])\s*번?(?:이|은|을|으로|로)?\s*(?:이?\s*)?(?:정답|답)(?!\s*(?:없|미기재|누락|표기))/g;
+  let m;
+  while ((m = fwd.exec(t))) take(m[1]);
+  while ((m = bwd.exec(t))) take(m[1]);
+  return found.size === 1 ? [...found][0] : -1;   // 서로 다른 번호가 나오면 못 믿는다
+}
+
 /** 블록을 `**필드**` 단위로 나눈다. */
 function fields(block) {
   const out = {};
@@ -285,7 +349,24 @@ export function parseJokbo(md, path = '') {
     const opts = first.opts;
     const ansRaw = f['정답'] || '';
     const all = answerIndices(ansRaw).filter((i) => i < opts.length);
-    const ai = all.length ? all[0] : -1;
+    // 번호로 못 찾았을 때 — **선지는 멀쩡히 있는데** 답만 번호가 아니어서 못 풀던 것들을
+    // 되살린다(2026-10-22 지적: "이런 문제도 선지가 없이 서술로 복원되면 어떡하냐").
+    // 재어 보니 전과목 107문항이 그 꼴이었다. 두 길로 찾되, 추측인 것은 추측이라 적는다.
+    let guess = -1;
+    let guessed = '';
+    if (!all.length && opts.length >= 4) {
+      //   ① 답을 번호가 아니라 **말로** 적어둔 것 — 선지와 맞춰 본다(확실한 편)
+      guess = answerByText(ansRaw, opts);
+      if (guess >= 0) guessed = 'text';
+      //   ② 원문에 답이 없어 **가공하며 검증란에 추론을 적어둔 것** — "정답은 5번으로 추정"
+      if (guess < 0) {
+        const where = [ansRaw, f['검증'] || '', f['교정 해설'] || ''].join('\n');
+        guess = answerFromPhrase(where);
+        if (guess >= 0 && guess < opts.length) guessed = 'phrase';
+        else guess = -1;
+      }
+    }
+    const ai = all.length ? all[0] : guess;
     const graded = opts.length >= 4 && ai >= 0;
 
     const stemText = stem || stripImages(body).trim();
@@ -304,6 +385,9 @@ export function parseJokbo(md, path = '') {
       // 정답이 여럿이면 전부. type이 'mc'면 "어느 것이든 정답",
       // 'multi'면 "이걸 다 골라야 정답"이다.
       ansAll: graded && all.length > 1 ? all : null,
+      // 족보가 번호로 못 박아 준 답이 아니라 **가공하며 미뤄 짚은 답**이면 그렇다고 적는다.
+      // 숨기면 학생이 추측을 정답으로 외운다(족보 가공본의 원칙 — _FORMAT_GUIDE 0절).
+      guessed: graded && guessed ? guessed : null,
       opt: [],
       explain: explainOf(f, ansRaw, graded, notes, all.length > 1),
       imgs,

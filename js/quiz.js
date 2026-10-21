@@ -624,9 +624,14 @@ export class Quiz {
     const open = q.type === 'open';
     const correct = !open && this.isCorrect(idx);
     const ansLabel = q.type === 'ox' ? (q.ans === 0 ? 'O' : 'X') : ansLabel_(q);
+    // 족보 원문에 번호가 없어 **가공하며 미뤄 짚은** 답이면 그렇다고 못 박는다.
+    // 숨기면 학생이 추측을 정답으로 외운다(2026-10-22).
+    const guessTag = q.guessed
+      ? ' <span class="ans-guess" title="족보 원문에 정답 번호가 없어 해설·검증에서 미뤄 짚은 답입니다">추정</span>'
+      : '';
     const head = mk(open
       ? '📖 족보 원문 — 정답은 아래 해설에 있습니다'
-      : `${correct ? '✅ 정답' : '❌ 오답'} — 정답 <b class="opt-num">${ansLabel}</b>`);
+      : `${correct ? '✅ 정답' : '❌ 오답'} — 정답 <b class="opt-num">${ansLabel}</b>${guessTag}`);
     // 선지를 잘못 눌렀을 때 되돌릴 수 있게(실수로 탭하는 경우가 잦다)
     const retry = document.createElement('button');
     retry.className = 'retry-one';
