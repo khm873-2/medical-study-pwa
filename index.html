@@ -926,5 +926,74 @@
 <div id="timerFlash" class="timer-flash hidden" aria-hidden="true"></div>
 
 <script type="module" src="js/app.js"></script>
+
+<!-- ══════════ 구조선 — 앱이 아예 안 설 때 스스로 고치는 길 (2026-10-21) ══════════
+     "사파리에서는 되는데 홈화면 바로가기로 켜면 여전히 돋보기만 나온다" — iOS는
+     사파리와 홈화면 앱이 **저장소를 따로 쓴다**. 그래서 사파리를 고쳐도 홈화면 앱은
+     옛 서비스워커·옛 껍데기에 갇힌 채 남는다. 그 안에서는 새로고침 버튼조차 안 보여
+     사용자가 할 수 있는 게 없었다(아이콘을 지우면 기기 안 기록이 통째로 날아간다).
+
+     이 조각은 **모듈이 아니라 index.html 안에 그대로 박혀 있어서** app.js가 어떻게
+     터지든 반드시 돈다. 10초 안에 앱이 서지 않으면 큰 단추를 띄우고, 누르면
+     서비스워커 등록과 캐시를 **싹 지우고** 새로 받는다.
+     ⚠️ IndexedDB(풀이 기록·카드)는 **건드리지 않는다** — 날아가면 안 되는 것이다. -->
+<script>
+(function () {
+  var WAIT = 10000;
+  function paint() {
+    if (window.__bootOK) return;                       // 멀쩡히 섰으면 아무 일도 안 한다
+    var box = document.createElement('div');
+    box.setAttribute('style', 'position:fixed;inset:0;z-index:99999;display:flex;'
+      + 'align-items:center;justify-content:center;padding:24px;'
+      + 'background:#0b0e14;color:#e7edf8;font:16px/1.65 -apple-system,BlinkMacSystemFont,'
+      + '"Apple SD Gothic Neo",sans-serif;text-align:center');
+    box.innerHTML =
+      '<div style="max-width:420px">'
+      + '<div style="font-size:40px;margin-bottom:10px">🛟</div>'
+      + '<div style="font-size:19px;font-weight:800;margin-bottom:8px">앱이 뜨지 않았습니다</div>'
+      + '<p style="color:#8d9ab0;margin:0 0 18px">기기에 옛 판이 남아 있을 때 생깁니다. '
+      + '아래를 누르면 새로 받아옵니다.<br><b style="color:#e7edf8">풀이 기록과 카드는 지워지지 않습니다.</b></p>'
+      + '<button id="__fixBtn" style="width:100%;padding:15px;border-radius:12px;border:0;'
+      + 'background:#2f5fd0;color:#fff;font:700 17px/1 inherit;cursor:pointer">앱 고치기</button>'
+      + '<p id="__fixMsg" style="color:#8d9ab0;font-size:13.5px;margin:14px 0 0"></p>'
+      + '</div>';
+    document.body.appendChild(box);
+    document.getElementById('__fixBtn').onclick = function () {
+      var msg = document.getElementById('__fixMsg');
+      var btn = document.getElementById('__fixBtn');
+      btn.disabled = true;
+      btn.textContent = '고치는 중…';
+      msg.textContent = '옛 판을 지우고 있습니다…';
+      var jobs = [];
+      try {
+        if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+          jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+            return Promise.all(rs.map(function (r) { return r.unregister(); }));
+          }));
+        }
+      } catch (e) {}
+      try {
+        if (window.caches && caches.keys) {
+          jobs.push(caches.keys().then(function (ks) {
+            return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+          }));
+        }
+      } catch (e) {}
+      Promise.all(jobs.map(function (p) { return p['catch'](function () {}); }))['finally'](function () {
+        msg.textContent = '새로 받는 중…';
+        // 주소에 표를 달아 HTTP 캐시까지 확실히 건너뛴다
+        setTimeout(function () {
+          location.replace(location.pathname + '?fresh=' + Date.now());
+        }, 400);
+      });
+    };
+  }
+  setTimeout(paint, WAIT);
+  // ?fresh=… 로 들어오면 주소를 깨끗하게 되돌린다(북마크에 남지 않게)
+  if (/[?&]fresh=/.test(location.search) && window.history && history.replaceState) {
+    history.replaceState(null, '', location.pathname);
+  }
+})();
+</script>
 </body>
 </html>

@@ -9422,6 +9422,11 @@ window.__bootFails = bootFails;          // 검사와 디버깅이 들여다보�
 
 (async function init() {
   window.__t0 = Date.now();
+  // ⚠️ **서비스워커를 맨 먼저 건다.** 전에는 열 번째 걸음이라, 앞에서 뭔가 터지면
+  //    새 버전 확인(reg.update)이 아예 안 돌았다 — 고친 판을 올려도 그 기기는 영영
+  //    옛 것에 갇힌다(2026-10-21: 사파리는 고쳐졌는데 홈화면 앱만 계속 안 떴다.
+  //    iOS는 사파리와 홈화면 앱이 **저장소를 따로 쓴다**). 고치는 길부터 열어둔다.
+  await step('initServiceWorker', initServiceWorker);
   await step('applyTheme', applyTheme);
   await step('loadDisplay', loadDisplay);
   await step('loadWinMode', loadWinMode);
@@ -9431,7 +9436,6 @@ window.__bootFails = bootFails;          // 검사와 디버깅이 들여다보�
   await step('paintVersionChip', paintVersionChip);
   await step('loadReadPos', loadReadPos);
   await step('loadReadPass', loadReadPass);
-  await step('initServiceWorker', initServiceWorker);
   gem.loadDeadModels().catch(() => {});
   gem.loadBodyTiers().catch(() => {});   // 어떤 모델에 어떤 본문이 통했는지 기억해둔 것
   await step('initResizers', initResizers);
@@ -9458,6 +9462,8 @@ window.__bootFails = bootFails;          // 검사와 디버깅이 들여다보�
     else openSetup();
   } finally {
     hideSplash();                        // 실패해도 스플래시에 갇히지 않게
+    // index.html의 구조선에게 "앱이 섰다"고 알린다 — 이게 안 켜지면 복구 단추가 뜬다
+    window.__bootOK = true;
   }
   // 전체 색인을 한 번 받아둔 사람이면 **조용히 맞춰둔다** — 요청 한 번(git tree)으로
   // 달라진 파일만 가려내므로, 보통 아무것도 안 받고 끝난다. 오늘 올라온 노트가

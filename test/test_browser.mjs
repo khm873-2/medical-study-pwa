@@ -9401,6 +9401,62 @@ await page.setViewport({ width: 1280, height: 900 });
   results.push({ name: '무엇이 터졌는지 남긴다(initTimer)',
     ok: st3.fails.some((f) => /initTimer/.test(f)), detail: JSON.stringify(st3.fails) });
   await p3.close();
+
+  // ── 구조선: app.js가 통째로 죽어도 스스로 고칠 길이 있는가 ──
+  // "사파리에서는 되는데 홈화면 바로가기로 켜면 여전히 돋보기만" — iOS는 사파리와
+  // 홈화면 앱이 저장소를 따로 쓴다. 홈화면 앱 안에서는 새로고침 단추조차 안 보여
+  // 사용자가 할 수 있는 게 없었다(아이콘을 지우면 기기 안 기록이 날아간다).
+  // 그래서 index.html에 **모듈이 아닌 inline 조각**으로 구조선을 박았다.
+  const ctx = await browser.createBrowserContext();   // 서비스워커를 공유하지 않는 칸
+  const p4 = await ctx.newPage();
+  await p4.setViewport({ width: 900, height: 700 });
+  await p4.setRequestInterception(true);
+  p4.on('request', (r) => {
+    if (/\/sw\.js/.test(r.url())) { r.respond({ status: 404, body: '' }); return; }
+    if (/\/js\/app\.js/.test(r.url())) {
+      r.respond({ status: 200, contentType: 'text/javascript', body: 'throw new Error("일부러 죽임");' });
+      return;
+    }
+    r.continue();
+  });
+  await p4.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+  await new Promise((r) => setTimeout(r, 11500));     // 구조선은 10초 뒤에 뜬다
+  const boat = await p4.evaluate(() => {
+    const btn = document.getElementById('__fixBtn');
+    return {
+      shown: !!btn,
+      text: document.body.innerText.replace(/\s+/g, ' '),
+      big: btn ? btn.getBoundingClientRect().height : 0,
+    };
+  });
+  results.push({ name: '**app.js가 죽어도 구조 단추가 뜬다**(홈화면 앱에서 갇히지 않게)',
+    ok: boat.shown });
+  results.push({ name: '무엇을 하는 단추인지 적혀 있다',
+    ok: /앱 고치기/.test(boat.text) && /옛 판/.test(boat.text) });
+  results.push({ name: '**기록은 안 지운다고 분명히 적는다**',
+    ok: /풀이 기록과 카드는 지워지지 않습니다/.test(boat.text) });
+  results.push({ name: '손가락으로 누를 만한 크기다', ok: boat.big >= 44,
+    detail: `${Math.round(boat.big)}px` });
+  // 눌렀을 때 IndexedDB는 **건드리지 않아야** 한다 — 날아가면 안 되는 것이다
+  const src = await fetch(`${URL_BASE}index.html`).then((r) => r.text());
+  const boatSrc = (src.match(/id="__fixBtn"[\s\S]*?<\/script>/) || [''])[0];
+  results.push({ name: '**구조선이 IndexedDB를 지우지 않는다**(기록을 날리지 않는다)',
+    ok: !/deleteDatabase|indexedDB/.test(boatSrc) });
+  results.push({ name: '서비스워커 등록과 캐시는 지운다',
+    ok: /unregister/.test(boatSrc) && /caches\.delete/.test(boatSrc) });
+  await p4.close();
+  await ctx.close();
+
+  // 정상으로 떴을 때는 구조선이 **안** 떠야 한다(멀쩡한데 겁주면 안 된다)
+  const p5 = await browser.newPage();
+  await p5.setViewport({ width: 900, height: 700 });
+  await p5.goto(URL_BASE, { waitUntil: 'networkidle0' });
+  await new Promise((r) => setTimeout(r, 11500));
+  const quiet = await p5.evaluate(() => ({
+    ok: !!window.__bootOK, boat: !!document.getElementById('__fixBtn') }));
+  results.push({ name: '앱이 서면 __bootOK가 켜진다', ok: quiet.ok });
+  results.push({ name: '멀쩡할 때는 구조선이 안 뜬다', ok: !quiet.boat });
+  await p5.close();
 }
 
 await browser.close();
