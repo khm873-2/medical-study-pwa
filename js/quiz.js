@@ -36,7 +36,7 @@ export class Quiz {
    * @param {Function} opts.onExit   목록으로 나갈 때
    * @param {object} [opts.meta]     {subject, kind} — 풀이 이력을 과목 단위로 모으기 위해
    */
-  constructor({ examKey, questions, title, onFinish, onExit, onRender, meta }) {
+  constructor({ examKey, questions, title, onFinish, onExit, onRender, onCopy, meta }) {
     this.examKey = examKey;
     this.meta = meta || {};
     this.all = questions;
@@ -46,6 +46,8 @@ export class Quiz {
     this.onExit = onExit;
     // 문항이 바뀔 때마다 알려준다 — 펜 레이어·위키 패널이 여기에 붙는다.
     this.onRender = onRender || (() => {});
+    // 클립보드는 앱이 맡는다 — 이 모듈은 **글만** 만든다(브라우저 밖 검사에서도 돌게)
+    this.onCopy = onCopy || (async () => false);
 
     this.cur = 0;
     this.answers = new Array(questions.length).fill(null);
@@ -211,6 +213,38 @@ export class Quiz {
     this.onRender(q, idx, { answered });
   }
 
+  /**
+   * 이 문항을 **글로 떠낸다** — 문제·선지·정답·해설까지(2026-10-21 요청).
+   *
+   * 다른 데 물어보거나 메모에 옮길 때 쓴다. 화면을 긁어 모으면 번호와 줄바꿈이
+   * 깨지므로 데이터에서 바로 만든다. 아직 안 푼 문항은 **정답을 안 붙인다** —
+   * 복사했다가 답을 먼저 보게 되면 푸는 뜻이 없다.
+   */
+  copyText() {
+    const q = this.q;
+    const idx = this.qIndex;
+    const out = [`문제 ${q.num}. ${q.q}`.trim()];
+    if (Array.isArray(q.opts) && q.opts.length) {
+      q.opts.forEach((o, i) => out.push(`${CIRCLED[i] || i + 1} ${o}`));
+    } else if (q.type === 'ox') {
+      out.push('O / X');
+    }
+    if (this.answers[idx] !== null) {          // 푼 뒤에만 답과 해설을 붙인다
+      out.push('');
+      out.push(`정답: ${q.type === 'ox' ? (isAns(q, 0) ? 'O' : 'X') : ansLabel_(q)}`);
+      if (q.summary) out.push(`요약: ${q.summary}`);
+      if (q.explain) out.push(`해설: ${q.explain}`);
+      if (Array.isArray(q.opt) && q.opt.some(Boolean)) {
+        out.push('선지별 해설:');
+        q.opt.forEach((t, i) => { if (t) out.push(`  ${CIRCLED[i] || i + 1} ${t}`); });
+      }
+    }
+    const src = q.source || q.srcTag;
+    if (src) out.push(`[${src}]`);
+    out.push(`— ${this.title}`);
+    return out.join('\n');
+  }
+
   /** 문제 카드 하단의 "다음 문제" — 흐름이 끊기지 않게. */
   _renderInlineNext(answered) {
     let bar = document.getElementById('inlineNext');
@@ -231,6 +265,18 @@ export class Quiz {
         : '선지를 고르면 해설이 나옵니다';
       bar.appendChild(hint);
     }
+    // 복사 — "다음 문제" **왼쪽**에 붙인다(2026-10-21 요청). 거기로 손이 이미 가 있다.
+    const copy = document.createElement('button');
+    copy.className = 'btn q-copy';
+    copy.textContent = '📋 복사';
+    copy.title = answered ? '문제·선지·해설을 글로 복사합니다' : '문제와 선지를 글로 복사합니다';
+    copy.onclick = async () => {
+      const ok = await this.onCopy(this.copyText());
+      copy.textContent = ok ? '✓ 복사함' : '복사 실패';
+      setTimeout(() => { copy.textContent = '📋 복사'; }, 1400);
+    };
+    bar.appendChild(copy);
+
     const btn = document.createElement('button');
     btn.className = 'btn' + (answered ? ' primary' : '');
     btn.textContent = last ? '결과 보기 ›' : (answered ? '다음 문제 ›' : '건너뛰고 다음 ›');

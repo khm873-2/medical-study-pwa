@@ -291,7 +291,11 @@ export class PenLayer {
       return;
     }
 
-    if (classify(stroke.pts) === 'tap') {
+    // ⚠️ **필기 중에는 콕 찍은 것도 점이다.** 전에는 짧은 획을 전부 'tap'으로 보고
+    //    버려서, 가는 펜으로 마침표나 점을 찍으면 그대로 사라졌다(2026-10-21 신고:
+    //    "펜 그릴 때 점이 지워지는 문제, 0.8 이런 거 쓸 때").
+    //    탭으로 넘기는 건 **글을 고르거나 네모 치는 중**일 때만이다.
+    if (!this.writing && classify(stroke.pts) === 'tap') {
       this.redraw();
       const el = document.elementFromPoint(this._start.x, this._start.y);
       this.onTap(el, e);
@@ -541,7 +545,8 @@ export class PenLayer {
     // 필기 모드 — 그은 것을 **무조건** 손글씨로 남긴다. 글을 잡지도, 팝업을 띄우지도 않는다.
     // 전에는 "작게 그으면 필기, 크게 그으면 선택"이라 메모를 쓰다 말고 팝업이 떴다.
     if (this.writing) {
-      pend.forEach((st) => { if (st.pts.length > 1) this.strokes.push(st); });
+      // 점 하나짜리도 남긴다 — 콕 찍은 점이 사라지면 안 된다(2026-10-21)
+      pend.forEach((st) => { if (st.pts.length) this.strokes.push(st); });
       this.onChange();
       this.redraw();
       return;
@@ -549,7 +554,7 @@ export class PenLayer {
 
     // 너무 작으면 선택 의도가 아니다 → 필기로 남긴다
     if (Math.max(w, h) < BOX_MIN) {
-      pend.forEach((s) => { if (s.pts.length > 1) this.strokes.push(s); });
+      pend.forEach((s) => { if (s.pts.length) this.strokes.push(s); });
       this.onChange();
       this.redraw();
       return;
@@ -563,7 +568,7 @@ export class PenLayer {
     // (AI 답변처럼 토큰화되지 않은 영역에 그으면 파란 선만 남아 지저분했다, 2026-10-09)
     // 여백·빈 곳이면 필기로 남긴다.
     if (this._paneAt(box)) { this.redraw(); return; }
-    pend.forEach((s) => { if (s.pts.length > 1) this.strokes.push(s); });
+    pend.forEach((s) => { if (s.pts.length) this.strokes.push(s); });
     this.onChange();
     this.redraw();
   }
@@ -814,11 +819,28 @@ export class PenLayer {
 
   _drawStroke(s) {
     const { ctx } = this;
-    if (s.pts.length < 2) return;
+    if (!s.pts.length) return;
     ctx.save();
     ctx.strokeStyle = s.color;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    // ⚠️ **점 하나짜리 획도 그린다.** 전에는 `pts.length < 2`면 그냥 돌아섰는데,
+    //    가는 펜으로 콕 찍으면(0.8 같은 굵기) 좌표가 하나뿐이라 **점이 사라졌다**
+    //    (2026-10-21 신고). 선 긋기로는 길이 0이라 아무것도 안 나오므로 동그라미로 찍는다.
+    if (s.pts.length === 1) {
+      const p = s.pts[0];
+      const r = Math.max(0.5, s.width * (0.6 + p.p * 0.9) / 2);
+      ctx.fillStyle = s.color;
+      if (typeof ctx.arc === 'function') {         // 브라우저 밖 검사에는 arc가 없다
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (typeof ctx.fillRect === 'function') {
+        ctx.fillRect(p.x - r, p.y - r, r * 2, r * 2);
+      }
+      ctx.restore();
+      return;
+    }
     for (let i = 1; i < s.pts.length; i++) {
       const a = s.pts[i - 1], b = s.pts[i];
       ctx.beginPath();

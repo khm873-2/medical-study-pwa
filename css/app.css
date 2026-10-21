@@ -791,6 +791,8 @@ body.boxing .resize-grip { pointer-events: none; }
 }
 .inline-next .muted { flex: 1; font-size: 13px; }
 .inline-next .btn { min-width: 150px; }
+/* 복사는 거드는 단추다 — "다음 문제" 옆에서 자리를 덜 먹고 조용하게(2026-10-21) */
+.inline-next .q-copy { min-width: 0; padding-left: 14px; padding-right: 14px; }
 
 /* ═══════════ 2단 레이아웃 — 유일한 출처 (2026-10-09 통합) ═══════════
    원래 min-width:900px 블록이 세 겹으로 쌓여 서로를 덮어쓰고 있었고,

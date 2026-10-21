@@ -100,7 +100,9 @@ for (const d of readdirSync(`${VAULT}/06_모의고사`)) {
     } catch (e) { fail.push(`${d}/${f} 파싱: ${e.message}`); }
   }
 }
-check('50개 시험 전부 파싱', parsed === 50, `실제 ${parsed}`);
+// 모의고사는 계속 늘어난다 — 숫자를 박아두면 새 파일이 생길 때마다 빨개진다.
+// 중요한 건 "있는 것을 다 읽었나"이고, 그건 아래 '시험이 전부 열린다'가 본다.
+check('모의고사를 모두 파싱한다', parsed >= 50, `${parsed}개`);
 console.log(`  파싱: 시험 ${parsed}개 · 문항 ${qTotal}개 · 이미지 ${imgCount}장`);
 
 // --- 문제 그림이 **실제로 있는 파일**을 가리키는가 (2026-10-19 신고) ---

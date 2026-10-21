@@ -4441,6 +4441,128 @@ await run('카드 빈칸 색', async () => {
   return out;
 });
 
+// ══════════ 문제 복사 단추 (2026-10-21 요청) ══════════
+// "퀴즈 및 모의고사 문제 밑에 원터치 버튼으로 내용 복사 버튼 만들자.
+//  다음문제가 오른쪽이니 왼쪽에 붙여서"
+await run('문제 복사 단추', async () => {
+  const out = [];
+  const { Quiz } = await import('/js/quiz.js');
+  let copied = null;
+  let qz = null;
+  try {
+    qz = new Quiz({
+      examKey: 'copy-test',
+      title: '중환자 감시 퀴즈 — 홍관영',
+      questions: [{ num: 7, type: 'mc', q: '5유도 심전도에서 추가로 보는 유도는?',
+        opts: ['aVR', 'V5'], ans: 1, summary: 'V5를 더 본다',
+        explain: '좌심실 측벽 허혈을 본다', opt: ['추가 유도가 아니다', '정답. V5다'] }],
+      onFinish() {}, onExit() {}, onRender() {},
+      onCopy: async (t) => { copied = t; return true; },
+      meta: {},
+    });
+    qz.start();
+    await new Promise((r) => setTimeout(r, 300));
+
+    const bar = document.getElementById('inlineNext');
+    const btns = [...bar.querySelectorAll('button')];
+    const copy = bar.querySelector('.q-copy');
+    out.push({ name: '**복사 단추가 있다**', ok: !!copy });
+    out.push({ name: '**"다음 문제" 왼쪽에 붙는다**',
+      ok: !!copy && btns.indexOf(copy) === btns.length - 2,
+      detail: btns.map((b) => b.textContent).join(' | ') });
+    if (copy) {
+      const r1 = copy.getBoundingClientRect();
+      const r2 = btns[btns.length - 1].getBoundingClientRect();
+      out.push({ name: '화면에서도 왼쪽이다', ok: r1.right <= r2.left + 1,
+        detail: `복사 ~${Math.round(r1.right)} · 다음 ${Math.round(r2.left)}~` });
+      out.push({ name: '누를 만한 크기다', ok: r1.height >= 28 && r1.width >= 60,
+        detail: `${Math.round(r1.width)}×${Math.round(r1.height)}` });
+    }
+
+    // ① 아직 안 풀었을 때 — 문제와 선지만, **정답은 안 준다**
+    copy.click();
+    await new Promise((r) => setTimeout(r, 200));
+    out.push({ name: '누르면 글이 넘어온다', ok: !!copied, detail: (copied || '').slice(0, 24) });
+    out.push({ name: '문제와 선지가 담긴다',
+      ok: /5유도 심전도/.test(copied || '') && /① aVR/.test(copied || '') && /② V5/.test(copied || '') });
+    out.push({ name: '**안 푼 문항은 정답을 안 준다**(먼저 보면 푸는 뜻이 없다)',
+      ok: !/정답:/.test(copied || ''), detail: /정답:/.test(copied || '') ? '정답이 샜다' : '없음' });
+    out.push({ name: '누른 티가 난다', ok: /복사/.test(copy.textContent) });
+
+    // ② 풀고 나면 정답·해설까지
+    copied = null;
+    qz.select(1);
+    await new Promise((r) => setTimeout(r, 300));
+    document.querySelector('#inlineNext .q-copy').click();
+    await new Promise((r) => setTimeout(r, 200));
+    out.push({ name: '**푼 뒤에는 정답과 해설까지 담긴다**',
+      ok: /정답: ②/.test(copied || '') && /좌심실 측벽 허혈/.test(copied || ''),
+      detail: (copied || '').split('\n').filter((x) => /^정답|^해설/.test(x)).join(' / ') });
+    out.push({ name: '선지별 해설도 담긴다', ok: /정답\. V5다/.test(copied || '') });
+    out.push({ name: '어느 시험인지 적힌다', ok: /중환자 감시 퀴즈/.test(copied || '') });
+  } catch (e) {
+    out.push({ name: '복사 단추 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 130) });
+  } finally {
+    if (qz && qz.destroy) { try { qz.destroy(); } catch {} }
+    document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+    document.getElementById('quizScreen').classList.remove('hidden');
+    document.body.dataset.screen = 'quizScreen';
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  return out;
+});
+
+// ══════════ 콕 찍은 점이 남는가 (2026-10-21 신고) ══════════
+// "펜 그릴 때 점이 지워지는 문제가 있음. 0.8 이런 거 쓸 때."
+// 까닭 둘: ① 짧은 획을 전부 'tap'으로 보고 버렸다 ② 점 하나짜리는 그리지도 않았다.
+await run('콕 찍은 점', async () => {
+  const out = [];
+  const { PenLayer } = await import('/js/pen.js');
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:40px;top:40px;width:600px;height:400px;'
+    + 'background:#fff;z-index:9999';
+  document.body.appendChild(host);
+  let pen = null;
+  try {
+    await new Promise((r) => setTimeout(r, 150));
+    pen = new PenLayer(host, {});
+    pen.setTool('write');
+    pen.width = 0.8;                       // 가장 가는 펜 — 여기서 제일 잘 사라졌다
+    pen.color = '#111827';
+    await new Promise((r) => setTimeout(r, 200));
+    const cv = host.querySelector('.penlayer');
+    const hr = host.getBoundingClientRect();
+    const send = (x, y, id, move) => {
+      const ev = (t, px, py, bt) => cv.dispatchEvent(new PointerEvent(t, {
+        pointerType: 'pen', pointerId: id, isPrimary: true, buttons: bt, pressure: .6,
+        clientX: px, clientY: py, bubbles: true, cancelable: true }));
+      ev('pointerdown', x, y, 1);
+      if (move) ev('pointermove', x + 1, y + 1, 1);
+      ev('pointerup', x + (move ? 1 : 0), y + (move ? 1 : 0), 0);
+    };
+    send(hr.left + 100, hr.top + 100, 1, false);        // 좌표 하나뿐인 콕
+    await new Promise((r) => setTimeout(r, 800));
+    out.push({ name: '**콕 찍으면 획이 남는다**', ok: pen.strokes.length === 1,
+      detail: `${pen.strokes.length}획` });
+    send(hr.left + 200, hr.top + 100, 2, true);         // 1px 떨린 콕
+    await new Promise((r) => setTimeout(r, 800));
+    out.push({ name: '손이 살짝 떨려도 점으로 남는다', ok: pen.strokes.length === 2,
+      detail: `${pen.strokes.length}획` });
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let ink = 0;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 20) ink++;
+    out.push({ name: '**화면에 실제로 칠해진다**', ok: ink > 0, detail: `${ink}화소` });
+    out.push({ name: '필기 중에는 탭으로 가로채지 않는다',
+      ok: /!this\.writing && classify/.test(await fetch('/js/pen.js').then((r) => r.text())) });
+  } catch (e) {
+    out.push({ name: '점 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 120) });
+  } finally {
+    if (pen) { try { pen.destroy(); } catch {} }
+    host.remove();
+  }
+  return out;
+});
+
 // ══════════ 펜 캔버스가 제 칸에 **딱 맞는가** (2026-10-20 신고) ══════════
 // "위에서부터 아래까지 선택하려고 하는데 맨 아래쪽은 선택이 안됨"
 // 까닭: 캔버스는 `position:absolute; inset:0`이라 **자리를 가진 가장 가까운 조상**을

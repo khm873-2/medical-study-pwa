@@ -1184,6 +1184,7 @@ async function openExam(subject, ex) {
       onFinish: showResult,
       onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); stopTimer(); loadList(false); },
       onRender: onQuestionRender,
+      onCopy: copyQuestionText,
       meta: { subject, kind: ex.kind || '' },
     });
     const had = await quiz.restore();
@@ -1749,6 +1750,16 @@ function selPreview(text, head = 70, tail = 45) {
  * **옛 방식(execCommand)도 한 번 더** 시도한다 — 그쪽은 활성화 조건이 느슨하다.
  * 실패해도 조용히 넘어간다. 팝업의 "복사" 단추로 다시 하면 된다.
  */
+/**
+ * 문항을 글로 복사한다 — 퀴즈 아래 "복사" 단추가 쓴다(2026-10-21 요청).
+ * 글을 만드는 건 quiz.js가 하고(데이터를 들고 있으니), 클립보드는 여기서 맡는다.
+ */
+async function copyQuestionText(text) {
+  const ok = await autoCopy(text);
+  capToast(ok ? '문제를 복사했습니다' : '복사하지 못했습니다 — 길게 눌러 복사해 보세요', 1600);
+  return ok;
+}
+
 async function autoCopy(text) {
   const t = String(text || '');
   if (!t) return false;
@@ -2985,6 +2996,7 @@ async function openWeakQueue(subject) {
       onFinish: showResult,
       onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); loadList(false); },
       onRender: onQuestionRender,
+      onCopy: copyQuestionText,
       meta: { subject, kind: '모아풀기' },
     });
     show('quizScreen');
