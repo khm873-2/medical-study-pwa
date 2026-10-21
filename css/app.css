@@ -2885,6 +2885,64 @@ body.resizing * { cursor: inherit !important; }
 :root[data-theme="dark"] .timer-pill.over { background: #7f1d1d; border-color: #b91c1c; color: #fecaca; }
 .timer-row { display: flex; gap: 9px; align-items: flex-start; margin: 14px 0 4px; font-size: 13.5px; }
 .timer-row input { margin-top: 2px; width: 18px; height: 18px; flex: 0 0 auto; }
+
+/* ── 시간 고르는 바 (2026-10-21 요청) ──
+   10·20·30·45분 네 칸으로는 문항마다 다시 시작을 쓸 수 없었다. 30초 눈금으로
+   30초~60분을 고른다. 손가락·펜으로 끌 것이라 손잡이를 크게 잡는다. */
+.timer-pick { margin: 6px 0 2px; }
+/* 고정폭 글꼴은 안 쓴다 — "1분 30초"처럼 한글이 섞이면 사이가 뜨게 보인다.
+   숫자만 tabular-nums로 묶어 끄는 동안 글자가 흔들리지 않게 한다. */
+.timer-val {
+  display: block; text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 26px; font-weight: 700; color: var(--text); margin-bottom: 8px;
+}
+.timer-pick input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 30px; background: transparent; cursor: pointer; margin: 0;
+  touch-action: none;                   /* 끄는 중에 화면이 같이 스크롤되지 않게 */
+}
+.timer-pick input[type="range"]::-webkit-slider-runnable-track {
+  height: 8px; border-radius: 999px; background: var(--border);
+}
+.timer-pick input[type="range"]::-moz-range-track {
+  height: 8px; border-radius: 999px; background: var(--border);
+}
+/* 손잡이는 펜·손가락으로 집을 만큼 크게 — 44px 권장보다 작으면 자꾸 놓친다 */
+.timer-pick input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 26px; height: 26px; margin-top: -9px; border-radius: 50%;
+  background: var(--accent); border: 3px solid var(--card);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
+}
+.timer-pick input[type="range"]::-moz-range-thumb {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); border: 3px solid var(--card);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
+}
+.timer-pick input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.timer-ends {
+  display: flex; justify-content: space-between;
+  font-size: 12px; color: var(--sub); margin-top: 2px;
+}
+
+/* ── 시간이 다 됐다는 신호 — 가장자리만 두 번 깜빡인다 ──
+   알약 숫자는 곁눈으로 안 보여서 지나간 줄 모르고 계속 붙들고 있었다. */
+.timer-flash {
+  position: fixed; inset: 0; z-index: 9000; pointer-events: none;
+  box-shadow: inset 0 0 0 7px #ef4444;
+  opacity: 0;
+}
+.timer-flash.on { animation: timer-blink 1.4s ease-in-out 1; }
+@keyframes timer-blink {
+  0%, 100% { opacity: 0; }
+  12%, 62% { opacity: 1; }       /* 두 번 — 켜졌다 꺼지고 다시 켜졌다 꺼진다 */
+  37%, 87% { opacity: 0; }
+}
+/* 움직임에 민감한 사람에겐 깜빡임 대신 한 번만 물들인다 */
+@media (prefers-reduced-motion: reduce) {
+  .timer-flash.on { animation: none; opacity: 1; transition: opacity .4s ease .8s; }
+}
 .sheet-foot { display: flex; gap: 8px; margin-top: 16px; }
 .sheet-foot .btn { flex: 1 1 auto; }
 

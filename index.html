@@ -720,14 +720,20 @@
     <p class="muted" style="margin:4px 0 12px">
       점수에는 안 들어갑니다. 딴짓하다 한 세트가 한 시간이 되는 걸 막는 용도입니다.
     </p>
-    <div class="seg" id="timerSeg">
-      <button class="btn" data-min="10">10분</button>
-      <button class="btn" data-min="20">20분</button>
-      <button class="btn" data-min="30">30분</button>
-      <button class="btn" data-min="45">45분</button>
+    <!-- 30초~60분을 30초 눈금으로 — 문항마다 다시 시작이면 10분 단위는 너무 거칠다
+         (2026-10-21 요청). value는 "30초가 몇 칸인가"라 1=30초, 120=60분이다. -->
+    <div class="timer-pick">
+      <output class="timer-val" id="timerVal" for="timerRange">1분</output>
+      <input type="range" id="timerRange" min="1" max="120" step="1" value="2"
+             aria-label="문항당 시간" list="timerTicks">
+      <datalist id="timerTicks">
+        <option value="1"></option><option value="2"></option><option value="10"></option>
+        <option value="20"></option><option value="60"></option><option value="120"></option>
+      </datalist>
+      <div class="timer-ends"><span>30초</span><span>60분</span></div>
     </div>
     <label class="timer-row">
-      <input type="checkbox" id="timerPerQ">
+      <input type="checkbox" id="timerPerQ" checked>
       <span>문항마다 다시 시작 <span class="muted">— 한 문제에 오래 붙드는 버릇 잡기</span></span>
     </label>
     <div class="sheet-foot">
@@ -913,6 +919,11 @@
     <div class="muted" id="askMsg"></div>
   </div>
 </div>
+
+<!-- 시간이 다 됐을 때 두 번 깜빡이는 테두리 — 알약 숫자만으로는 곁눈으로 안 보인다
+     (2026-10-21 요청: "다음 문제로 빨리 넘어갈 수 있는 신호"). 화면을 덮지 않고
+     가장자리만 물들이므로 읽던 글을 가리지 않는다. -->
+<div id="timerFlash" class="timer-flash hidden" aria-hidden="true"></div>
 
 <script type="module" src="js/app.js"></script>
 </body>

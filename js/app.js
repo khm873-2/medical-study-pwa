@@ -8854,13 +8854,40 @@ document.getElementById('jumpInput').onkeydown = (e) => {
 // 그래서 일부러 안 넣은 것들: 자동 제출, 남은 시간으로 채점, 못 지켰다는 기록.
 // 공부를 재촉하는 장치가 되면 오히려 안 켜게 된다.
 
-let timer = null;      // {min, perQ, endAt, paused, left}
+let timer = null;      // {sec, perQ, endAt, paused, left}
 let timerTick = 0;
 
 const mmss = (ms) => {
   const t = Math.max(0, Math.round(ms / 1000));
   return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
 };
+
+// 바 눈금(1칸=30초) ↔ 초. 30초~60분(2026-10-21 요청).
+const TIMER_STEP = 30;
+const TIMER_MAX_STEPS = 120;
+const stepsToSec = (n) => Math.min(TIMER_MAX_STEPS, Math.max(1, Math.round(n))) * TIMER_STEP;
+
+/** 사람이 읽는 길이 — "30초" · "1분" · "1분 30초" · "20분". */
+function timerLabel(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (!m) return `${s}초`;
+  return s ? `${m}분 ${s}초` : `${m}분`;
+}
+
+/** 시간이 다 됐다고 가장자리를 두 번 깜빡인다. */
+function flashTimeUp() {
+  const el = document.getElementById('timerFlash');
+  if (!el) return;
+  el.classList.remove('hidden', 'on');
+  void el.offsetWidth;              // 애니메이션을 다시 틀려면 리플로우가 한 번 필요하다
+  el.classList.add('on');
+  clearTimeout(flashTimeUp._t);
+  flashTimeUp._t = setTimeout(() => {
+    el.classList.remove('on');
+    el.classList.add('hidden');
+  }, 1600);
+}
 
 function paintTimer() {
   const pill = document.getElementById('timerPill');
@@ -8873,17 +8900,18 @@ function paintTimer() {
   pill.classList.toggle('over', left <= 0);
   if (left <= 0 && !timer.rang) {
     timer.rang = true;
-    toast(`⏰ ${timer.min}분이 지났습니다 — 마무리하고 넘어갈까요?`);
+    toast(`⏰ ${timerLabel(timer.sec)}가 지났습니다 — 마무리하고 넘어갈까요?`);
+    flashTimeUp();
     try { navigator.vibrate && navigator.vibrate([120, 60, 120]); } catch {}
   }
 }
 
-function startTimer(min, perQ) {
-  timer = { min, perQ, endAt: Date.now() + min * 60000, paused: false, left: 0, rang: false };
+function startTimer(sec, perQ) {
+  timer = { sec, perQ, endAt: Date.now() + sec * 1000, paused: false, left: 0, rang: false };
   clearInterval(timerTick);
   timerTick = setInterval(paintTimer, 1000);
   paintTimer();
-  localStorage.setItem('timer_pref', JSON.stringify({ min, perQ }));
+  localStorage.setItem('timer_pref', JSON.stringify({ sec, perQ }));
 }
 function stopTimer() {
   timer = null;
@@ -8894,19 +8922,32 @@ function stopTimer() {
 /** 문항을 넘길 때 — "문항마다 다시 시작"이 켜져 있으면 되감는다. */
 function resetTimerForQuestion() {
   if (!timer || !timer.perQ) return;
-  timer.endAt = Date.now() + timer.min * 60000;
+  timer.endAt = Date.now() + timer.sec * 1000;
   timer.rang = false;
   timer.paused = false;
   paintTimer();
 }
 
+/** 저장해 둔 설정 — 옛 버전은 분(min)으로 적어 뒀다. */
+function timerPref() {
+  let pref = {};
+  try { pref = JSON.parse(localStorage.getItem('timer_pref') || '{}'); } catch {}
+  const sec = pref.sec || (pref.min ? pref.min * 60 : 60);
+  return { sec, perQ: pref.perQ !== undefined ? !!pref.perQ : true };
+}
+
+function paintTimerPick() {
+  const r = document.getElementById('timerRange');
+  document.getElementById('timerVal').textContent = timerLabel(stepsToSec(Number(r.value)));
+}
+
 function openTimerSheet() {
   const sheet = document.getElementById('timerSheet');
-  let pref = { min: 20, perQ: false };
-  try { pref = { ...pref, ...JSON.parse(localStorage.getItem('timer_pref') || '{}') }; } catch {}
-  const cur = timer ? timer.min : pref.min;
-  document.querySelectorAll('#timerSeg .btn').forEach((b) =>
-    b.classList.toggle('active', Number(b.dataset.min) === cur));
+  const pref = timerPref();
+  const cur = timer ? timer.sec : pref.sec;
+  const r = document.getElementById('timerRange');
+  r.value = String(Math.min(TIMER_MAX_STEPS, Math.max(1, Math.round(cur / TIMER_STEP))));
+  paintTimerPick();
   document.getElementById('timerPerQ').checked = timer ? timer.perQ : pref.perQ;
   document.getElementById('timerOff').disabled = !timer;
   sheet.classList.remove('hidden');
@@ -8919,18 +8960,13 @@ function initTimer() {
   document.getElementById('timerSheet').onclick = (e) => {
     if (e.target.id === 'timerSheet') e.target.classList.add('hidden');
   };
-  document.querySelectorAll('#timerSeg .btn').forEach((b) => {
-    b.onclick = () => {
-      document.querySelectorAll('#timerSeg .btn').forEach((x) => x.classList.remove('active'));
-      b.classList.add('active');
-    };
-  });
+  const range = document.getElementById('timerRange');
+  range.oninput = paintTimerPick;
   document.getElementById('timerStart').onclick = () => {
-    const on = document.querySelector('#timerSeg .btn.active');
-    startTimer(Number(on ? on.dataset.min : 20), document.getElementById('timerPerQ').checked);
+    startTimer(stepsToSec(Number(range.value)), document.getElementById('timerPerQ').checked);
     document.getElementById('timerSheet').classList.add('hidden');
     document.getElementById('toolTimer').classList.add('active');
-    toast(`${timer.min}분 타이머를 켰습니다${timer.perQ ? ' (문항마다 다시 시작)' : ''}.`);
+    toast(`${timerLabel(timer.sec)} 타이머를 켰습니다${timer.perQ ? ' (문항마다 다시 시작)' : ''}.`);
   };
   document.getElementById('timerOff').onclick = () => {
     stopTimer();

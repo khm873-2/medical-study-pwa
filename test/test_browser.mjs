@@ -7061,21 +7061,42 @@ await run('타이머', async () => {
   await new Promise((r) => setTimeout(r, 120));
   const sheet = document.getElementById('timerSheet');
   out.push({ name: '타이머 버튼이 설정을 연다', ok: !sheet.classList.contains('hidden') });
-  const mins = [...document.querySelectorAll('#timerSeg .btn')].map((b) => b.textContent);
-  out.push({ name: '10·20분 같은 흔한 길이를 고를 수 있다',
-    ok: mins.includes('10분') && mins.includes('20분'), detail: mins.join(' ') });
+  // ── 바로 고른다 (2026-10-21 요청) ──
+  // "10분 이렇게 되어있는데 그렇게 말고 바가 쭉 있고 동그라미 옮기면서 30초 단위로
+  //  설정할 수 있도록. 30초부터 60분까지" — 네 칸짜리로는 문항마다 다시 시작을 못 쓴다.
+  const range = document.getElementById('timerRange');
+  out.push({ name: '**길이를 바로 고른다**(네 칸짜리 단추가 아니라)',
+    ok: !!range && range.type === 'range' && !document.getElementById('timerSeg'),
+    detail: range ? range.type : '없음' });
+  out.push({ name: '30초부터 60분까지 고를 수 있다',
+    ok: !!range && Number(range.min) * 30 === 30 && Number(range.max) * 30 === 3600,
+    detail: range ? `${Number(range.min) * 30}초 ~ ${Number(range.max) * 30 / 60}분` : '없음' });
+  out.push({ name: '30초 눈금으로 움직인다', ok: !!range && Number(range.step) * 30 === 30,
+    detail: range ? `${Number(range.step) * 30}초` : '없음' });
   out.push({ name: '**점수에 안 쓴다고 분명히 적는다**',
     ok: /점수에는 안 들어갑니다/.test(sheet.textContent) });
   out.push({ name: '문항마다 다시 시작도 고를 수 있다', ok: !!document.getElementById('timerPerQ') });
+  out.push({ name: '문항마다 다시 시작이 처음부터 켜져 있다(이걸 쓰려고 바꿨다)',
+    ok: document.getElementById('timerPerQ').checked });
 
-  document.querySelector('#timerSeg .btn[data-min="10"]').click();
+  // 끌면 고른 길이가 글로 보인다 — 칸 번호(1~120)로는 몇 분인지 알 수 없다
+  const val = document.getElementById('timerVal');
+  range.value = '1'; range.dispatchEvent(new Event('input'));
+  out.push({ name: '맨 왼쪽은 30초', ok: val.textContent === '30초', detail: val.textContent });
+  range.value = '3'; range.dispatchEvent(new Event('input'));
+  out.push({ name: '1분 30초처럼 초가 남으면 같이 적는다', ok: val.textContent === '1분 30초',
+    detail: val.textContent });
+  range.value = '120'; range.dispatchEvent(new Event('input'));
+  out.push({ name: '맨 오른쪽은 60분', ok: val.textContent === '60분', detail: val.textContent });
+
+  range.value = '3'; range.dispatchEvent(new Event('input'));   // 1분 30초로 재 본다
   document.getElementById('timerStart').click();
   await new Promise((r) => setTimeout(r, 120));
   out.push({ name: '시작하면 닫힌다', ok: sheet.classList.contains('hidden') });
   out.push({ name: '남은 시간이 보인다', ok: !pill.classList.contains('hidden') && /^\d\d:\d\d$/.test(pill.textContent),
     detail: pill.textContent });
-  out.push({ name: '고른 길이대로 센다', ok: /^(10:00|09:5\d)$/.test(pill.textContent),
-    detail: pill.textContent });
+  out.push({ name: '**고른 길이 그대로 센다**(30초 단위가 반올림되지 않는다)',
+    ok: /^(01:30|01:2\d)$/.test(pill.textContent), detail: pill.textContent });
 
   // 누르면 잠깐 멈춤 — 화장실 다녀오는 동안 도는 건 의미가 없다
   pill.click();
@@ -7092,8 +7113,16 @@ await run('타이머', async () => {
   await new Promise((r) => setTimeout(r, 100));
   document.getElementById('timerOff').click();
   out.push({ name: '끄면 사라진다', ok: pill.classList.contains('hidden') });
-  out.push({ name: '고른 길이를 기억한다', ok: /"min":10/.test(localStorage.getItem('timer_pref') || ''),
+  out.push({ name: '고른 길이를 기억한다', ok: /"sec":90/.test(localStorage.getItem('timer_pref') || ''),
     detail: localStorage.getItem('timer_pref') });
+  // 옛 버전은 분(min)으로 적어 뒀다 — 그대로 두면 설정을 열 때 값이 터진다
+  localStorage.setItem('timer_pref', JSON.stringify({ min: 10, perQ: false }));
+  document.getElementById('toolTimer').click();
+  await new Promise((r) => setTimeout(r, 100));
+  out.push({ name: '예전에 분으로 적어 둔 설정도 읽는다(10분 → 20칸)',
+    ok: document.getElementById('timerRange').value === '20',
+    detail: `칸 ${document.getElementById('timerRange').value}` });
+  document.getElementById('timerClose').click();
 
   // 시간이 지나면 색이 바뀐다 — 숫자만으로는 곁눈으로 안 보인다
   pill.classList.remove('hidden');
@@ -7109,6 +7138,40 @@ await run('타이머', async () => {
   pill.classList.add('hidden');
   out.push({ name: '시간이 지나도 **자동 제출은 안 한다**(재촉하는 장치가 아니다)',
     ok: document.getElementById('resultScreen').classList.contains('hidden') });
+
+  // ── 다 됐을 때 깜빡이는 신호 (2026-10-21 요청) ──
+  // "시인성 있는 색깔로 두 번 정도 깜빡 깜빡해서 다음 문제로 빨리 넘어갈 신호"
+  const flash = document.getElementById('timerFlash');
+  out.push({ name: '깜빡일 자리가 있다', ok: !!flash });
+  out.push({ name: '평소엔 안 보인다', ok: !!flash && flash.classList.contains('hidden') });
+  if (flash) {
+    const cs = getComputedStyle(flash);
+    out.push({ name: '글을 가리지 않는다(눌러도 통과한다)', ok: cs.pointerEvents === 'none',
+      detail: cs.pointerEvents });
+    out.push({ name: '가장자리만 물든다(화면을 통째로 덮지 않는다)',
+      ok: /inset/.test(cs.boxShadow) && cs.backgroundColor !== 'rgb(239, 68, 68)',
+      detail: cs.boxShadow.slice(0, 50) });
+    // 30초짜리를 켜고 시계를 앞으로 돌려 실제로 울리게 한다
+    const realNow = Date.now;
+    document.getElementById('toolTimer').click();
+    await new Promise((r) => setTimeout(r, 100));
+    document.getElementById('timerRange').value = '1';
+    document.getElementById('timerStart').click();
+    await new Promise((r) => setTimeout(r, 100));
+    Date.now = () => realNow() + 40000;          // 40초 뒤로 — 30초가 지났다
+    await new Promise((r) => setTimeout(r, 1200));
+    const lit = !flash.classList.contains('hidden') && flash.classList.contains('on');
+    const anim = getComputedStyle(flash).animationName;
+    Date.now = realNow;
+    out.push({ name: '**시간이 다 되면 실제로 깜빡인다**', ok: lit, detail: `on=${lit} anim=${anim}` });
+    out.push({ name: '두 번 깜빡인다', ok: /timer-blink/.test(anim), detail: anim });
+    out.push({ name: '알약도 지난 색이 된다', ok: pill.classList.contains('over') });
+    document.getElementById('toolTimer').click();
+    await new Promise((r) => setTimeout(r, 100));
+    document.getElementById('timerOff').click();
+    flash.classList.remove('on');
+    flash.classList.add('hidden');
+  }
   return out;
 });
 
