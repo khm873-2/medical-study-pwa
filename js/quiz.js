@@ -3,7 +3,8 @@
 
 import { getBlobUrl } from './github.js';
 import { imagePaths } from './parser.js';
-import { saveSession, loadSession, clearSession, recordAttempt, markUnsure } from './db.js';
+import { saveSession, loadSession, clearSession, recordAttempt, markUnsure,
+  examRun, bumpExamRun, allAttempts, attemptId } from './db.js';
 import { scheduleBackup } from './backup.js';
 import { tokenize, tokenizeTree } from './pen.js';
 
@@ -62,6 +63,10 @@ export class Quiz {
     this.unsure = new Array(questions.length).fill(false);
     // 이번 화면에서 이력을 남긴 문항 — 이어풀기로 되살린 답을 끝낼 때 한 번만 쌓는다
     this._recorded = new Set();
+    // 이 시험을 몇 번째 푸는가 — start()에서 저장소 값으로 채운다(2026-10-21 요청)
+    this.run = 1;
+    // 문항별 지난 풀이(attemptId → history 배열) — start()에서 채운다
+    this._hist = new Map();
     this._imgCache = new Map();
 
     this.el = {
@@ -164,7 +169,22 @@ export class Quiz {
   start() {
     this.el.title.textContent = this.title;
     this.el.screen.classList.remove('hidden');
+    // 몇 회차인지·지난번에 뭘 골랐는지는 저장소에만 있다 — 못 읽어도 풀이는 막지 않는다
+    examRun(this.examKey).then((r) => { this.run = r; }).catch(() => {});
+    allAttempts().then((list) => {
+      this._hist = new Map(list.filter((a) => a && a.history && a.history.length)
+        .map((a) => [a.id, a.history]));
+      if (this.el.explain.style.display === 'block') this.render();
+    }).catch(() => {});
     this.render();
+  }
+
+  /** 이 문항의 지난 풀이들 — 모아 풀기에서는 문항마다 원래 시험이 다르다. */
+  historyOf(idx) {
+    const q = this.all[idx];
+    if (!q) return [];
+    const id = attemptId(q.__exam || this.examKey, q.num != null ? q.num : idx + 1);
+    return this._hist.get(id) || [];
   }
 
   render() {
@@ -445,6 +465,7 @@ export class Quiz {
       picked: this.answers[idx],
       correct: this.isCorrect(idx),
       unsure: !!this.unsure[idx],
+      run: this.run,
     }).catch(() => {});
   }
 
@@ -501,6 +522,18 @@ export class Quiz {
     this.el.expText.appendChild(head);
     if (correct && this.unsure[idx]) {
       this.el.expText.appendChild(mk('<span class="muted">맞았지만 <b>다시 볼 목록</b>에 넣었습니다.</span>'));
+    }
+    // 지난 회차에 뭘 골랐는지 — "또 같은 선지에 걸렸다"가 눈에 보여야 뜻이 있다
+    // (2026-10-21 요청: "몇번째 문제 푸는지, 그 때 뭘 답으로 했는지 기억하게").
+    // 지금 회차는 빼고 보여준다 — 바로 위에 정답/오답이 이미 떠 있다.
+    const past = this.historyOf(idx).filter((h) => (h.run || 0) !== this.run);
+    if (past.length) {
+      const trail = past.map((h) => {
+        const lbl = q.type === 'ox' ? (h.picked === 0 ? 'O' : 'X')
+          : (h.picked == null ? '—' : (CIRCLED[h.picked] || h.picked + 1));
+        return `${h.run ? `${h.run}회 ` : ''}${lbl}${h.correct ? '✓' : '✗'}${h.unsure ? '🎲' : ''}`;
+      }).join(' · ');
+      this.el.expText.appendChild(mk(`<span class="muted">지난 풀이 — ${escapeHtml(trail)}</span>`));
     }
     if (q.explain) this.el.expText.appendChild(mk(`📌 ${escapeHtml(q.explain)}`));
     if (Array.isArray(q.opt) && q.opt.some(Boolean) && q.type !== 'mc') {
@@ -605,6 +638,7 @@ export class Quiz {
     });
     this.order = wrongIdx;
     this.cur = 0;
+    bumpExamRun(this.examKey).then((r) => { this.run = r; }).catch(() => {});
     this.persist();
     return true;
   }
@@ -616,6 +650,10 @@ export class Quiz {
     this.eliminated = this.all.map(() => new Set());
     this._recorded.clear();              // 처음부터 다시 — 모두 새 시도로 센다
     this.cur = 0;
+    // ⚠️ 여기서 지워지는 건 **이번에 고른 답**뿐이다. 무엇을 골랐었는지는
+    // recordAttempt의 history에 회차별로 남아 있다(2026-10-21 요청: 다시 풀기는
+    // 취소 단추처럼 안 푼 상태로 되돌리되, 푼 기록 자체는 없애지 않는다).
+    bumpExamRun(this.examKey).then((r) => { this.run = r; }).catch(() => {});
     clearSession(this.examKey).catch(() => {});
   }
 

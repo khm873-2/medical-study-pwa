@@ -7943,7 +7943,8 @@ function showResult(res) {
   document.getElementById('finalScore').textContent = `${res.correct}/${res.total}`;
   const pct = res.answered ? Math.round((res.correct / res.answered) * 100) : 0;
   document.getElementById('finalPct').textContent =
-    `푼 문항 ${res.answered}/${res.total}${res.answered ? ` · 정답률 ${pct}%` : ''}`
+    `${quiz && quiz.run > 1 ? `${quiz.run}회차 · ` : ''}`
+    + `푼 문항 ${res.answered}/${res.total}${res.answered ? ` · 정답률 ${pct}%` : ''}`
     // 족보에는 채점할 수 없는 서술형 복원 문항이 섞여 있다 — 점수 밖이라고 숨기면
     // "40문항이라더니 왜 28문항이지?"가 된다
     + (res.openTotal ? ` · 읽기 문항 ${res.read || 0}/${res.openTotal}` : '');

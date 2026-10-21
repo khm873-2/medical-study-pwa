@@ -2093,6 +2093,112 @@ await run('오늘 탭 배선', async () => {
   return out;
 });
 
+// ══════════ 풀이 기록이 다시 풀어도 안 날아간다 (2026-10-21 요청) ══════════
+// "결과화면에서 버튼 하나 잘못 누르면 다 날아가 · 몇 번째 푸는지, 그 때 뭘 답으로
+// 했는지 기억하게 만들어" — 전에는 last 한 칸만 남아서 다시 풀면 지난 답이 사라졌다.
+await run('풀이 회차·지난 답 기억', async () => {
+  const out = [];
+  const db = await import('/js/db.js');
+  const EX = '테스트_회차시험.html';
+  // 1회차 — 2번을 골라 틀렸다
+  await db.recordAttempt({ exam: EX, num: 1, subject: 'S', kind: '모의고사', title: 'T',
+    picked: 1, correct: false, unsure: false, run: 1 });
+  // 2회차 — 1번을 골라 맞았다
+  await db.recordAttempt({ exam: EX, num: 1, subject: 'S', kind: '모의고사', title: 'T',
+    picked: 0, correct: true, unsure: true, run: 2 });
+
+  const rec = (await db.allAttempts()).find((a) => a.id === db.attemptId(EX, 1));
+  out.push({ name: '두 번 푼 것이 두 줄로 남는다',
+    ok: !!rec && rec.history && rec.history.length === 2,
+    detail: `${rec && rec.history ? rec.history.length : 0}줄` });
+  out.push({ name: '**지난 회차에 뭘 골랐는지 그대로 있다**(마지막 것만 남지 않는다)',
+    ok: !!rec && rec.history[0].picked === 1 && rec.history[0].correct === false,
+    detail: rec && rec.history ? JSON.stringify(rec.history[0]) : '없음' });
+  out.push({ name: '회차 번호가 같이 남는다',
+    ok: !!rec && rec.history[0].run === 1 && rec.history[1].run === 2,
+    detail: rec && rec.history ? `${rec.history[0].run}, ${rec.history[1].run}` : '없음' });
+  out.push({ name: '찍었음 표시도 회차별로 남는다',
+    ok: !!rec && rec.history[0].unsure === false && rec.history[1].unsure === true });
+  out.push({ name: '누적 횟수는 그대로 센다', ok: !!rec && rec.n === 2, detail: `n=${rec && rec.n}` });
+
+  // 회차 세기 — 다시 풀기를 누르면 올라간다
+  const r1 = await db.examRun(EX);
+  const r2 = await db.bumpExamRun(EX);
+  const r3 = await db.examRun(EX);
+  out.push({ name: '처음 여는 시험은 1회차', ok: r1 === 1, detail: String(r1) });
+  out.push({ name: '다시 풀면 회차가 올라가고 그대로 남는다',
+    ok: r2 === 2 && r3 === 2, detail: `${r2} / ${r3}` });
+
+  // 기록이 무한정 쌓이지 않는다(용량)
+  for (let i = 3; i <= db.HISTORY_MAX + 5; i++) {
+    await db.recordAttempt({ exam: EX, num: 1, subject: 'S', kind: '모의고사', title: 'T',
+      picked: 0, correct: true, unsure: false, run: i });
+  }
+  const full = (await db.allAttempts()).find((a) => a.id === db.attemptId(EX, 1));
+  out.push({ name: `지난 풀이는 ${db.HISTORY_MAX}줄까지만 쌓인다(용량이 안 터지게)`,
+    ok: full.history.length === db.HISTORY_MAX, detail: `${full.history.length}줄` });
+  out.push({ name: '잘려도 누적 횟수는 맞다(몇 번 풀었는지는 안 잃는다)',
+    ok: full.n === db.HISTORY_MAX + 5, detail: `n=${full.n}` });
+  out.push({ name: '오래된 것부터 버린다(최근 회차가 남는다)',
+    ok: full.history[full.history.length - 1].run === db.HISTORY_MAX + 5,
+    detail: `마지막 run=${full.history[full.history.length - 1].run}` });
+
+  // 백업 복원이 양쪽 기록을 합친다 — 아이패드·맥을 오가면 한쪽에만 있는 회차가 생긴다
+  const EX2 = '테스트_합치기.html';
+  await db.recordAttempt({ exam: EX2, num: 1, subject: 'S', kind: '모의고사', title: 'T',
+    picked: 0, correct: true, unsure: false, run: 1 });
+  const mineRec = (await db.allAttempts()).find((a) => a.id === db.attemptId(EX2, 1));
+  await db.mergeAttempts([{ ...mineRec,
+    history: [{ at: mineRec.history[0].at + 5000, picked: 2, correct: false, unsure: false, run: 2 }] }]);
+  const mergedRec = (await db.allAttempts()).find((a) => a.id === db.attemptId(EX2, 1));
+  out.push({ name: '**백업을 되살려도 양쪽 회차가 다 남는다**(덮어쓰지 않는다)',
+    ok: mergedRec.history.length === 2
+      && mergedRec.history.some((h) => h.run === 1) && mergedRec.history.some((h) => h.run === 2),
+    detail: JSON.stringify(mergedRec.history.map((h) => h.run)) });
+  return out;
+});
+
+// 쌓아두기만 하면 뜻이 없다 — 푼 뒤에 **화면에서** 지난 회차가 보여야 한다
+await run('지난 풀이가 화면에 보인다', async () => {
+  const out = [];
+  const db = await import('/js/db.js');
+  const { Quiz } = await import('/js/quiz.js');
+  const EX = '테스트_지난풀이표시.html';
+  // 1·2회차를 미리 심어 둔다(2회차엔 ②를 골라 틀렸다)
+  await db.recordAttempt({ exam: EX, num: 3, subject: 'S', kind: '모의고사', title: 'T',
+    picked: 0, correct: true, unsure: false, run: 1 });
+  await db.recordAttempt({ exam: EX, num: 3, subject: 'S', kind: '모의고사', title: 'T',
+    picked: 1, correct: false, unsure: false, run: 2 });
+  await db.kvSet(`run:${EX}`, 3);          // 지금은 3회차
+
+  const qz = new Quiz({
+    examKey: EX, title: '지난풀이 검사',
+    questions: [{ num: 3, type: 'mc', q: '물음', opts: ['가', '나'], ans: 0 }],
+    onFinish() {}, onExit() {}, onRender() {}, onCopy: async () => true, meta: {},
+  });
+  qz.start();
+  await new Promise((r) => setTimeout(r, 400));
+  out.push({ name: '지금이 몇 회차인지 안다', ok: qz.run === 3, detail: `${qz.run}회차` });
+  out.push({ name: '그 문항의 지난 풀이를 찾아온다', ok: qz.historyOf(0).length === 2,
+    detail: `${qz.historyOf(0).length}줄` });
+
+  // 답을 골라 해설을 띄운다
+  document.querySelectorAll('#optsContainer .opt-row')[0].click();
+  await new Promise((r) => setTimeout(r, 250));
+  const txt = document.getElementById('expExplain').textContent;
+  out.push({ name: '**해설에 "지난 풀이" 줄이 뜬다**', ok: /지난 풀이/.test(txt),
+    detail: txt.slice(0, 120) });
+  out.push({ name: '지난 회차에 고른 선지가 번호로 보인다', ok: /1회\s*①/.test(txt) && /2회\s*②/.test(txt),
+    detail: (txt.match(/지난 풀이[^\n]*/) || [''])[0] });
+  out.push({ name: '맞았는지 틀렸는지도 같이 보인다',
+    ok: /①✓/.test(txt) && /②✗/.test(txt),
+    detail: (txt.match(/지난 풀이[^\n]*/) || [''])[0] });
+  out.push({ name: '지금 회차는 지난 풀이에 안 섞인다(바로 위에 이미 떠 있다)',
+    ok: !/3회/.test((txt.match(/지난 풀이[^\n]*/) || [''])[0]) });
+  qz.destroy();
+  return out;
+});
+
 await run('오늘 탭 생김새', () => {
   const out = [];
   document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));

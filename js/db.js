@@ -177,7 +177,14 @@ export async function deleteCard(id) {
 // 문항을 키로 따로 쌓아 과목 전체에서 약한 것만 다시 꺼낸다(2026-10-10).
 export const attemptId = (exam, num) => `${exam}#${num}`;
 
-export async function recordAttempt({ exam, num, subject, kind, title, picked, correct, unsure }) {
+/**
+ * 한 문항에 남겨 두는 지난 풀이 수 — "몇 회차에 뭘 골랐나"를 되짚는 자리다
+ * (2026-10-21 요청: "몇번째 푸는지, 그 때 뭘 답으로 했는지 기억하게 만들어").
+ * 한 칸이 40바이트 남짓이라 925문항 × 20회라도 1MB가 안 된다.
+ */
+export const HISTORY_MAX = 20;
+
+export async function recordAttempt({ exam, num, subject, kind, title, picked, correct, unsure, run }) {
   const db = await open();
   const id = attemptId(exam, num);
   const store = db.transaction(STORE_ATTEMPTS, 'readwrite').objectStore(STORE_ATTEMPTS);
@@ -187,8 +194,27 @@ export async function recordAttempt({ exam, num, subject, kind, title, picked, c
   rec.n += 1;
   if (!correct) rec.wrongN += 1;
   if (unsure) rec.unsureN += 1;
-  rec.last = { at: Date.now(), picked, correct: !!correct, unsure: !!unsure };
+  const at = Date.now();
+  rec.last = { at, picked, correct: !!correct, unsure: !!unsure, run: run || rec.n };
+  // 전에는 **마지막 한 번만** 남겨서, 다시 풀면 지난번에 뭘 골랐는지가 사라졌다.
+  // 오래된 것부터 버리되 횟수(n)는 그대로 둔다 — 잘린 뒤에도 "몇 번 풀었나"는 맞다.
+  rec.history = [...(rec.history || []), rec.last].slice(-HISTORY_MAX);
   return tx(STORE_ATTEMPTS, 'readwrite', (s) => s.put(rec));
+}
+
+// ---- 시험 회차 — "이 시험을 몇 번째 푸는가" ----
+// 문항별 n은 "그 문항을 몇 번 풀었나"라서 시험 단위 회차와 다르다(건너뛴 문항도 있다).
+// 처음부터 다시·틀린 것만 다시를 누를 때 올린다(2026-10-21 요청).
+const runKey = (exam) => `run:${exam}`;
+
+export async function examRun(exam) {
+  return Number((await kvGet(runKey(exam))) || 1);
+}
+
+export async function bumpExamRun(exam) {
+  const next = (await examRun(exam)) + 1;
+  await kvSet(runKey(exam), next);
+  return next;
 }
 
 /** 이미 푼 문항에 "확신 없었음"만 뒤늦게 켜고 끈다 — 시도 횟수는 올리지 않는다. */
@@ -227,6 +253,13 @@ export async function mergeAttempts(list) {
       merged.n = Math.max(inc.n || 0, mine?.n || 0);
       merged.wrongN = Math.max(inc.wrongN || 0, mine?.wrongN || 0);
       merged.unsureN = Math.max(inc.unsureN || 0, mine?.unsureN || 0);
+      // 지난 풀이는 **양쪽을 합친다** — 아이패드와 맥에서 번갈아 풀면 한쪽에만
+      // 있는 회차가 생기고, 덮어쓰면 그게 사라진다. 시각이 같으면 한 번으로 본다.
+      const seen = new Set();
+      merged.history = [...(mine?.history || []), ...(inc.history || [])]
+        .filter((h) => h && !seen.has(h.at) && seen.add(h.at))
+        .sort((a, b) => (a.at || 0) - (b.at || 0))
+        .slice(-HISTORY_MAX);
       st.put(merged);
       n++;
     }
