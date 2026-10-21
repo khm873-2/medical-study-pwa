@@ -98,6 +98,23 @@ ok('사이드 폭이 --side-w 변수를 씀', !!basis && basis.includes('--side-
 const sideFlexRules = (WIDE.match(/\.side-col\s*\{[^}]*flex:/g) || []).length;
 ok('사이드 flex를 덮어쓰는 규칙이 하나뿐', sideFlexRules === 1, `${sideFlexRules}개`);
 
+// ⚠️ 전에는 position:sticky + max-height:calc(100vh - 80px)로 **내용만큼만** 자랐다.
+// `.split` 높이를 못 박던 걸 떼고 남는 만큼 쓰게 바꾸면서(족보 머리말 가림 수정,
+// 2026-10-21) 이 calc이 `.split`의 실제 높이보다 커지는 경우가 생겼고, 안쪽
+// .wiki-body도 부모가 안 잘렸으니 끝까지 펼쳐져서 스크롤이 안 먹혔다
+// ("3번 밑에 다른 내용이 있는데 스크롤이 안 됨" 신고). .main-col과 같은 처방 —
+// stretch로 부모가 주는 만큼만 받고 그 안에서 스크롤한다.
+ok('사이드 칸이 sticky로 뜨지 않는다(부모 높이를 그대로 받아야 함)',
+  wideDecl('#quizScreen .side-col', 'position') !== 'sticky',
+  String(wideDecl('#quizScreen .side-col', 'position')));
+ok('사이드 칸에 독자적인 max-height calc이 없다(.split 높이를 그대로 받음)',
+  !/max-height:\s*calc\(100vh/.test(WIDE.match(/#quizScreen \.side-col\s*\{[^}]*\}/)?.[0] || ''));
+ok('사이드 칸이 넘친 내용을 자기 안에서 가둔다(overflow:hidden)',
+  wideDecl('#quizScreen .side-col', 'overflow') === 'hidden',
+  String(wideDecl('#quizScreen .side-col', 'overflow')));
+ok('.side-col.both에 독자적인 height calc이 없다(부모 stretch와 충돌 방지)',
+  !/\.side-col\.both\s*\{[^}]*height:\s*calc/.test(WIDE));
+
 // (c) 두 패널이 열렸을 때 pane-resizer
 ok('pane-resizer가 넓은 화면에서 display:block',
   /\.pane-resizer:not\(\.hidden\)\s*\{[^}]*display:\s*block/.test(WIDE));

@@ -55,6 +55,9 @@ await run('준비', () => {
   document.querySelectorAll('section').forEach((s) => s.classList.add('hidden'));
   const qs = document.getElementById('quizScreen');
   qs.classList.remove('hidden');
+  // show()가 하는 일을 직접 흉내낸다 — 안 하면 body[data-screen="quizScreen"]에
+  // 걸린 #app 높이 규칙(2026-10-21)이 안 먹어 칼럼이 내용만큼만 쪼그라든다.
+  document.body.dataset.screen = 'quizScreen';
 
   // 지문·선지를 토큰(span.tok)으로 채운다 — pen.js가 글자를 찾는 단위
   const mk = (t) => t.split(/(\s+)/).map((w) =>
@@ -160,6 +163,58 @@ await run('네비', () => {
         .filter((x) => getComputedStyle(x).display !== 'none')
         .map((x) => `${x.id || x.className || x.tagName}:${Math.round(x.getBoundingClientRect().height)}`)
         .join(' ') });
+  return out;
+});
+
+// ══════════ 3.5. 노트 패널 — 긴 내용이 페이지를 끌고 가지 않고 자기 안에서 스크롤한다 ══════════
+// "오른쪽 글을 밑으로 쭉 내렸더니 스크롤이 멈춰버리고 전체 화면이 묶여서 위아래로만
+// 움직임" 신고(2026-10-21) — .side-col이 sticky+max-height로 **내용만큼** 자라던 시절의
+// 버그다. .wiki-body가 부모(.side-col)에게서 확정 높이를 못 받으면 overflow-y:auto가
+// 안 먹고 끝까지 펼쳐진다.
+await run('노트 패널 스크롤 가둠', () => {
+  const out = [];
+  // 신고 당시 그대로 세운다: ① 족보 머리말이 펼쳐져 `.split` 위를 먹고
+  // ② 노트 패널 **하나만** 열려 있다(.both 아님 — AI 패널을 닫은 상태).
+  // .both는 예전에도 height를 못 박아 줘서 멀쩡했다. 버그는 :not(.both) 쪽이다.
+  const ai = document.getElementById('aiPanel');
+  const aiWasHidden = ai.classList.contains('hidden');
+  ai.classList.add('hidden');
+  const side = document.querySelector('#quizScreen .side-col');
+  const hadBoth = side.classList.contains('both');
+  side.classList.remove('both');
+  const intro = document.getElementById('jokboIntro');
+  intro.classList.remove('hidden');
+  intro.open = true;
+  document.getElementById('jokboIntroBody').innerHTML =
+    Array.from({ length: 6 }, (_, i) => `<p>출제 경향 문단 ${i + 1}</p>`).join('');
+  const body = document.getElementById('wikiBody');   // '.wiki-body'는 여러 화면이 공유해 readBody가 먼저 잡힌다
+  body.innerHTML = Array.from({ length: 80 }, (_, i) => `<p>노트 문단 ${i + 1} 내용이 길게 들어 있다.</p>`).join('');
+
+  // ★ 핵심 — **높이**가 아니라 **바닥 위치**를 봐야 한다. 고장났을 때 칸 높이는
+  //   820(<900)이라 높이만 보면 멀쩡해 보이는데, 머리말에 밀려 top이 370이라
+  //   바닥이 1190 — 화면(900) 밖 290px가 영영 안 보인다(재현 측정, 2026-10-21).
+  const sr = side.getBoundingClientRect();
+  out.push({ name: '**노트 칸 바닥이 화면 안에 있다**(아래가 잘려 안 보이면 안 된다)',
+    ok: sr.bottom <= window.innerHeight + 2,
+    detail: `바닥 ${Math.round(sr.bottom)} / 화면 ${window.innerHeight}` });
+  const br = body.getBoundingClientRect();
+  out.push({ name: '노트 본문 바닥도 화면 안에 있다',
+    ok: br.bottom <= window.innerHeight + 2,
+    detail: `바닥 ${Math.round(br.bottom)} / 화면 ${window.innerHeight}` });
+  out.push({ name: '본문 안에 실제로 스크롤할 거리가 있다',
+    ok: body.scrollHeight > body.clientHeight + 10,
+    detail: `scrollHeight ${body.scrollHeight} / clientHeight ${body.clientHeight}` });
+  const beforeScroll = window.scrollY;
+  body.scrollTop = body.scrollHeight;
+  out.push({ name: '본문을 끝까지 내려도 페이지(문서) 자체는 안 움직인다',
+    ok: window.scrollY === beforeScroll, detail: `${beforeScroll} → ${window.scrollY}` });
+  // 뒤 테스트들이 족보 머리말이 닫힌 보통 퀴즈 화면을 가정하므로 되돌려 둔다
+  intro.classList.add('hidden');
+  intro.open = false;
+  document.getElementById('jokboIntroBody').innerHTML = '';
+  body.innerHTML = '';
+  if (!aiWasHidden) ai.classList.remove('hidden');
+  if (hadBoth) side.classList.add('both');
   return out;
 });
 

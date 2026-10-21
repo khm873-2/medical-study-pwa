@@ -754,8 +754,10 @@ body.boxing .resize-grip { pointer-events: none; }
   }
   /* 둘 다 열렸을 때만 비율을 나눈다 */
   /* 둘 다 열렸을 때만 높이를 나눈다. 사이드 칼럼에 **확정 높이**를 줘야
-     flex-basis가 해석된다 — 안 주면 끌어도 아무 일도 안 일어난다(2026-10-09 버그). */
-  #quizScreen .side-col.both { height: calc(100vh - 80px); }
+     flex-basis가 해석된다 — 안 주면 끌어도 아무 일도 안 일어난다(2026-10-09 버그).
+     전엔 여기서 직접 calc(100vh - 80px)로 못 박았는데, `.side-col`이 이제
+     `.split`의 stretch로 확정 높이를 받으므로(2026-10-21) 또 못 박으면 서로
+     다른 값이 부딪힌다 — 지운다. */
   #quizScreen .side-col.both > #aiPanel { flex: 0 0 var(--ai-h, 45%); min-height: 110px; }
   #quizScreen .side-col.both > #wikiPanel { flex: 1 1 auto; }
   /* 하나만 열렸으면 전체를 쓴다 */
@@ -854,13 +856,20 @@ body.boxing .resize-grip { pointer-events: none; }
   #quizScreen .main-col > #qcard { flex: 0 0 auto; margin-bottom: 12px; }
   #quizScreen .main-col > .quiz-nav { margin-top: auto; }   /* ← 핵심: 항상 바닥 */
 
-  /* 오른쪽: 사이드 패널들 */
+  /* 오른쪽: 사이드 패널들
+     ⚠️ 전에는 `position: sticky` + `max-height: calc(100vh - 80px)`로 content만큼만
+     차지하게 했다. 그런데 `.split` 높이를 못 박던 걸 떼고 **남는 만큼 쓰게** 바꾸면서
+     (족보 머리말 가림 수정, 2026-10-21) `.split`의 실제 높이가 그 calc보다 작아지는
+     경우가 생겼다 — 사이드 칸은 여전히 더 큰 calc까지 자라려 하고, 안쪽 본문
+     (.wiki-body)도 "부모가 못 자랐으니 나도 못 잘린다"며 끝까지 펼쳐져서 스크롤이
+     안 먹고 화면 전체가 같이 밀렸다(2026-10-21 신고: "3번 밑에 다른 내용이 있는데
+     스크롤이 안 됨"). `.main-col`과 같은 처방 — `align-items: stretch`로 **부모가
+     주는 만큼만** 받고 그 안에서 `.wiki-body`가 scroll하게 한다. */
   #quizScreen .side-col {
     flex: 0 0 var(--side-w, clamp(300px, 34vw, 460px));
-    min-width: 0; align-self: flex-start;
-    position: sticky; top: 8px;
+    min-width: 0; min-height: 0;
     display: flex; flex-direction: column; gap: 0;
-    max-height: calc(100vh - 80px);
+    overflow: hidden;
   }
   /* ⚠️ **새 칸을 여기에 빠뜨리면 그 칸은 스크롤이 죽는다.** 칸이 세로 flex가 아니면
      안쪽 본문이 flex 자식이 못 되고, 칸은 overflow: hidden이라 넘친 글이 그냥 잘린다
