@@ -128,24 +128,26 @@ export async function noteForJokbo(path) {
   if (!subject || !chapter) return null;
 
   // ⚠️ **정리된 위키를 먼저 본다.** 전에는 예습노트(98_)를 먼저 훑어서, 위키에 같은
-  //    강의가 있어도 날것인 예습노트가 떴다 — 재어 보니 39개 중 36개가 그랬다
-  //    (2026-10-21 지적: "족보는 지금 예습노트랑 연결되어 있는 거임?").
-  //    점수가 같으면 먼저 본 쪽이 이기므로 차례만 바꾸면 된다. 위키에 짝이 없는
-  //    챕터는 그대로 예습노트로 간다 — 없는 것보다 낫다.
+  //    강의가 있어도 날것인 예습노트가 떴다(2026-10-21 지적: "족보는 지금 예습노트랑
+  //    연결되어 있는 거임?"). 처음엔 세 루트를 한 그릇에 담아 **점수가 가장 높은 것**을
+  //    골랐는데, 그러면 위키에 멀쩡한 짝(문턱은 넘김)이 있어도 예습노트 쪽 이름이
+  //    우연히 글자가 더 겹쳐 점수가 높으면 그게 이겼다 — 08_소아기본소생술_PALS_
+  //    신생아소생술처럼 한 족보 챕터가 위키에서 세 노트(PBLS·PALS·NRP)로 나뉜
+  //    경우 실제로 그랬다(2026-10-21 재지적: "강의 다 끝났는데 이게 무슨말임").
+  //    그래서 **루트 단위로** 본다 — 위키에 문턱 넘는 짝이 하나라도 있으면 그걸로
+  //    끝내고, 없을 때만 다음 루트로 넘어간다.
   const ROOTS = ['02_Wiki', '98_예습노트_보관', '01_임종평_전범위'];
-  const cands = [];
   for (const root of ROOTS) {
+    let best = null;
+    let bestScore = 0;
     for (const f of await listNoteFiles(root)) {
-      if (f.subject === subject && !f.group) cands.push(f.name);   // QA본은 산문이 아니라 뺀다
+      if (f.subject !== subject || f.group) continue;   // QA본은 산문이 아니라 뺀다
+      const sc = nameSimilarity(chapter, f.name);
+      if (sc > bestScore) { bestScore = sc; best = f.name; }
     }
+    if (bestScore >= DICE_MIN) return best;
   }
-  let best = null;
-  let bestScore = 0;
-  for (const n of cands) {
-    const sc = nameSimilarity(chapter, n);
-    if (sc > bestScore) { bestScore = sc; best = n; }
-  }
-  return bestScore >= DICE_MIN ? best : null;
+  return null;   // 위키에도 예습노트에도 짝이 없다 — 억지로 붙이지 않는다
 }
 
 /**
