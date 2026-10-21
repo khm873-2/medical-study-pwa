@@ -7934,7 +7934,15 @@ async function openExamAt(path, qnum) {
 /** 결과·오답노트에 쓰는 정답 표기. 족보에는 정답이 둘 이상인 문항이 흔하다. */
 function ansText(q) {
   const list = q.ansAll || [q.ans];
-  return list.map((i) => `${i + 1}번`).join('·');
+  return list.map((i) => `${i + 1}번`).join('·') + (q.type === 'multi' ? ' (모두)' : '');
+}
+
+/** 내가 고른 것 — '모두 고르기'는 배열로 들어온다(2026-10-21). */
+function pickedText(q, picked) {
+  if (picked === null || picked === undefined) return '—';
+  if (Array.isArray(picked)) return picked.length ? picked.map((i) => `${i + 1}번`).join('·') : '안 고름';
+  if (q.type === 'ox') return picked === 0 ? 'O' : 'X';
+  return `${picked + 1}번`;
 }
 
 function showResult(res) {
@@ -7959,7 +7967,7 @@ function showResult(res) {
     wl.appendChild(head);
     res.wrong.forEach((x) => {
       const d = document.createElement('div');
-      const picked = x.q.type === 'ox' ? (x.picked === 0 ? 'O' : 'X') : `${x.picked + 1}번`;
+      const picked = pickedText(x.q, x.picked);
       const ans = x.q.type === 'ox' ? (x.q.ans === 0 ? 'O' : 'X') : ansText(x.q);
       d.textContent = `${x.q.num}. ${x.q.q.slice(0, 60)}… (내 답 ${picked} / 정답 ${ans})`;
       wl.appendChild(d);
@@ -8060,7 +8068,7 @@ function buildMarkdown(res) {
     lines.push(`## ❌ 틀린 문제 ${res.wrong.length}개`);
     lines.push('');
     res.wrong.forEach((x) => {
-      const picked = x.q.type === 'ox' ? (x.picked === 0 ? 'O' : 'X') : `${x.picked + 1}번`;
+      const picked = pickedText(x.q, x.picked);
       const ans = x.q.type === 'ox' ? (x.q.ans === 0 ? 'O' : 'X') : ansText(x.q);
       lines.push(`### ${markOf(x)}${x.q.num}. (내 답 ${picked} → 정답 ${ans})`);
       if (x.q.source || x.q.srcTag) lines.push(`*출처: ${x.q.source || x.q.srcTag}*`);

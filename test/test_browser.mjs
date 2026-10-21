@@ -2093,6 +2093,100 @@ await run('오늘 탭 배선', async () => {
   return out;
 });
 
+// ══════════ 모두 고르시오 — 체크로 풀고, 전부 맞아야 정답 (2026-10-21 요청) ══════════
+// "모두 고르시오도 체크로 해서 풀 수 있게 해야지. 그래야 정답을 맞히지."
+// 전에는 라디오로 두고 **정답 중 아무거나 하나**면 맞다고 쳐서, 다섯 중 셋이 답인
+// 문항을 하나만 찍고 넘어가면서도 점수가 올랐다.
+await run('모두 고르시오', async () => {
+  const out = [];
+  const { Quiz, isMultiCorrect } = await import('/js/quiz.js');
+  const Q = { num: 1, type: 'multi', q: '옳은 것을 모두 고르시오', ans: 1,
+    ansAll: [1, 3], opts: ['가', '나', '다', '라', '마'] };
+
+  out.push({ name: '다 골라야 맞다', ok: isMultiCorrect(Q, [1, 3]) });
+  out.push({ name: '**하나만 찍으면 틀리다**(전에는 이게 정답이었다)', ok: !isMultiCorrect(Q, [1]) });
+  out.push({ name: '하나 빠뜨리면 틀리다', ok: !isMultiCorrect(Q, [3]) });
+  out.push({ name: '더 고르면 틀리다', ok: !isMultiCorrect(Q, [1, 2, 3]) });
+  out.push({ name: '순서는 상관없다', ok: isMultiCorrect(Q, [3, 1]) });
+
+  let qz = null;
+  try {
+    qz = new Quiz({ examKey: 'multi-test', title: '모두고르기 검사', questions: [Q],
+      onFinish() {}, onExit() {}, onRender() {}, onCopy: async () => true, meta: {} });
+    qz.start();
+    await new Promise((r) => setTimeout(r, 300));
+
+    const rows = [...document.querySelectorAll('#optsContainer .opt-row')];
+    out.push({ name: '선지가 체크 모양이다', ok: rows.length === 5 && rows.every((r) => r.classList.contains('opt-check')),
+      detail: `${rows.length}개` });
+    out.push({ name: '모두 고르는 문항이라고 알려준다',
+      ok: /모두 고르/.test(document.getElementById('optsContainer').textContent) });
+    const go = document.querySelector('.multi-go');
+    out.push({ name: '**답 내기 단추가 있다**(누르기 전엔 안 잠긴다)', ok: !!go });
+    out.push({ name: '아무것도 안 고르면 낼 수 없다', ok: !!go && go.disabled });
+
+    // 둘을 고른다 — 고르는 동안엔 아직 채점되지 않아야 한다
+    rows[1].click(); await new Promise((r) => setTimeout(r, 80));
+    out.push({ name: '하나 골라도 아직 안 잠긴다(더 고를 수 있다)',
+      ok: qz.answers[0] === null && !!document.querySelector('.multi-go') });
+    out.push({ name: '고른 것이 표시된다',
+      ok: document.querySelectorAll('#optsContainer .opt-row.picked').length === 1 });
+    rows[3].click(); await new Promise((r) => setTimeout(r, 80));
+    out.push({ name: '몇 개 골랐는지 단추에 보인다',
+      ok: /2개/.test(document.querySelector('.multi-go').textContent),
+      detail: document.querySelector('.multi-go').textContent });
+    // 잘못 눌렀으면 다시 눌러 끈다
+    rows[3].click(); await new Promise((r) => setTimeout(r, 60));
+    out.push({ name: '다시 누르면 꺼진다',
+      ok: document.querySelectorAll('#optsContainer .opt-row.picked').length === 1 });
+    rows[3].click(); await new Promise((r) => setTimeout(r, 60));
+
+    document.querySelector('.multi-go').click();
+    await new Promise((r) => setTimeout(r, 200));
+    out.push({ name: '**내면 둘 다 골랐으니 정답**', ok: qz.isCorrect(0),
+      detail: JSON.stringify(qz.answers[0]) });
+    out.push({ name: '해설이 뜬다', ok: /정답/.test(document.getElementById('expExplain').textContent) });
+    out.push({ name: '정답 표시에 "모두 고르기"라고 적힌다',
+      ok: /모두 고르기/.test(document.getElementById('expExplain').textContent),
+      detail: document.getElementById('expExplain').textContent.slice(0, 60) });
+
+    // 빠뜨린 선지는 틀린 것과 다르게 보여야 "빠뜨렸구나"가 보인다
+    qz.resetOne();
+    await new Promise((r) => setTimeout(r, 120));
+    out.push({ name: '다시 풀기를 누르면 체크가 비워진다',
+      ok: qz.answers[0] === null && !document.querySelectorAll('#optsContainer .opt-row.picked').length });
+    document.querySelectorAll('#optsContainer .opt-row')[1].click();
+    await new Promise((r) => setTimeout(r, 60));
+    document.querySelector('.multi-go').click();
+    await new Promise((r) => setTimeout(r, 200));
+    out.push({ name: '하나만 내면 오답이다', ok: !qz.isCorrect(0) });
+    const missed = document.querySelectorAll('#optsContainer .opt-row.missed');
+    out.push({ name: '**빠뜨린 답을 따로 표시한다**(틀린 것과 구별)', ok: missed.length === 1,
+      detail: `${missed.length}개` });
+
+    // ⚠️ 눈으로 보고 잡은 것(2026-10-21): 고른 티(.picked)가 맞음/틀림 색을 덮어써서
+    //    **틀리게 고른 선지가 맞은 것과 똑같이 파랗게** 보였다. 색이 실제로 갈리는지 잰다.
+    qz.resetOne();
+    await new Promise((r) => setTimeout(r, 120));
+    const rs = [...document.querySelectorAll('#optsContainer .opt-row')];
+    rs[1].click(); rs[4].click();            // 1번은 정답, 4번은 오답
+    await new Promise((r) => setTimeout(r, 60));
+    document.querySelector('.multi-go').click();
+    await new Promise((r) => setTimeout(r, 200));
+    const now = [...document.querySelectorAll('#optsContainer .opt-row')];
+    out.push({ name: '맞게 고른 것은 correct, 틀리게 고른 것은 wrong',
+      ok: now[1].classList.contains('correct') && now[4].classList.contains('wrong'),
+      detail: `${[...now[1].classList].join('.')} / ${[...now[4].classList].join('.')}` });
+    out.push({ name: '채점 뒤에는 고른 티(.picked)가 안 남는다(색을 덮어쓴다)',
+      ok: !now.some((r) => r.classList.contains('picked')) });
+    const cOK = getComputedStyle(now[1]).backgroundColor;
+    const cNO = getComputedStyle(now[4]).backgroundColor;
+    out.push({ name: '**맞게 고른 것과 틀리게 고른 것의 색이 실제로 다르다**',
+      ok: cOK !== cNO, detail: `${cOK} vs ${cNO}` });
+  } finally { if (qz) qz.destroy(); }
+  return out;
+});
+
 // ══════════ 풀이 기록이 다시 풀어도 안 날아간다 (2026-10-21 요청) ══════════
 // "결과화면에서 버튼 하나 잘못 누르면 다 날아가 · 몇 번째 푸는지, 그 때 뭘 답으로
 // 했는지 기억하게 만들어" — 전에는 last 한 칸만 남아서 다시 풀면 지난 답이 사라졌다.

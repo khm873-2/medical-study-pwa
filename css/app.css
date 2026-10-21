@@ -1599,6 +1599,32 @@ body.boxing .resize-grip { pointer-events: none; }
 .opt-text { line-height: 1.5; }
 .opt-explain { margin-top: 4px; }
 
+/* ── 모두 고르시오 — 체크로 여럿 고른다 (2026-10-21 요청) ──
+   라디오처럼 하나만 고르게 해놓고 "정답 중 아무거나"면 맞다고 쳐서, 다섯 중 셋이
+   답인 문항을 하나만 찍고도 점수가 올랐다. 체크로 바꾸고 전부 골라야 맞게 한다. */
+.multi-note { margin: 0 0 10px; font-weight: 600; }
+.opt-row.opt-check .badge.check { border-radius: 7px; }   /* 동그라미(택1)와 눈으로 구별 */
+.opt-row.opt-check.picked {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+}
+.opt-row.opt-check.picked .badge.check {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+/* 답인데 **안 고른** 것 — 틀린 것과 달라야 "빠뜨렸구나"가 보인다 */
+.opt-row.missed {
+  background: color-mix(in srgb, var(--correct) 7%, transparent);
+  border-color: color-mix(in srgb, var(--correct) 30%, transparent);
+  border-style: dashed;
+}
+.opt-row.missed .badge {
+  background: transparent; border-color: var(--correct); color: var(--correct);
+}
+.opt-row.missed .opt-text::after {
+  content: ' — 빠뜨림'; color: var(--correct); font-size: 12.5px; font-weight: 700;
+}
+.btn.multi-go { margin-top: 10px; }
+
 /* ── 출처·해설 ── */
 #qsource {
   background: color-mix(in srgb, var(--accent) 7%, transparent);

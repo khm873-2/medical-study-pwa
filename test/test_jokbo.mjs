@@ -112,6 +112,63 @@ if (!existsSync(DIR)) {
   }
   ok('객관식 지문·선지에 정답이 새지 않는다', leaks.length === 0, leaks.slice(0, 4).join(' / '));
 
+  // ── 선지가 한 줄에 몰려 있어도 찾아낸다 (2026-10-21 지적) ──
+  // "선지가 있는데도 서술로만 복원된 문항이라고 뜬다. 왜 이렇게 많냐" — 복원자가 줄을
+  // 안 바꾸고 `/`로 이어 적은 문항이 25개였고, 그중 22개가 08_PALS 한 챕터에 몰려 있어
+  // 그 챕터를 풀던 중에 눈에 띄었다(재어 보니 33/64가 open이었다).
+  {
+    const pals = `${DIR}/08_소아기본소생술_PALS_신생아소생술.md`;
+    const qs = J.parseJokbo(readFileSync(pals, 'utf8'), `${REL}/08_소아기본소생술_PALS_신생아소생술.md`).questions;
+    const openN = qs.filter((q) => q.type === 'open').length;
+    ok('**08_PALS에서 풀 수 있는 문항이 절반을 넘는다**(전에는 33/64가 서술형이었다)',
+      openN <= 20, `${openN}/${qs.length}개가 서술형`);
+    // 신고에 찍힌 바로 그 문항
+    const q37 = qs.find((q) => /HR 40\/min 혈압 100\/60/.test(q.q));
+    ok('신고된 문항이 실제로 풀린다', q37 && q37.type === 'mc', q37 ? q37.type : '못 찾음');
+    ok('선지 다섯이 제대로 쪼개진다',
+      q37 && q37.opts.length === 5 && q37.opts[0] === 'atropine' && q37.opts[3] === 'epinephrine',
+      q37 ? JSON.stringify(q37.opts) : '없음');
+    ok('지문에 선지가 남아 있지 않다', q37 && !/atropine/.test(q37.q), q37 ? q37.q.slice(-40) : '');
+    ok('정답도 제대로 붙는다(epinephrine = 4번)', q37 && q37.ans === 3, q37 ? String(q37.ans) : '');
+  }
+
+  // 한 줄 선지 쪼개기 자체 — 지문 속 숫자에 속지 않아야 한다
+  ok('한 줄에 / 로 이어 적은 선지를 쪼갠다',
+    (J.splitInlineOptions('1. atropine / 2. dobutamine / 3. dopamine / 4. epinephrine / 5. amiodarone') || {})
+      .opts?.length === 5);
+  ok('점 뒤에 공백이 없어도 쪼갠다(1.10J / 2.20J …)',
+    (J.splitInlineOptions('1.10J / 2.20J / 3.30J / 4.40J / 5.50J') || {}).opts?.[0] === '10J');
+  ok('동그라미 번호도 쪼갠다',
+    (J.splitInlineOptions('① 가 / ② 나 / ③ 다 / ④ 라 / ⑤ 마') || {}).opts?.length === 5);
+  ok('앞의 지문은 선지에 안 섞인다',
+    (J.splitInlineOptions('다음 약물은? 1. 가 / 2. 나 / 3. 다 / 4. 라') || {}).stem === '다음 약물은?');
+  ok('**지문 속 숫자를 선지로 오인하지 않는다**',
+    J.splitInlineOptions('100% O2를 7L/min으로 공급하였다. 다음으로 써야 할 약물은?') === null);
+  ok('세 개뿐이면 선지로 안 본다(복원이 덜 된 것)',
+    J.splitInlineOptions('1. 가 / 2. 나 / 3. 다') === null);
+  ok('빈 선지가 섞이면 세우지 않는다',
+    J.splitInlineOptions('1. / 2. 나 / 3. / 4. 라 / 5.') === null);
+
+  // ── 모두 고르시오는 체크로 (2026-10-21 요청) ──
+  // "모두 고르시오도 체크로 해서 풀 수 있게 해야지. 그래야 정답을 맞히지."
+  // 전에는 전부 'mc'라 정답 중 **아무거나 하나**만 찍어도 맞다고 쳤다.
+  ok('"모두 고르시오"를 알아본다', J.isSelectAll('다음 중 옳은 것을 모두 고르시오'));
+  ok('"있는 대로 고르시오"도', J.isSelectAll('해당하는 것을 있는 대로 고르시오'));
+  ok('보통 문항은 아니다', !J.isSelectAll('다음 중 가장 옳은 것은?'));
+  {
+    let multi = 0, falsePos = 0;
+    for (const f of files) {
+      for (const q of J.parseJokbo(readFileSync(`${DIR}/${f}`, 'utf8'), `${REL}/${f}`).questions) {
+        if (q.type !== 'multi') continue;
+        multi++;
+        if (!/모두|전부|있는 대로/.test(q.q)) falsePos++;
+      }
+    }
+    ok('모두 고르기 문항이 실제로 잡힌다(60개 이상)', multi >= 60, `${multi}개`);
+    ok('**지문에 근거 없이 모두 고르기가 되지 않는다**', falsePos === 0, `${falsePos}개`);
+    console.log(`  실측: 모두 고르기 ${multi}문항`);
+  }
+
   // 해설에는 원문·검증·교정이 모두 담겨야 한다(가공본의 핵심 가치)
   const ecmo = `${DIR}/16_체외막산소장치_ECMO.md`;
   if (existsSync(ecmo)) {

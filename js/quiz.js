@@ -21,10 +21,32 @@ export function isAns(q, i) {
   return q.ansAll ? q.ansAll.includes(i) : i === q.ans;
 }
 
-/** "②" 또는 "②④ (둘 중 아무거나)" */
+/** 'multi' 문항인가 — 답을 **전부** 골라야 맞는 것(모두 고르시오). */
+export const isMulti = (q) => !!q && q.type === 'multi';
+
+/** 고른 것(배열)이 정답 묶음과 정확히 같은가 — 하나라도 빠지거나 더하면 틀리다. */
+export function isMultiCorrect(q, picked) {
+  if (!isMulti(q) || !Array.isArray(picked)) return false;
+  const want = q.ansAll || [q.ans];
+  if (picked.length !== want.length) return false;
+  return want.every((i) => picked.includes(i));
+}
+
+/** "②" · "②④ (어느 것이든 정답)" · "②④ (모두 고르기)" */
 function ansLabel_(q) {
   if (!q.ansAll) return CIRCLED[q.ans] || q.ans + 1;
-  return `${q.ansAll.map((i) => CIRCLED[i] || i + 1).join('')} (어느 것이든 정답)`;
+  const nums = q.ansAll.map((i) => CIRCLED[i] || i + 1).join('');
+  return `${nums} (${isMulti(q) ? '모두 고르기' : '어느 것이든 정답'})`;
+}
+
+/** 고른 것을 사람이 읽는 꼴로 — 'multi'는 배열이다. */
+function pickLabel(q, picked) {
+  if (picked === null || picked === undefined) return '—';
+  if (Array.isArray(picked)) {
+    return picked.length ? picked.map((i) => CIRCLED[i] || i + 1).join('') : '(고른 것 없음)';
+  }
+  if (q && q.type === 'ox') return picked === 0 ? 'O' : 'X';
+  return CIRCLED[picked] || picked + 1;
 }
 
 export class Quiz {
@@ -67,6 +89,8 @@ export class Quiz {
     this.run = 1;
     // 문항별 지난 풀이(attemptId → history 배열) — start()에서 채운다
     this._hist = new Map();
+    // 모두 고르기에서 **아직 안 낸** 체크 — 답으로 낼 때 answers로 옮긴다
+    this._draft = this.all.map(() => []);
     this._imgCache = new Map();
 
     this.el = {
@@ -162,8 +186,12 @@ export class Quiz {
 
   isCorrect(i) {
     if (!this.isGraded(i)) return false;
+    const q = this.all[i];
     const a = this.answers[i];
-    return a !== null && isAns(this.all[i], a);
+    if (a === null) return false;
+    // 모두 고르시오는 **빠짐없이 그리고 더함없이** 골라야 맞다
+    if (isMulti(q)) return isMultiCorrect(q, a);
+    return isAns(q, a);
   }
 
   start() {
@@ -211,6 +239,7 @@ export class Quiz {
     this.el.next.disabled = this.cur === this.order.length - 1;
 
     if (q.type === 'open') this._renderOpen(q, idx);
+    else if (q.type === 'multi') this._renderMulti(q, idx);
     else if (q.type === 'mc') this._renderMC(q, idx);
     else this._renderOX(q, idx);
 
@@ -353,6 +382,102 @@ export class Quiz {
   }
 
   /**
+   * "모두 고르시오" — 체크로 여럿 골라 한꺼번에 낸다(2026-10-21 요청).
+   *
+   * 전에는 이런 문항도 라디오처럼 하나만 고르게 해놓고 **정답 중 아무거나 하나**면
+   * 맞다고 쳤다. 그러면 다섯 개 중 셋이 답인 문항을 하나만 찍고 넘어가면서도
+   * 점수가 올라서, 정작 시험장에서 못 고른다. 전부 골라야 맞게 바꾼다.
+   */
+  _renderMulti(q, idx) {
+    this.el.ox.classList.add('hidden');
+    this.el.opts.style.display = 'block';
+    this.el.opts.innerHTML = '';
+    const locked = this.answers[idx] !== null;
+    const draft = locked ? this.answers[idx] : (this._draft[idx] || []);
+
+    const note = document.createElement('p');
+    note.className = 'muted multi-note';
+    if (locked) {
+      note.textContent = `답을 ${(q.ansAll || []).length}개 모두 고르는 문항이었습니다.`;
+    } else {
+      note.innerHTML = `✅ 모두 고르는 문항입니다 — 해당하는 것을 <b>전부</b> 고르고 `
+        + `"답 내기"를 누르세요.`;
+    }
+    this.el.opts.appendChild(note);
+
+    q.opts.forEach((opt, i) => {
+      const row = document.createElement('div');
+      row.className = 'opt-row opt-check';
+      const on = draft.includes(i);
+      // ⚠️ 채점한 뒤에는 'picked'를 붙이지 않는다 — 고른 티(파랑)가 맞음/틀림 색을
+      //    덮어써서 **틀리게 고른 것이 맞은 것과 똑같이 보였다**(2026-10-21 눈으로 확인).
+      if (on && !locked) row.classList.add('picked');
+      if (!locked && this.eliminated[idx].has(i)) row.classList.add('strike');
+
+      const badge = document.createElement('div');
+      badge.className = 'badge check';
+      badge.textContent = on ? '✓' : (CIRCLED[i] || String(i + 1));
+
+      const wrap = document.createElement('div');
+      wrap.style.flex = '1';
+      const txt = document.createElement('div');
+      txt.className = 'opt-text';
+      tokenize(txt, opt);
+      wrap.appendChild(txt);
+      if (locked && Array.isArray(q.opt) && q.opt[i]) {
+        const ex = document.createElement('div');
+        ex.className = 'opt-explain';
+        ex.textContent = q.opt[i];
+        wrap.appendChild(ex);
+      }
+
+      row.appendChild(badge);
+      row.appendChild(wrap);
+      if (!locked) {
+        row.onclick = () => this.togglePick(i);
+      } else {
+        row.classList.add('locked');
+        const want = isAns(q, i);
+        const got = draft.includes(i);
+        // 넷으로 갈린다: 맞게 골랐다 / 빠뜨렸다 / 잘못 골랐다 / 안 고른 게 맞다
+        if (want && got) row.classList.add('correct');
+        else if (want && !got) row.classList.add('missed');
+        else if (!want && got) row.classList.add('wrong');
+      }
+      this.el.opts.appendChild(row);
+    });
+
+    if (!locked) {
+      const b = document.createElement('button');
+      b.className = 'btn primary full multi-go';
+      b.textContent = draft.length ? `답 내기 (${draft.length}개 고름)` : '답 내기';
+      b.disabled = !draft.length;
+      b.onclick = () => this.submitPicks();
+      this.el.opts.appendChild(b);
+    }
+  }
+
+  /** 모두 고르기 — 체크를 켜고 끈다(아직 내는 건 아니다). */
+  togglePick(i) {
+    const idx = this.qIndex;
+    if (this.answers[idx] !== null) return;
+    const cur = this._draft[idx] || [];
+    this._draft[idx] = cur.includes(i) ? cur.filter((x) => x !== i) : [...cur, i].sort((a, b) => a - b);
+    this.render();
+  }
+
+  /** 골라둔 것을 답으로 낸다. */
+  submitPicks() {
+    const idx = this.qIndex;
+    const draft = this._draft[idx] || [];
+    if (!draft.length || this.answers[idx] !== null) return;
+    this.answers[idx] = draft;
+    this.persist();
+    this._record(idx);
+    this.render();
+  }
+
+  /**
    * 채점할 수 없는 문항 — 족보에 "복원 x", "답이었던거같습니다"처럼 **서술로만** 남은 것들
    * (응급_중환자 658블록 중 180개). 버리면 실제 시험장 정보를 버리는 거라 살려두되,
    * 선지가 없으니 점수에서 빼고 "읽고 넘기는 카드"로 보여준다(2026-10-12).
@@ -485,6 +610,7 @@ export class Quiz {
     const idx = this.qIndex;
     this.answers[idx] = null;
     this.eliminated[idx] = new Set();
+    this._draft[idx] = [];            // 모두 고르기는 체크도 같이 비운다
     this.persist();
     this.render();
   }
@@ -496,7 +622,7 @@ export class Quiz {
 
     // 'open'은 맞고 틀림이 없다 — ❌로 띄우면 틀린 줄 안다
     const open = q.type === 'open';
-    const correct = !open && isAns(q, this.answers[idx]);
+    const correct = !open && this.isCorrect(idx);
     const ansLabel = q.type === 'ox' ? (q.ans === 0 ? 'O' : 'X') : ansLabel_(q);
     const head = mk(open
       ? '📖 족보 원문 — 정답은 아래 해설에 있습니다'
@@ -529,8 +655,7 @@ export class Quiz {
     const past = this.historyOf(idx).filter((h) => (h.run || 0) !== this.run);
     if (past.length) {
       const trail = past.map((h) => {
-        const lbl = q.type === 'ox' ? (h.picked === 0 ? 'O' : 'X')
-          : (h.picked == null ? '—' : (CIRCLED[h.picked] || h.picked + 1));
+        const lbl = pickLabel(q, h.picked);
         return `${h.run ? `${h.run}회 ` : ''}${lbl}${h.correct ? '✓' : '✗'}${h.unsure ? '🎲' : ''}`;
       }).join(' · ');
       this.el.expText.appendChild(mk(`<span class="muted">지난 풀이 — ${escapeHtml(trail)}</span>`));

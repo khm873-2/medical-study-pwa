@@ -67,6 +67,53 @@ export function optionLine(line) {
 }
 
 /**
+ * 선지가 **한 줄에 몰려 있는** 경우를 가른다 → 선지 배열 또는 null.
+ *
+ *   "1. atropine / 2. dobutamine / 3. dopamine / 4. epinephrine / 5. amiodarone"
+ *   "① 압박:호흡을 15:2로 / ② 30:2로 / ③ …"
+ *
+ * 왜 따로 다루나: 복원자가 줄을 안 바꾸고 `/`로 이어 적은 문항이 꽤 된다. 줄 단위로만
+ * 찾으면 **선지가 멀쩡히 있는데도** "서술로만 복원된 문항"으로 떨어져 풀 수가 없다
+ * (2026-10-21 지적. 재어 보니 응급_중환자 25문항, 그중 22개가 08_PALS 한 챕터에 몰려 있다).
+ *
+ * 번호가 1부터 차례로 **4개 이상** 이어질 때만 선지로 본다 — "100% O2를 7L/min"처럼
+ * 지문에 섞인 숫자를 선지로 오인하지 않기 위해서다.
+ */
+export function splitInlineOptions(line) {
+  const t = String(line).trim();
+  // 번호 표시의 위치를 모은다. 숫자형은 **구분자 뒤**에 올 때만 — "15:2로 / 2." 처럼
+  // 지문 속 숫자가 걸리지 않게 한다. 동그라미는 그 자체로 분명해서 아무 데나 받는다.
+  const marks = [];
+  // 점 뒤 공백은 없을 수도 있다("1.10J / 2.20J"). 대신 번호 **앞**은 반드시
+  // 줄머리나 구분자여야 한다 — 지문 속 "100% O2를 7L"의 숫자가 걸리지 않게.
+  const re = /(?:^|[\s\/·,])([1-6])\s*[\.\)）]\s*|[①②③④⑤⑥]/g;
+  let m;
+  while ((m = re.exec(t))) {
+    const circ = '①②③④⑤⑥'.indexOf(m[0].trim()[0]);
+    const n = circ >= 0 ? circ + 1 : Number(m[1]);
+    // 표시가 시작하는 자리(앞의 구분자는 뺀다)
+    const at = m.index + (/^[\s\/·,]/.test(m[0]) ? 1 : 0);
+    marks.push({ n, at, end: m.index + m[0].length });
+  }
+  // 1부터 차례로 이어지는 가장 긴 묶음을 찾는다
+  let best = null;
+  for (let s = 0; s < marks.length; s++) {
+    if (marks[s].n !== 1) continue;
+    const run = [marks[s]];
+    for (let i = s + 1; i < marks.length && marks[i].n === run.length + 1; i++) run.push(marks[i]);
+    if (run.length >= 4 && (!best || run.length > best.length)) best = run;
+  }
+  if (!best) return null;
+  const opts = best.map((mk, i) => {
+    const to = i + 1 < best.length ? best[i + 1].at : t.length;
+    return t.slice(mk.end, to).replace(/[\s\/·,]+$/, '').trim();
+  });
+  // 빈 선지가 섞이면 복원이 덜 된 것이다 — 억지로 세우면 못 푸는 문항이 된다
+  if (opts.some((o) => !o)) return null;
+  return { opts, stem: t.slice(0, best[0].at).trim() };
+}
+
+/**
  * 지문과 선지를 가른다.
  * 선지는 **1번부터 차례로 이어지는 줄 묶음**이어야 한다 — 본문에 섞인
  * "1. 첫째로" 같은 열거를 선지로 오인하지 않기 위해서다.
@@ -97,7 +144,29 @@ export function splitStemOptions(text) {
       return { stem: lines.slice(0, start).join('\n').trim(), opts, tail: lines.slice(i).join('\n').trim() };
     }
   }
+  // 줄 단위로 못 찾았으면 **한 줄에 몰려 적힌** 선지를 찾는다(2026-10-21).
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const got = splitInlineOptions(lines[i]);
+    if (!got) continue;
+    const stem = [...lines.slice(0, i), got.stem].filter((s) => s.trim()).join('\n').trim();
+    return { stem, opts: got.opts, tail: lines.slice(i + 1).join('\n').trim() };
+  }
   return { stem: String(text).trim(), opts: [], tail: '' };
+}
+
+/**
+ * "모두 고르시오" 꼴인가 — 답을 **전부** 골라야 맞는 문항.
+ *
+ * 정답이 여럿인 문항은 두 종류다(2026-10-21 지적):
+ *   ① 족보가 답을 확신 못 해 여럿 적어둔 것 → 그중 아무거나 고르면 맞다.
+ *   ② 문제가 애초에 "모두 고르시오"인 것 → 전부 골라야 맞다.
+ * 지금까지 둘을 똑같이 다뤄서 ②를 하나만 찍어도 정답 처리됐다. 지문으로 가른다.
+ */
+export function isSelectAll(stem) {
+  const t = String(stem || '');
+  return /모두\s*고르|모두\s*고름|전부\s*고르|모두\s*선택|있는\s*대로\s*고르/.test(t)
+    || /것들[은로]?\s*(?:모두)?\s*고르/.test(t)
+    || /옳은\s*것을\s*모두/.test(t);
 }
 
 /** "3", "3번", "③", "3 (VF)" → 2(0-based). 숫자를 못 찾으면 -1. */
@@ -223,13 +292,17 @@ export function parseJokbo(md, path = '') {
     // 지문이 통째로 비어 있으면 문항이 아니다("복원 x"만 있는 블록은 해설로 남는다)
     if (!stemText && !ansRaw) continue;
 
+    // "모두 고르시오"는 답을 전부 골라야 맞다 — 체크로 풀린다(2026-10-21 요청)
+    const selectAll = graded && all.length > 1 && isSelectAll(stemText);
+
     questions.push({
       num: questions.length + 1,
-      type: graded ? 'mc' : 'open',
+      type: !graded ? 'open' : (selectAll ? 'multi' : 'mc'),
       q: stemText || '(족보 원문에 문제 지문이 복원되지 않았습니다)',
       opts: graded ? opts : [],
       ans: graded ? ai : -1,
-      // 정답이 여럿이면 전부 — 어느 것을 골라도 맞다(응급_중환자 116문항)
+      // 정답이 여럿이면 전부. type이 'mc'면 "어느 것이든 정답",
+      // 'multi'면 "이걸 다 골라야 정답"이다.
       ansAll: graded && all.length > 1 ? all : null,
       opt: [],
       explain: explainOf(f, ansRaw, graded, notes, all.length > 1),
