@@ -153,7 +153,13 @@ await run('네비', () => {
   out.push({ name: '네비가 본문 칼럼 바닥에 붙어 있다',
     ok: Math.abs(nr.bottom - mr.bottom) < 4, detail: `네비 ${Math.round(nr.bottom)} / 칼럼 ${Math.round(mr.bottom)}` });
   out.push({ name: '본문 칼럼이 화면 높이만큼 늘어난다',
-    ok: mr.height > window.innerHeight * 0.8, detail: `${Math.round(mr.height)} / ${window.innerHeight}` });
+    ok: mr.height > window.innerHeight * 0.8,
+    detail: `${Math.round(mr.height)} / ${window.innerHeight}`
+      + ' · quizScreen 자식: '
+      + [...document.getElementById('quizScreen').children]
+        .filter((x) => getComputedStyle(x).display !== 'none')
+        .map((x) => `${x.id || x.className || x.tagName}:${Math.round(x.getBoundingClientRect().height)}`)
+        .join(' ') });
   return out;
 });
 
@@ -4441,6 +4447,59 @@ await run('카드 빈칸 색', async () => {
   return out;
 });
 
+// ══════════ 족보에서도 아래 바가 첫 화면에 보이는가 (2026-10-21 신고) ══════════
+// "족보에서 결과보기 맨 아래 라인이 첫 화면에 나타나지 않는 버그"
+// 까닭: 족보 머리말(📌 이 챕터 출제 경향)은 `.split` **바깥**에 있는데, 넓은 화면에서
+// `.split` 높이를 `100dvh - 머리줄`로 **못 박아** 뒀다. 머리말 높이(42px)만큼 아래가
+// 화면 밖으로 밀려 바가 안 보였다(재어 보니 26px 넘침).
+await run('족보 아래 바', async () => {
+  const out = [];
+  document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+  document.getElementById('quizScreen').classList.remove('hidden');
+  document.body.dataset.screen = 'quizScreen';
+  const nav = document.querySelector('#quizScreen .quiz-nav');
+  const intro = document.getElementById('jokboIntro');
+  const body = document.getElementById('jokboIntroBody');
+  const keep = body.innerHTML;
+  const over = () => {
+    const r = nav.getBoundingClientRect();
+    return Math.round(r.bottom - window.innerHeight);
+  };
+  try {
+    intro.classList.add('hidden');
+    await new Promise((r) => setTimeout(r, 250));
+    const plain = over();
+    out.push({ name: '보통 퀴즈에서 바가 보인다', ok: plain <= 1, detail: `${plain}px 넘침` });
+    const plainTop = Math.round(nav.getBoundingClientRect().top);
+
+    // ★ 족보처럼 머리말을 띄운다
+    intro.classList.remove('hidden');
+    body.innerHTML = '<p>출제 경향 글</p>';
+    await new Promise((r) => setTimeout(r, 300));
+    const h = Math.round(intro.getBoundingClientRect().height);
+    out.push({ name: '머리말이 자리를 차지한다(이게 밀던 범인이다)', ok: h > 20, detail: `${h}px` });
+    out.push({ name: '**족보에서도 바가 첫 화면에 보인다**', ok: over() <= 1,
+      detail: `${over()}px 넘침` });
+    out.push({ name: '머리말이 있든 없든 바 자리가 같다',
+      ok: Math.abs(Math.round(nav.getBoundingClientRect().top) - plainTop) <= 1,
+      detail: `${plainTop} → ${Math.round(nav.getBoundingClientRect().top)}` });
+
+    // 머리말을 **펼쳐도** 바가 안 밀린다(글이 길어지면 머리말이 커진다)
+    body.innerHTML = Array.from({ length: 30 }, (_, i) => `<p>경향 ${i + 1}</p>`).join('');
+    intro.open = true;
+    await new Promise((r) => setTimeout(r, 300));
+    out.push({ name: '머리말을 펼쳐도 바는 그대로다', ok: over() <= 1, detail: `${over()}px 넘침` });
+    intro.open = false;
+  } catch (e) {
+    out.push({ name: '족보 바 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 120) });
+  } finally {
+    intro.classList.add('hidden');
+    body.innerHTML = keep;
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  return out;
+});
+
 // ══════════ 문제 복사 단추 (2026-10-21 요청) ══════════
 // "퀴즈 및 모의고사 문제 밑에 원터치 버튼으로 내용 복사 버튼 만들자.
 //  다음문제가 오른쪽이니 왼쪽에 붙여서"
@@ -7182,7 +7241,12 @@ await run('고른 것이 vault로', async () => {
     if (!url.includes('api.github.com')) return realFetch(u, i);
     if (i && i.method === 'PUT') {
       const b = JSON.parse(i.body);
-      if (/채택\.md$/.test(decodeURIComponent(url))) picked = b; else put = b;
+      const u2 = decodeURIComponent(url);
+      // 20초 백업 타이머(backup.js)가 이 창 안에서 같이 울리면 .medstudy/state.json도
+      // PUT으로 날아온다 — 'else'로 아무거나 주워 담으면 그게 섞여 들어간다(2026-10-21).
+      // 노트 경로를 짚어서만 담는다.
+      if (/채택\.md$/.test(u2)) picked = b;
+      else if (/t_암기법\.md$/.test(u2)) put = b;
       return { ok: true, status: 200, json: async () => ({ content: { path: 'x.md' } }) };
     }
     return { ok: true, status: 200, text: async () => RAW, json: async () => ({ sha: 'abc' }) };

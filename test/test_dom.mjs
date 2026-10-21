@@ -115,16 +115,30 @@ ok('main-col이 세로 플렉스',
   wideDecl('#quizScreen .split > .main-col', 'flex-direction') === 'column',
   String(wideDecl('#quizScreen .split > .main-col', 'flex-direction')));
 // min-height는 **모자랐다** — 내용이 길면 부모가 같이 길어져 sticky 바가 화면 한가운데
-// 멈춰 섰다(2026-10-14). 이제 화면 높이를 못 박고 그 안에서 스크롤시킨다.
+// 멈춰 섰다(2026-10-14). height:100%는 나중에 뺐다 — .split 높이가 flex로 남는
+// 만큼만 정해져서 퍼센트가 안 먹혔다(2026-10-21, 재어 보니 split 820인데 칼럼 486).
+// 이제 .main-col이 flex:1 1 auto로 부모(.split)가 주는 만큼을 채운다.
 ok('main-col이 화면 높이를 넘지 않는다(바가 늘 바닥에 있게)',
-  wideDecl('#quizScreen .split > .main-col', 'height') === '100%',
-  String(wideDecl('#quizScreen .split > .main-col', 'height')));
+  wideDecl('#quizScreen .split > .main-col', 'flex') === '1 1 auto'
+  && /^0(px)?$/.test(wideDecl('#quizScreen .split > .main-col', 'min-height')),
+  `flex=${wideDecl('#quizScreen .split > .main-col', 'flex')} `
+  + `min-height=${wideDecl('#quizScreen .split > .main-col', 'min-height')}`);
 ok('main-col 안에서 스크롤된다(페이지가 안 움직이게)',
   wideDecl('#quizScreen .split > .main-col', 'overflow-y') === 'auto',
   String(wideDecl('#quizScreen .split > .main-col', 'overflow-y')));
-ok('.split이 화면 높이에 맞춰진다',
-  /calc|dvh/.test(String(wideDecl('#quizScreen .split', 'height'))),
-  String(wideDecl('#quizScreen .split', 'height')));
+// .split 자체에 높이를 못 박지 않는다(족보 머리말이 바깥에 있으면 그만큼 넘친다 —
+// 2026-10-21). 대신 #app이 100dvh 세로 플렉스라 .split은 남는 만큼을 쓴다.
+ok('#app이 화면 높이로 못 박힌 세로 플렉스',
+  /dvh/.test(String(wideDecl('body[data-screen="quizScreen"] #app', 'height')))
+  && wideDecl('body[data-screen="quizScreen"] #app', 'display') === 'flex',
+  String(wideDecl('body[data-screen="quizScreen"] #app', 'height')));
+ok('#quizScreen이 남는 높이를 나눠 쓴다(flex:1 1 auto)',
+  wideDecl('#quizScreen', 'flex') === '1 1 auto',
+  String(wideDecl('#quizScreen', 'flex')));
+ok('.split도 남는 높이를 나눠 쓴다(flex:1 1 auto, 못 박지 않음)',
+  wideDecl('#quizScreen .split', 'flex') === '1 1 auto'
+  && wideDecl('#quizScreen .split', 'height') !== '100%',
+  `flex=${wideDecl('#quizScreen .split', 'flex')} height=${wideDecl('#quizScreen .split', 'height')}`);
 
 // ── 3. 선택 팝업이 펜 입력을 받을 수 있는 구조인가 ──────────────
 const pop = document.getElementById('selPop');

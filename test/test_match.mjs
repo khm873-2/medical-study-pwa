@@ -261,6 +261,28 @@ ok('족보 오답 선지가 매칭을 끌고 가지 않는다',
   ok('어디를 먼저 펼지는 bestIdx로 알린다', /bestIdx/.test(src));
 }
 
+// ── 족보는 **정리된 위키**에 붙는다 (2026-10-21 지적) ──
+// "족보는 지금 예습노트랑 연결되어 있는 거임?" — 그랬다. 예습노트(98_)를 먼저
+// 훑어서, 위키에 같은 강의가 있어도 날것이 떴다(39개 중 36개). 차례만 바꾸면 된다.
+{
+  const src = readFileSync(`${PWA}/js/wiki.js`, 'utf8');
+  const fn = (src.match(/export async function noteForJokbo[\s\S]*?\n\}/) || [''])[0];
+  ok('족보 짝짓기는 위키를 먼저 본다',
+    /ROOTS = \['02_Wiki'/.test(fn), fn ? '차례 확인' : '함수를 못 찾음');
+  ok('위키에 짝이 없으면 예습노트로 간다(없는 것보다 낫다)',
+    /98_예습노트_보관/.test(fn));
+
+  // 이름 맞추기 자체는 그대로인지 — 같은 강의면 둘 다 1.00이라 차례가 결정한다
+  const ch = '01_정형외과학서론_골절개론및치료원칙';
+  const wikiName = '근골격계_골절개론및치료원칙';
+  const yeName = '0910_근골격계_골절개론및치료원칙';
+  ok('위키·예습노트가 같은 점수다(그래서 차례가 가른다)',
+    Math.abs(W.nameSimilarity(ch, wikiName) - W.nameSimilarity(ch, yeName)) < 0.01,
+    `${W.nameSimilarity(ch, wikiName).toFixed(2)} vs ${W.nameSimilarity(ch, yeName).toFixed(2)}`);
+  ok('그 점수가 문턱을 넘는다', W.nameSimilarity(ch, wikiName) >= 0.5,
+    W.nameSimilarity(ch, wikiName).toFixed(2));
+}
+
 console.log(`\n통과 ${pass}건`);
 if (fail.length) { console.log(`실패 ${fail.length}건:`); fail.forEach((f) => console.log('  ✗ ' + f)); process.exit(1); }
 console.log('✅ 전부 통과');

@@ -127,8 +127,14 @@ export async function noteForJokbo(path) {
   const chapter = parts[parts.length - 1];
   if (!subject || !chapter) return null;
 
+  // ⚠️ **정리된 위키를 먼저 본다.** 전에는 예습노트(98_)를 먼저 훑어서, 위키에 같은
+  //    강의가 있어도 날것인 예습노트가 떴다 — 재어 보니 39개 중 36개가 그랬다
+  //    (2026-10-21 지적: "족보는 지금 예습노트랑 연결되어 있는 거임?").
+  //    점수가 같으면 먼저 본 쪽이 이기므로 차례만 바꾸면 된다. 위키에 짝이 없는
+  //    챕터는 그대로 예습노트로 간다 — 없는 것보다 낫다.
+  const ROOTS = ['02_Wiki', '98_예습노트_보관', '01_임종평_전범위'];
   const cands = [];
-  for (const root of NOTE_DIRS) {
+  for (const root of ROOTS) {
     for (const f of await listNoteFiles(root)) {
       if (f.subject === subject && !f.group) cands.push(f.name);   // QA본은 산문이 아니라 뺀다
     }

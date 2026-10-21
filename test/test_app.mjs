@@ -327,7 +327,7 @@ check('prettyExamName', prettyExamName('1012_기본소생술BLS_모의고사.htm
 check('examDate', examDate('1012_기본소생술BLS_모의고사.html') === '10/12');
 check('examDate(없음)', examDate('foo.html') === '');
 const mdSample = readFileSync(`${VAULT}/06_모의고사/응급_중환자/1012_기본소생술BLS_모의고사.md`, 'utf8');
-check('linkedNoteFromMd', linkedNoteFromMd(mdSample) === '1012_응급중환자_기본소생술BLS',
+check('linkedNoteFromMd', linkedNoteFromMd(mdSample) === '응급중환자_기본소생술BLS',
   String(linkedNoteFromMd(mdSample)));
 
 // --- quiz: 실제 문항으로 풀이 시뮬레이션 ---
