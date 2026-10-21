@@ -3260,7 +3260,8 @@ await run('표시 설정', async () => {
 
   const app = await fetch('/js/app.js').then((r) => r.text());
   out.push({ name: '설정이 기기에 저장된다', ok: /kvSet\('display', displayPrefs\)/.test(app) });
-  out.push({ name: '앱을 켤 때 불러온다', ok: /await loadDisplay\(\)/.test(app) });
+  // 시작 걸음은 step()으로 감싸 돈다 — 하나가 터져도 앱이 서게(2026-10-21)
+  out.push({ name: '앱을 켤 때 불러온다', ok: /step\('loadDisplay', loadDisplay\)/.test(app) });
   out.push({ name: '기본값으로 되돌릴 수 있다', ok: !!document.getElementById('resetDisplay') });
 
   root.style.removeProperty('--ui-scale');
@@ -9329,6 +9330,78 @@ for (const [W, H] of [[390, 844], [768, 1024], [1024, 768], [1366, 1024]]) {
   });
 }
 await page.setViewport({ width: 1280, height: 900 });
+
+// ══════════ 껍데기가 어긋나도 앱은 뜬다 (2026-10-21 신고) ══════════
+// "어플이 갑자기 아무것도 안 보이는데? 돋보기만 보이고" — 서비스워커가 새 js를 받았는데
+// index.html은 옛 것이 캐시에 남아, 새 js가 찾는 요소(#timerRange)가 없었다. 거기서
+// initTimer가 던지자 init()이 통째로 멈춰 스플래시에 갇히고 화면에 붙박인 돋보기만 남았다.
+// **요소를 지운 index.html로 실제로 띄워** 그래도 앱이 서는지 본다.
+{
+  const p2 = await browser.newPage();
+  await p2.setViewport({ width: 1024, height: 768 });
+  const perr = [];
+  p2.on('pageerror', (e) => perr.push(e.message));
+  // 옛 껍데기를 흉내낸다 — js가 보기에 그 요소가 **없는** 상태로 만든다.
+  // (문서 요청을 가로채는 길은 서비스워커가 캐시에서 내줘 버려서 안 통한다.)
+  await p2.evaluateOnNewDocument(() => {
+    const real = Document.prototype.getElementById;
+    Document.prototype.getElementById = function (id) {
+      return (id === 'timerRange' || id === 'timerVal') ? null : real.call(this, id);
+    };
+  });
+  await p2.goto(URL_BASE, { waitUntil: 'networkidle0' });
+  await new Promise((r) => setTimeout(r, 2200));
+  const st = await p2.evaluate(() => ({
+    gone: !document.getElementById('timerRange'),
+    splash: !!document.getElementById('splash'),
+    screen: document.body.dataset.screen || '',
+    shown: [...document.querySelectorAll('#app > section')]
+      .filter((s) => getComputedStyle(s).display !== 'none').map((s) => s.id),
+    fails: (window.__bootFails || []).slice(),
+  }));
+  results.push({ name: '(준비) 옛 껍데기를 흉내냈다 — #timerRange 없음', ok: st.gone });
+  results.push({ name: '**요소가 없어도 스플래시를 벗어난다**(하얀 화면이 안 된다)',
+    ok: !st.splash, detail: st.splash ? '스플래시에 갇힘' : '벗어남' });
+  results.push({ name: '**화면이 실제로 하나 떠 있다**(돋보기만 남지 않는다)',
+    ok: st.shown.length > 0 && !!st.screen, detail: `${st.screen} / ${JSON.stringify(st.shown)}` });
+  // 안쪽 그물(타이머가 제 요소를 없다고 보고 건다)이 먼저 받아내므로 여기선 조용해야 한다
+  results.push({ name: '타이머가 스스로 받아내 시작이 조용하다', ok: st.fails.length === 0,
+    detail: JSON.stringify(st.fails) });
+  results.push({ name: '그 밖의 JS 오류로 멈추지 않는다', ok: perr.length === 0,
+    detail: perr.slice(0, 2).join(' | ') || '없음' });
+  await p2.close();
+
+  // ── 바깥 그물도 실제로 받아내는가 ──
+  // 안쪽 그물을 못 친 자리에서 터져도 앱은 떠야 한다. 걸음 하나를 **일부러** 터뜨린다.
+  const p3 = await browser.newPage();
+  await p3.setViewport({ width: 1024, height: 768 });
+  const perr3 = [];
+  p3.on('pageerror', (e) => perr3.push(e.message));
+  await p3.evaluateOnNewDocument(() => {
+    const real = Document.prototype.getElementById;
+    Document.prototype.getElementById = function (id) {
+      if (id === 'timerRange') throw new Error('일부러 터뜨림');
+      return real.call(this, id);
+    };
+  });
+  await p3.goto(URL_BASE, { waitUntil: 'networkidle0' });
+  await new Promise((r) => setTimeout(r, 2200));
+  const st3 = await p3.evaluate(() => ({
+    splash: !!document.getElementById('splash'),
+    screen: document.body.dataset.screen || '',
+    shown: [...document.querySelectorAll('#app > section')]
+      .filter((s) => getComputedStyle(s).display !== 'none').map((s) => s.id),
+    fails: (window.__bootFails || []).slice(),
+  }));
+  results.push({ name: '**걸음 하나가 터져도 앱은 뜬다**',
+    ok: !st3.splash && st3.shown.length > 0 && !!st3.screen,
+    detail: `${st3.screen} / ${JSON.stringify(st3.shown)}` });
+  results.push({ name: '터진 걸음만 건너뛴다(나머지는 그대로 간다)',
+    ok: st3.fails.length > 0 && st3.fails.length <= 3, detail: JSON.stringify(st3.fails) });
+  results.push({ name: '무엇이 터졌는지 남긴다(initTimer)',
+    ok: st3.fails.some((f) => /initTimer/.test(f)), detail: JSON.stringify(st3.fails) });
+  await p3.close();
+}
 
 await browser.close();
 

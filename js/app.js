@@ -8946,48 +8946,62 @@ function timerPref() {
 
 function paintTimerPick() {
   const r = document.getElementById('timerRange');
-  document.getElementById('timerVal').textContent = timerLabel(stepsToSec(Number(r.value)));
+  const v = document.getElementById('timerVal');
+  if (!r || !v) return;
+  v.textContent = timerLabel(stepsToSec(Number(r.value)));
 }
 
 function openTimerSheet() {
   const sheet = document.getElementById('timerSheet');
+  if (!sheet) return;
   const pref = timerPref();
   const cur = timer ? timer.sec : pref.sec;
   const r = document.getElementById('timerRange');
-  r.value = String(Math.min(TIMER_MAX_STEPS, Math.max(1, Math.round(cur / TIMER_STEP))));
+  if (r) r.value = String(Math.min(TIMER_MAX_STEPS, Math.max(1, Math.round(cur / TIMER_STEP))));
   paintTimerPick();
-  document.getElementById('timerPerQ').checked = timer ? timer.perQ : pref.perQ;
-  document.getElementById('timerOff').disabled = !timer;
+  const perQ = document.getElementById('timerPerQ');
+  if (perQ) perQ.checked = timer ? timer.perQ : pref.perQ;
+  const off = document.getElementById('timerOff');
+  if (off) off.disabled = !timer;
   sheet.classList.remove('hidden');
 }
 
 function initTimer() {
-  document.getElementById('toolTimer').onclick = openTimerSheet;
-  document.getElementById('timerClose').onclick = () =>
-    document.getElementById('timerSheet').classList.add('hidden');
-  document.getElementById('timerSheet').onclick = (e) => {
+  // ⚠️ 요소를 **없을 수 있다고 보고** 건다. 서비스워커가 새 js를 받았는데 index.html은
+  //    옛 것이 캐시에 남는 어긋남이 실제로 일어난다 — 그때 null에 핸들러를 걸면
+  //    init()이 통째로 멈춰 **화면이 하얗게 비어버린다**(2026-10-21 신고: "돋보기만
+  //    보임"). 기능 하나가 빠지는 건 괜찮지만 앱이 안 뜨는 건 안 된다.
+  const on = (id, ev, fn) => { const el = document.getElementById(id); if (el) el[ev] = fn; };
+  const hide = (id) => { const el = document.getElementById(id); if (el) el.classList.add('hidden'); };
+
+  on('toolTimer', 'onclick', openTimerSheet);
+  on('timerClose', 'onclick', () => hide('timerSheet'));
+  on('timerSheet', 'onclick', (e) => {
     if (e.target.id === 'timerSheet') e.target.classList.add('hidden');
-  };
-  const range = document.getElementById('timerRange');
-  range.oninput = paintTimerPick;
-  document.getElementById('timerStart').onclick = () => {
-    startTimer(stepsToSec(Number(range.value)), document.getElementById('timerPerQ').checked);
-    document.getElementById('timerSheet').classList.add('hidden');
-    document.getElementById('toolTimer').classList.add('active');
+  });
+  on('timerRange', 'oninput', paintTimerPick);
+  on('timerStart', 'onclick', () => {
+    const range = document.getElementById('timerRange');
+    const perQ = document.getElementById('timerPerQ');
+    startTimer(stepsToSec(Number(range ? range.value : 2)), perQ ? perQ.checked : true);
+    hide('timerSheet');
+    const t = document.getElementById('toolTimer');
+    if (t) t.classList.add('active');
     toast(`${timerLabel(timer.sec)} 타이머를 켰습니다${timer.perQ ? ' (문항마다 다시 시작)' : ''}.`);
-  };
-  document.getElementById('timerOff').onclick = () => {
+  });
+  on('timerOff', 'onclick', () => {
     stopTimer();
-    document.getElementById('timerSheet').classList.add('hidden');
-    document.getElementById('toolTimer').classList.remove('active');
-  };
+    hide('timerSheet');
+    const t = document.getElementById('toolTimer');
+    if (t) t.classList.remove('active');
+  });
   // 알약을 누르면 잠깐 멈춤 — 화장실 다녀오는 동안 타이머가 도는 건 의미가 없다
-  document.getElementById('timerPill').onclick = () => {
+  on('timerPill', 'onclick', () => {
     if (!timer) return;
     if (timer.paused) { timer.endAt = Date.now() + timer.left; timer.paused = false; }
     else { timer.left = timer.endAt - Date.now(); timer.paused = true; }
     paintTimer();
-  };
+  });
 }
 
 // ═══════════ 떠 있는 도구막대 · 창 버튼 자리 ═══════════
@@ -9393,31 +9407,52 @@ function hideSplash() {
 }
 
 // ---------- 시작 ----------
+//
+// ⚠️ **한 걸음이 넘어져도 앱은 떠야 한다.** 전에는 여기서 아무 줄이나 던지면 뒤가
+//    통째로 안 돌아 화면이 비고 화면에 붙박인 돋보기만 남았다(2026-10-21 신고:
+//    "어플이 갑자기 아무것도 안 보이는데? 돋보기만 보이고"). 원인은 서비스워커가
+//    새 js를 받았는데 index.html은 옛 것이 캐시에 남아, 새 js가 찾는 요소가 없어
+//    initTimer가 던진 것이었다. 기능 하나가 빠지는 건 참을 수 있지만 앱이 안 뜨는 건 안 된다.
+//    그래서 **걸음마다 따로 감싼다** — 넘어진 걸음만 건너뛰고 나머지는 그대로 간다.
+const bootFails = [];
+const step = async (name, fn) => {
+  try { await fn(); } catch (e) { bootFails.push(`${name}: ${e && e.message}`); }
+};
+window.__bootFails = bootFails;          // 검사와 디버깅이 들여다보는 창
+
 (async function init() {
   window.__t0 = Date.now();
-  await applyTheme();
-  await loadDisplay();
-  await loadWinMode();
-  await loadSplitMem();
-  initTimer();
-  initClozeMaker();
-  paintVersionChip();
-  await loadReadPos();
-  await loadReadPass();
-  initServiceWorker();
+  await step('applyTheme', applyTheme);
+  await step('loadDisplay', loadDisplay);
+  await step('loadWinMode', loadWinMode);
+  await step('loadSplitMem', loadSplitMem);
+  await step('initTimer', initTimer);
+  await step('initClozeMaker', initClozeMaker);
+  await step('paintVersionChip', paintVersionChip);
+  await step('loadReadPos', loadReadPos);
+  await step('loadReadPass', loadReadPass);
+  await step('initServiceWorker', initServiceWorker);
   gem.loadDeadModels().catch(() => {});
   gem.loadBodyTiers().catch(() => {});   // 어떤 모델에 어떤 본문이 통했는지 기억해둔 것
-  initResizers();
-  initAskFloat();
-  initCardFloat();
-  initPeek();
-  initScrap();
-  initDisplayUI();
-  initDocDrop();
+  await step('initResizers', initResizers);
+  await step('initAskFloat', initAskFloat);
+  await step('initCardFloat', initCardFloat);
+  await step('initPeek', initPeek);
+  await step('initScrap', initScrap);
+  await step('initDisplayUI', initDisplayUI);
+  await step('initDocDrop', initDocDrop);
   // 지난번에 맞춰둔 창 비율을 되살린다
-  { const v = localStorage.getItem('pane_split'); if (v) document.documentElement.style.setProperty('--pane-split', v); }
-  refreshSyncBar();
-  flushOutbox();
+  await step('paneSplit', () => {
+    const v = localStorage.getItem('pane_split');
+    if (v) document.documentElement.style.setProperty('--pane-split', v);
+  });
+  await step('refreshSyncBar', refreshSyncBar);
+  await step('flushOutbox', flushOutbox);
+  if (bootFails.length) {
+    console.warn('[달모] 시작 중 건너뛴 것:', bootFails);
+    // 옛 껍데기가 캐시에 남은 것이 가장 흔한 원인이다 — 새로 받으면 풀린다
+    setTimeout(() => toast(`일부 기능을 못 켰습니다(${bootFails.length}개) — ↻ 로 새로고침해 보세요.`), 1200);
+  }
   try {
     if (await hasToken()) await loadList(false);
     else openSetup();
