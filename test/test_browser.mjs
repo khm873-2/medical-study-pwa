@@ -5026,6 +5026,71 @@ await run('캡처와 스크롤', async () => {
 // "그림 눌러서 크게보기 및 필기 해서 저장 이런거 넣자."
 // 필기는 읽기 화면과 **같은 펜**(PenLayer)을 쓴다 — 애플펜슬의 중간 좌표와 필압을
 // 이미 받아 쓰는 그 엔진이다. 두 벌로 갈리면 한쪽만 좋아진다.
+// ══════════ 문항 그림 — 여러 장, 그리고 다시 열어도 보인다 (2026-10-22 신고) ══════════
+// "사진이 여러 장인 문제는 한 장만 들어가게 되어 있는 것 같은데?" — 재어 보니 앱은
+// 여러 장을 다 그리고 있었다. 진짜 버그는 **다시 열면 다 사라지는** 것이었다:
+// 그림 주소(blob URL)를 quiz.js와 github.js가 **각자** 들고 있다가, quiz.destroy()가
+// revoke해 버리면 github.js는 죽은 주소를 계속 내준다 → <img>는 붙지만 안 그려진다.
+// 재현 측정: 처음 2/2장 보임 → 닫았다 다시 열면 0/2장.
+await run('문항 그림 여러 장', async () => {
+  const out = [];
+  const { Quiz } = await import('/js/quiz.js');
+  const gh = await import('/js/github.js');
+  // 1×1 PNG 세 장을 서로 다른 경로로 — getBlobUrl이 실제로 blob URL을 만들게 둔다
+  const realFetch = window.fetch;
+  const bytes = Uint8Array.from(atob(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  ), (c) => c.charCodeAt(0));
+  window.fetch = async (u, i) => {
+    const url = String(u && u.url ? u.url : u);
+    if (!url.includes('api.github.com')) return realFetch(u, i);
+    const blob = new Blob([bytes], { type: 'image/png' });
+    return { ok: true, status: 200, blob: async () => blob,
+      text: async () => '', json: async () => ({}) };
+  };
+  const a = await import('/js/auth.js');
+  await a.setToken('x'); await a.setRepo('me/v');
+  gh.releaseBlobs();                       // 앞 검사가 남긴 주소를 비우고 시작
+
+  const q = { num: 1, type: 'mc', ans: 0, q: '사진 여러 장 문항',
+    opts: ['가', '나', '다', '라'],
+    imgs: ['attachments/t-a.png', 'attachments/t-b.png', 'attachments/t-c.png'] };
+  document.querySelectorAll('section').forEach((s) => s.classList.add('hidden'));
+  document.body.dataset.screen = 'quizScreen';
+  const mk = () => new Quiz({ examKey: 'imgtest', title: '그림 검사', questions: [q],
+    onFinish() {}, onExit() {}, onRender() {}, onCopy: async () => true, meta: {} });
+  const shown = async (qz) => {
+    qz.start();
+    await new Promise((r) => setTimeout(r, 900));
+    const im = [...document.getElementById('qimgContainer').querySelectorAll('img')];
+    // 태그만 세면 안 된다 — 죽은 주소는 태그는 붙고 **안 그려진다**
+    return { tags: im.length, drawn: im.filter((x) => x.complete && x.naturalWidth > 0).length };
+  };
+
+  const first = await shown(mk());
+  out.push({ name: '**사진 세 장이 다 들어간다**(한 장만 넣지 않는다)',
+    ok: first.tags === 3, detail: `${first.tags}장` });
+  out.push({ name: '세 장이 다 실제로 그려진다', ok: first.drawn === 3,
+    detail: `${first.drawn}/3장` });
+
+  // 사용자가 하는 일 — 족보를 닫고 다른 걸 보다가 다시 온다
+  const tmp = mk(); tmp.start(); await new Promise((r) => setTimeout(r, 600)); tmp.destroy();
+  const again = await shown(mk());
+  out.push({ name: '**닫았다 다시 열어도 사진이 보인다**(죽은 주소를 안 내준다)',
+    ok: again.drawn === 3, detail: `${again.drawn}/3장` });
+
+  // 주인이 하나여야 한다 — quiz가 제 캐시를 들고 revoke하면 이 버그가 되살아난다
+  const qsrc = await realFetch('/js/quiz.js').then((r) => r.text());
+  out.push({ name: '그림 주소를 quiz 쪽에서 또 들고 있지 않다',
+    ok: !/_imgCache/.test(qsrc) });
+  out.push({ name: 'quiz가 그림 주소를 revoke하지 않는다(주인은 github.js 하나)',
+    ok: !/revokeObjectURL/.test(qsrc) });
+
+  window.fetch = realFetch;
+  gh.releaseBlobs();
+  return out;
+});
+
 await run('그림 크게 보기', async () => {
   const out = [];
   const PNG = await (async () => {

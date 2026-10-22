@@ -91,7 +91,6 @@ export class Quiz {
     this._hist = new Map();
     // 모두 고르기에서 **아직 안 낸** 체크 — 답으로 낼 때 answers로 옮긴다
     this._draft = this.all.map(() => []);
-    this._imgCache = new Map();
 
     this.el = {
       screen: document.getElementById('quizScreen'),
@@ -532,9 +531,10 @@ export class Quiz {
     const urls = [];
     for (const p of paths) {
       try {
-        let url = this._imgCache.get(p);
-        if (!url) { url = await getBlobUrl(p); this._imgCache.set(p, url); }
-        urls.push(url);
+        // 캐시는 github.js(getBlobUrl)에만 둔다 — 여기 또 들고 있으면 저쪽 LRU가
+        // 버린 **죽은 주소**를 여기가 계속 내준다(2026-10-22). 같은 그림을 동시에
+        // 두 번 받지 않는 것도 저쪽이 이미 한다(blobWait).
+        urls.push(await getBlobUrl(p));
       } catch (e) {
         urls.push(null);
       }
@@ -788,8 +788,12 @@ export class Quiz {
   }
 
   destroy() {
-    this._imgCache.forEach((u) => URL.revokeObjectURL(u));
-    this._imgCache.clear();
+    // ⚠️ **여기서 그림 주소를 버리면 안 된다.** 이 주소는 github.js(getBlobUrl)가
+    //    주인이고 거기 LRU에 그대로 남아 있다. 여기서 revoke하면 github.js는
+    //    **죽은 주소**를 계속 들고 있다가 다음에 그대로 내주고, 그러면 <img>는
+    //    붙지만 아무것도 안 그려진다 — "족보 풀 때 보면 사진이 없음"(2026-10-22 신고).
+    //    재어 보니 처음엔 2/2장이 보이고, 닫았다 다시 열면 0/2장이었다.
+    //    주인은 하나여야 한다 — 버리는 일은 github.js의 releaseBlobs()에 맡긴다.
     this.el.screen.classList.add('hidden');
   }
 }
