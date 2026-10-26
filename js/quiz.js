@@ -4,7 +4,7 @@
 import { getBlobUrl } from './github.js';
 import { imagePaths } from './parser.js';
 import { saveSession, loadSession, clearSession, recordAttempt, markUnsure, markBookmark,
-  examRun, bumpExamRun, allAttempts, attemptId } from './db.js';
+  examRun, bumpExamRun, allAttempts, attemptId, markExamFinished, unmarkExamFinished } from './db.js';
 import { scheduleBackup } from './backup.js';
 import { tokenize, tokenizeTree } from './pen.js';
 
@@ -769,6 +769,10 @@ export class Quiz {
     this.order.forEach((i) => {
       if (this.answers[i] !== null && !this._recorded.has(i)) this._record(i);
     });
+    // 목록 화면에서 "완료"로 색을 다르게 보여주는 데 쓴다 — 모든 문항을 안 풀고 여기서
+    // 끝내도(2026-10-26 요청: "결과보기를 해서 끝내버린 경우는 완료로") session과
+    // 무관하게 남는다.
+    markExamFinished(this.examKey).catch(() => {});
     this.onFinish(this.results());
   }
 
@@ -789,6 +793,7 @@ export class Quiz {
     this.order = wrongIdx;
     this.cur = 0;
     bumpExamRun(this.examKey).then((r) => { this.run = r; }).catch(() => {});
+    unmarkExamFinished(this.examKey).catch(() => {});   // 다시 들어갔으니 "완료"는 뗀다
     this.persist();
     return true;
   }
@@ -804,6 +809,7 @@ export class Quiz {
     // recordAttempt의 history에 회차별로 남아 있다(2026-10-21 요청: 다시 풀기는
     // 취소 단추처럼 안 푼 상태로 되돌리되, 푼 기록 자체는 없애지 않는다).
     bumpExamRun(this.examKey).then((r) => { this.run = r; }).catch(() => {});
+    unmarkExamFinished(this.examKey).catch(() => {});   // 다시 들어갔으니 "완료"는 뗀다
     clearSession(this.examKey).catch(() => {});
   }
 

@@ -165,6 +165,22 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 .exam-meta { font-size: 12px; color: var(--sub); margin-top: 3px; font-weight: 400; }
 .exam-progress { font-size: 12px; color: var(--sub); white-space: nowrap; }
 
+/* 완료/풀던 중/안 풂 — 색이 다 같아서 구분이 안 된다는 지적으로 추가(2026-10-26). */
+.exam-item.in-progress {
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.exam-item.in-progress .exam-progress { color: var(--accent); font-weight: 700; }
+.exam-item.done { background: var(--badge-bg); }
+.exam-item.done .exam-name, .exam-item.done .exam-date { color: var(--sub); }
+.exam-item.done .exam-progress { color: var(--correct); font-weight: 700; }
+
+/* 시험 행 + "다시풀기" 칩을 한 줄에 — 전에는 칩이 줄 전체를 쓰는 별도 행이라 자리를
+   너무 잡아먹었다(2026-10-26 지적). 과목마다 시험명 길이가 달라 칩은 오른쪽에 고정한다. */
+.exam-row { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+.exam-row .exam-item { flex: 1 1 auto; width: auto; min-width: 0; margin-bottom: 0; }
+.exam-weak-chip { flex: 0 0 auto; white-space: nowrap; color: var(--wrong); border-color: color-mix(in srgb, var(--wrong) 45%, var(--border)); }
+
 /* ---- 퀴즈 ---- */
 #qnum { font-size: 13px; color: var(--sub); margin-bottom: 6px; font-weight: 600; }
 #qsource { font-size: 12px; color: var(--sub); margin-bottom: 10px; padding: 5px 11px; background: var(--badge-bg); border-radius: 6px; display: inline-block; line-height: 1.5; }
@@ -3210,10 +3226,13 @@ li.task.done .task-box { color: var(--accent); }
    (묶음 머리 모양 자체는 위의 .root-head / .subject-head 블록에 있다.) */
 /* 묶음 안의 항목 — 왼쪽에 옅은 선을 세워 "이 묶음에 속한다"를 보여준다 */
 .subject-group > .exam-item,
-.root-group > .subject-group > .exam-item {
+.root-group > .subject-group > .exam-item,
+.subject-group > .exam-row > .exam-item,
+.root-group > .subject-group > .exam-row > .exam-item {
   border-left: 3px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
-.subject-group > .exam-item:active { border-left-color: var(--accent); }
+.subject-group > .exam-item:active,
+.subject-group > .exam-row > .exam-item:active { border-left-color: var(--accent); }
 /* 펼친 묶음은 머리를 아래 항목과 붙여 한 덩어리로 보이게 */
 .subject-group[open] > summary.subject-head { margin-bottom: 4px; }
 

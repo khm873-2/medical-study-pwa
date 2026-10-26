@@ -28,7 +28,7 @@ import { nameSimilarity } from './wiki.js';
 import {
   kvGet, kvSet, kvDel, cacheClear, enqueue, listOutbox, dequeue, bumpTries,
   saveCards, allCards, deleteCard,
-  allSessions, clearSession, allAttempts, attemptId,
+  allSessions, clearSession, allAttempts, attemptId, finishedExams,
 } from './db.js';
 import { weakQueue, weakBySubject, sumBySubject, examProgress } from './attempts.js';
 
@@ -588,10 +588,11 @@ async function loadList(force) {
     const index = await buildExamIndex(force);
     const sessions = await allSessions();
     const attempts = await allAttempts();
-    renderList(index, sessions, '퀴즈', attempts);
-    renderList(index, sessions, '모의고사', attempts);
-    renderList(index, sessions, '족보', attempts);
-    renderList(index, sessions, '드릴', attempts);
+    const finished = new Set(await finishedExams());
+    renderList(index, sessions, '퀴즈', attempts, finished);
+    renderList(index, sessions, '모의고사', attempts, finished);
+    renderList(index, sessions, '족보', attempts, finished);
+    renderList(index, sessions, '드릴', attempts, finished);
   } catch (e) {
     body.innerHTML = '';
     const box = document.createElement('div');
@@ -736,10 +737,13 @@ function finishExamIndex(byKey) {
 /**
  * 시험 목록을 그린다. 퀴즈와 모의고사는 **탭이 다르므로 따로** 그린다(2026-10-10 요청).
  * @param {string} kind '모의고사' | '퀴즈'
- * @param {Array} [attempts] 있으면 시험마다 "오답 N" 칩을 붙인다(2026-10-26) — "오늘" 탭에
- *   가야만 보이던 약한 문항 다시풀기를, 시험을 실제로 고르는 이 목록 화면에도 놓는다.
+ * @param {Array} [attempts] 있으면 시험마다 "다시풀기 - 오답 N개" 칩을 붙인다(2026-10-26)
+ *   — "오늘" 탭에 가야만 보이던 약한 문항 다시풀기를, 시험을 실제로 고르는 이 목록
+ *   화면에도 놓는다.
+ * @param {Set<string>} [finished] 완료 표시된 시험 경로 집합(2026-10-26) — "결과 보기"를
+ *   눌러 끝낸 시험은 모든 문항을 안 풀었어도 완료로 친다.
  */
-function renderList(index, sessions, kind = '모의고사', attempts = []) {
+function renderList(index, sessions, kind = '모의고사', attempts = [], finished = new Set()) {
   const bodyId = kind === '퀴즈' ? 'quizBody' : kind === '족보' ? 'jokboBody'
     : kind === '드릴' ? 'drillBody' : 'listBody';
   const body = document.getElementById(bodyId);
@@ -807,6 +811,7 @@ function renderList(index, sessions, kind = '모의고사', attempts = []) {
       }
 
       const s = sessions[ex.path];
+      const isDone = finished.has(ex.path);
       if (s) {
         const meta = document.createElement('div');
         meta.className = 'exam-meta';
@@ -815,31 +820,36 @@ function renderList(index, sessions, kind = '모의고사', attempts = []) {
         nameWrap.appendChild(meta);
       }
 
+      // 완료(결과 보기까지 끝남) / 풀던 중(세션은 있는데 아직 안 끝남) / 안 풂(기본) —
+      // 색이 다 똑같아서 구분이 안 된다는 지적으로 추가(2026-10-26). 완료가 session
+      // 유무보다 우선이다 — "저장"을 누르면 session이 지워지는데, 그래도 완료로 남아야 한다.
+      btn.classList.toggle('done', isDone);
+      btn.classList.toggle('in-progress', !isDone && !!s);
+
       const prog = document.createElement('span');
       prog.className = 'exam-progress';
-      prog.textContent = s ? '이어풀기 ›' : '›';
+      prog.textContent = isDone ? '✓ 완료' : s ? '이어풀기 ›' : '›';
 
       btn.appendChild(d);
       btn.appendChild(nameWrap);
       btn.appendChild(prog);
       btn.onclick = () => openExam(group.subject, ex);
-      det.appendChild(btn);
 
-      // "오답 N" 칩 — 이 시험만 좁혀서 약한 문항을 다시 푼다. 전에는 "오늘" 탭에
-      // 가야만 보였는데, 실제로 시험을 고르는 이 자리에 있어야 바로 쓴다(2026-10-26).
-      // 버튼 안에 버튼을 넣을 수 없어 exam-item의 형제로 붙인다.
+      // 행 전체를 감싸서 "다시풀기" 칩을 오른쪽에 나란히 붙인다 — 전에는 칩이 줄 전체를
+      // 차지하는 별도 행이라 자리를 너무 잡아먹었다(2026-10-26 지적). 버튼 안에 버튼을
+      // 넣을 수 없어 exam-item의 형제로 둔다.
+      const row = document.createElement('div');
+      row.className = 'exam-row';
+      row.appendChild(btn);
       const prog2 = examProgress(attempts, ex.path);
       if (prog2.weak) {
-        const wrap = document.createElement('div');
-        wrap.className = 'today-chips';
-        wrap.style.cssText = 'margin:-2px 0 8px 2px';
         const wc = document.createElement('button');
-        wc.className = 'chip';
-        wc.textContent = `오답 ${prog2.weak} 다시풀기`;
+        wc.className = 'chip exam-weak-chip';
+        wc.textContent = `다시풀기 - 오답 ${prog2.weak}개`;
         wc.onclick = () => openWeakQueue({ exam: ex.path, subject: group.subject, kind: group.kind });
-        wrap.appendChild(wc);
-        det.appendChild(wrap);
+        row.appendChild(wc);
       }
+      det.appendChild(row);
     });
   });
 }
@@ -1350,7 +1360,13 @@ function onQuestionRender(q, idx, { answered }) {
     loadWiki(q, answered);
   }
   if (!document.getElementById('overviewPanel').classList.contains('hidden')) {
-    highlightOverviewCurrent();
+    // ⚠️ highlightOverviewCurrent()만 부르면 **지금 보는 줄 표시만** 바뀌고, 정답/오답
+    // pill은 그대로 "안 풂"에 머문다 — 방금 답을 고르고 다음 문제로 넘어가도 왼쪽에서
+    // 막 틀린 문항이 전체보기에는 안 틀린 것처럼 보이는 사고(2026-10-26 신고: "18번
+    // 틀려서 19번으로 갔는데 전체보기엔 18번이 체크 안 돼 있다"). 패널이 열려 있는
+    // 동안은 문항을 넘길 때마다 통째로 다시 그린다 — scrollTop을 보존하므로 스크롤이
+    // 튀지는 않는다.
+    renderOverview();
   }
   resetTimerForQuestion();      // "문항마다 다시 시작"이 켜져 있을 때만 움직인다
 }
@@ -1561,6 +1577,7 @@ function renderOverview() {
   const body = document.getElementById('ovBody');
   const filters = document.getElementById('ovFilters');
   const stats = document.getElementById('ovStats');
+  const scrollTop = body.scrollTop;   // 문항을 넘길 때마다 다시 그려도 스크롤 위치는 그대로
 
   const rows = quiz.order.map((i) => ({ i, status: ovStatus(i) }));
   const counts = { ok: 0, bad: 0, new: 0, read: 0, star: 0 };
@@ -1609,6 +1626,7 @@ function renderOverview() {
     return;
   }
   show.forEach(({ i, status }) => body.appendChild(ovRow(i, status)));
+  body.scrollTop = scrollTop;
   highlightOverviewCurrent();
 }
 
@@ -2849,16 +2867,18 @@ async function redrawList(which) {
   if (!index.length && !stale) return;
   const sessions = await allSessions();
   const attempts = await allAttempts();
-  // 오답 칩(examProgress)도 지문에 넣는다 — 안 그러면 다른 탭에서 퀴즈를 풀고 돌아왔을 때
-  // 이 탭의 "오답 N" 칩이 바뀐 걸 안 보고 건너뛸 수 있다.
+  const finished = new Set(await finishedExams());
+  // 오답 칩(examProgress)·완료 표시도 지문에 넣는다 — 안 그러면 다른 탭에서 퀴즈를 풀고
+  // 돌아왔을 때 "오답 N" 칩이나 완료색이 바뀐 걸 안 보고 건너뛸 수 있다.
   const weakByExam = index.flatMap((g) => g.exams.map((e) => [e.path, examProgress(attempts, e.path).weak]));
   const fp = JSON.stringify(index.map((g) => [g.subject, g.kind, g.exams.map((e) => e.path)]))
     + '|' + JSON.stringify(Object.entries(sessions).map(
       ([p, s]) => [p, (s.answers || []).filter((a) => a !== null).length, s.total]))
-    + '|' + JSON.stringify(weakByExam);
+    + '|' + JSON.stringify(weakByExam)
+    + '|' + JSON.stringify([...finished].sort());
   if (!stale && redrawFingerprint[which] === fp) return;    // 내용이 그대로면 다시 안 그린다
   redrawFingerprint[which] = fp;
-  renderList(index, sessions, KIND_OF[which], attempts);
+  renderList(index, sessions, KIND_OF[which], attempts, finished);
 }
 
 /** 마지막으로 보던 탭으로 돌아간다 — 매번 퀴즈 탭부터 찾아 들어가지 않게. */

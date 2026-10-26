@@ -311,6 +311,26 @@ export async function clearAttempts() {
   return tx(STORE_ATTEMPTS, 'readwrite', (s) => s.clear());
 }
 
+// ---- 시험 완료 표시(목록 화면 색 구분용) ----
+// session(이어풀기)만으로는 "다 풀었다"를 못 믿는다 — "vault에 저장"을 누르면 지워지고,
+// 모든 문항을 안 풀고 "결과 보기"로 끝내는 경우도 흔하다(2026-10-26 요청: "결과보기를 해서
+// 끝내버린 경우는 완료한 걸로"). 그래서 session과 분리된 별도 표시를 둔다 — session이
+// 지워지거나 문항 수가 안 맞아도 이 표시는 그대로 남는다.
+const FINISHED_KEY = 'finished_exams';
+
+export async function markExamFinished(exam) {
+  const list = (await kvGet(FINISHED_KEY)) || [];
+  if (!list.includes(exam)) { list.push(exam); await kvSet(FINISHED_KEY, list); }
+}
+/** 다시 풀기 시작하면 "완료" 표시를 뗀다(처음부터 다시·틀린 것만 다시 둘 다). */
+export async function unmarkExamFinished(exam) {
+  const list = (await kvGet(FINISHED_KEY)) || [];
+  if (list.includes(exam)) await kvSet(FINISHED_KEY, list.filter((p) => p !== exam));
+}
+export async function finishedExams() {
+  return (await kvGet(FINISHED_KEY)) || [];
+}
+
 export async function clearCards() {
   return tx(STORE_CARDS, 'readwrite', (s) => s.clear());
 }

@@ -2887,6 +2887,34 @@ const LECTURE_NAME = "전체보기 테스트";
     return out;
   });
 
+  // 2026-10-26 신고: "18번 틀려서 19번으로 갔는데 전체보기엔 18번이 체크 안 돼 있다" —
+  // 패널을 **닫았다 열지 않고, 연 채로 둔 상태에서** 답을 고르면 pill이 안 바뀌던 사고.
+  // 위 테스트는 패널을 닫은 채로 풀고 다시 열어서 확인하느라 이 경로를 안 거쳤다.
+  await run('전체보기를 연 채로 풀어도 pill이 바로 바뀐다', async () => {
+    const out = [];
+    out.push({ name: '전체보기가 이미 열려 있다(이전 테스트가 다시 켬)',
+      ok: !document.getElementById('overviewPanel').classList.contains('hidden') });
+
+    const go = (n) => {
+      while (true) {
+        const m = document.getElementById('posLabel').textContent.match(/^(\d+)\//);
+        if (Number(m[1]) === n) return;
+        document.getElementById('nextBtn').click();
+      }
+    };
+    const pill = (i) => document.querySelector(`.ov-row[data-i="${i}"] .ov-pill`)?.textContent;
+    go(6);
+    out.push({ name: '풀기 전엔 6번이 "안 풂"', ok: pill(5) === '안 풂', detail: pill(5) });
+    document.querySelectorAll('.opt-row')[1].click();   // ans=0('가')와 불일치 → 오답
+    document.getElementById('nextBtn').click();         // 7번으로 — 패널을 안 건드리고 그냥 넘어간다
+    await new Promise((r) => setTimeout(r, 50));
+    out.push({ name: '패널을 다시 열지 않아도 6번이 오답으로 바뀐다', ok: pill(5) === '오답', detail: pill(5) });
+    out.push({ name: '머리글 집계도 같이 올라간다',
+      ok: /오답 2/.test(document.getElementById('ovStats').textContent),
+      detail: document.getElementById('ovStats').textContent });
+    return out;
+  });
+
   await run('행을 누르면 그 문항으로 건너뛴다', async () => {
     const out = [];
     document.querySelector('.ov-row[data-i="7"] .ov-main').click();
