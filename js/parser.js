@@ -110,6 +110,9 @@ function normalize(raw, i, forcedType) {
     ...(raw.srcTag ? { srcTag: raw.srcTag } : {}),
     ...(raw.source ? { source: raw.source } : {}),
     ...(raw.wikiRefs ? { wikiRefs: raw.wikiRefs } : {}),
+    // 안정적 원본 문항 ID(2026-10-26) — 문제은행에서 즉석으로 뽑는 랜덤 모의고사용.
+    // 지금까지 만들어진 파일은 이 필드가 없고, 없으면 db.js가 exam#num으로 돌아간다.
+    ...(raw.id ? { id: raw.id } : {}),
   };
 }
 

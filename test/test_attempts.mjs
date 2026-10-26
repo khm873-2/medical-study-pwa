@@ -45,6 +45,15 @@ const mk = (id, over = {}) => ({
   ok('찍어서 맞춘 것도 약한 문항', A.isWeak(lucky), '이게 빠지면 확신도 기능이 무의미하다');
   ok('찍어서 맞춘 것은 solid가 아니다', !A.isSolid(lucky));
   ok('한 번도 안 푼 문항은 약하지도 않다', !A.isWeak({ id: 'x' }) && !A.isWeak(null));
+
+  // ★ 북마크만 있고 맞고 확신도 있는 경우도 약한 문항으로 쳐야 한다(2026-10-26) —
+  // 안 그러면 "다시보고 싶어서 찍은 문항"이 그냥 solid로 묻혀버린다.
+  const starred = mk('E1#5', { bookmarked: true });
+  ok('맞고 확신있어도 북마크가 있으면 약한 문항', A.isWeak(starred));
+  ok('북마크가 있으면 solid가 아니다', !A.isSolid(starred));
+  const starredWrong = mk('E1#6', { bookmarked: true, wrongN: 1,
+    last: { at: ago(A.DAY * 2), picked: 0, correct: false, unsure: false } });
+  ok('오답+북마크도 당연히 약한 문항', A.isWeak(starredWrong));
 }
 
 // ---------- 순서 ----------
@@ -76,21 +85,47 @@ const mk = (id, over = {}) => ({
     mk('B#1', { subject: '근골격계', exam: 'E2', last: { at: ago(A.DAY), correct: false, picked: 0, unsure: false } }),
     mk('A#2', { subject: '응급_중환자', last: { at: ago(A.DAY), correct: true, picked: 0, unsure: true } }),
     mk('A#3', { subject: '응급_중환자' }),
+    mk('A#4', { subject: '응급_중환자', bookmarked: true }),   // 맞고 확신있는데 ★만 찍음
   ];
-  ok('과목으로 좁힌다', A.weakQueue(list, { subject: '응급_중환자', now: NOW }).length === 2);
+  ok('과목으로 좁힌다', A.weakQueue(list, { subject: '응급_중환자', now: NOW }).length === 3);
   ok('시험으로 좁힌다', A.weakQueue(list, { exam: 'E2', now: NOW }).length === 1);
   ok('limit이 듣는다', A.weakQueue(list, { limit: 1, now: NOW }).length === 1);
 
   const by = A.weakBySubject(list, NOW);
   const em = by.find((g) => g.subject === '응급_중환자');
-  ok('과목 요약 — 약함 2 · 틀림 1 · 찍음 1', em.weak === 2 && em.wrong === 1 && em.unsure === 1,
+  ok('과목 요약 — 약함 3 · 틀림 1 · 찍음 1 · 북마크 1', em.weak === 3 && em.wrong === 1 && em.unsure === 1 && em.star === 1,
     JSON.stringify(em));
-  ok('과목 요약 — solid도 센다', em.solid === 1 && em.total === 3, JSON.stringify(em));
+  ok('과목 요약 — solid도 센다', em.solid === 1 && em.total === 4, JSON.stringify(em));
   ok('약한 문항 많은 과목이 위로', by[0].subject === '응급_중환자');
 
   const p = A.examProgress(list, 'E1');
-  ok('시험 진도 — 본 3개 중 solid 1 · 약함 2', p.seen === 3 && p.solid === 1 && p.weak === 2,
+  ok('시험 진도 — 본 4개 중 solid 1 · 약함 3(북마크 포함)', p.seen === 4 && p.solid === 1 && p.weak === 3,
     JSON.stringify(p));
+}
+
+// ---------- 과목×종류로 나누기 (2026-10-26, "과목별/드릴별/모의고사별로 모으고 싶다") ----------
+{
+  const list = [
+    mk('A#1', { subject: '응급_중환자', kind: '퀴즈',
+      last: { at: ago(A.DAY), correct: false, picked: 0, unsure: false } }),
+    mk('A#2', { subject: '응급_중환자', kind: '모의고사', exam: 'E2',
+      last: { at: ago(A.DAY), correct: false, picked: 0, unsure: false } }),
+    mk('A#3', { subject: '응급_중환자', kind: '모의고사', exam: 'E2',
+      last: { at: ago(A.DAY), correct: false, picked: 0, unsure: false } }),
+  ];
+  const by = A.weakBySubject(list, NOW);
+  ok('과목이 같아도 종류가 다르면 묶음이 갈린다', by.length === 2, JSON.stringify(by));
+  const quiz = by.find((g) => g.kind === '퀴즈');
+  const mock = by.find((g) => g.kind === '모의고사');
+  ok('퀴즈 묶음은 1개', quiz && quiz.weak === 1);
+  ok('모의고사 묶음은 2개', mock && mock.weak === 2);
+
+  const summed = A.sumBySubject(by);
+  ok('sumBySubject로 과목 전체 합계를 되살린다', summed.length === 1 && summed[0].weak === 3,
+    JSON.stringify(summed));
+  ok('종류별 소계도 그대로 들고 있다', summed[0].byKind.length === 2);
+
+  ok('kind로도 좁힌다', A.weakQueue(list, { kind: '퀴즈', now: NOW }).length === 1);
 }
 
 // ---------- 시간표 파싱 (실제 vault 파일) ----------

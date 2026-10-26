@@ -1978,6 +1978,8 @@ body[data-screen="deckScreen"] #app { padding-bottom: calc(env(safe-area-inset-b
 .ov-pill-ok { background: color-mix(in srgb, var(--correct) 18%, transparent); color: var(--correct); }
 .ov-pill-bad { background: color-mix(in srgb, var(--wrong) 18%, transparent); color: var(--wrong); }
 .ov-pill-read { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+/* 몇 번 풀어서 몇 번 맞았는지(n전m승) — 2회 이상 풀었을 때만 pill 옆에 작게 붙는다 */
+.ov-stat { flex: 0 0 auto; font-size: 10.5px; color: var(--sub); }
 .ov-acts { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
 .ov-star, .ov-dot {
   min-width: 30px; min-height: 30px; border-radius: 8px; border: none; background: transparent;

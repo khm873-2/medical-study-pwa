@@ -20,7 +20,7 @@ for f in test/test_*.mjs; do
 done
 for f in test/test_app.mjs test/test_gemini.mjs test/test_pen.mjs test/test_jokbo.mjs \
          test/test_phase3.mjs test/test_phase45.mjs test/test_dom.mjs test/test_match.mjs test/test_search.mjs test/test_backup.mjs test/test_swcache.mjs \
-         test/test_attempts.mjs test/test_css.mjs; do
+         test/test_attempts.mjs test/test_css.mjs test/test_qid.mjs; do
   printf '%-22s ' "$(basename "$f")"
   out=$(node "$f" 2>&1) || fail=1
   echo "$out" | tail -1

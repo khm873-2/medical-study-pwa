@@ -175,7 +175,13 @@ export async function deleteCard(id) {
 // 왜 세션만으로 부족한가: session은 examKey(파일 경로)별 "이어풀기" 상태라, 시험을 끝내고
 // 나오면 "어제 ACLS에서 틀린 4문항 + 오늘 Shock에서 틀린 6문항"을 모을 방법이 없었다.
 // 문항을 키로 따로 쌓아 과목 전체에서 약한 것만 다시 꺼낸다(2026-10-10).
-export const attemptId = (exam, num) => `${exam}#${num}`;
+//
+// qid(안정적 원본 문항 ID)가 있으면 그걸 키로 쓴다 — 없으면(지금까지 쌓인 모든
+// 05_퀴즈/06_모의고사/07_드릴이 이 경우다) 전처럼 exam#num을 쓴다(2026-10-26, 랜덤
+// 모의고사 대비). exam#num은 "이 파일의 이 번째 문항"이라 **즉석에서 무작위로 뽑는
+// 모의고사**에서는 같은 원본 문항이 매번 다른 파일·다른 번호로 나와 이력이 안 이어진다.
+// qid는 문제은행 원본(알렌 block_id 등)에서 나오므로 어느 시험에 담겨 나오든 그대로다.
+export const attemptId = (exam, num, qid) => (qid ? `qid:${qid}` : `${exam}#${num}`);
 
 /**
  * 한 문항에 남겨 두는 지난 풀이 수 — "몇 회차에 뭘 골랐나"를 되짚는 자리다
@@ -184,12 +190,13 @@ export const attemptId = (exam, num) => `${exam}#${num}`;
  */
 export const HISTORY_MAX = 20;
 
-export async function recordAttempt({ exam, num, subject, kind, title, picked, correct, unsure, run }) {
+export async function recordAttempt({ exam, num, qid, subject, kind, title, picked, correct, unsure, run }) {
   const db = await open();
-  const id = attemptId(exam, num);
+  const id = attemptId(exam, num, qid);
   const store = db.transaction(STORE_ATTEMPTS, 'readwrite').objectStore(STORE_ATTEMPTS);
   const prev = await req2val(store.get(id));
-  const rec = prev || { id, exam, num, subject, kind, title, n: 0, wrongN: 0, unsureN: 0 };
+  const rec = prev || { id, exam, num, qid, subject, kind, title, n: 0, wrongN: 0, unsureN: 0 };
+  rec.exam = exam; rec.num = num; rec.qid = qid;                // 담긴 시험·번호가 바뀌어도 최신값으로
   rec.subject = subject; rec.kind = kind; rec.title = title;   // 파일이 옮겨가도 따라오게
   rec.n += 1;
   if (!correct) rec.wrongN += 1;
@@ -218,15 +225,35 @@ export async function bumpExamRun(exam) {
 }
 
 /** 이미 푼 문항에 "확신 없었음"만 뒤늦게 켜고 끈다 — 시도 횟수는 올리지 않는다. */
-export async function markUnsure(exam, num, unsure) {
+export async function markUnsure(exam, num, unsure, qid) {
   const db = await open();
-  const id = attemptId(exam, num);
+  const id = attemptId(exam, num, qid);
   const store = db.transaction(STORE_ATTEMPTS, 'readwrite').objectStore(STORE_ATTEMPTS);
   const rec = await req2val(store.get(id));
   if (!rec || !rec.last) return null;
   if (!!rec.last.unsure === !!unsure) return rec;
   rec.last.unsure = !!unsure;
   rec.unsureN = Math.max(0, (rec.unsureN || 0) + (unsure ? 1 : -1));
+  await tx(STORE_ATTEMPTS, 'readwrite', (s) => s.put(rec));
+  return rec;
+}
+
+/**
+ * ★ 북마크("다시보고 싶은 문항")를 과목 전체 모아보기에서도 보이게 attempts에 남긴다.
+ *
+ * 전에는 북마크가 session 저장소(exam별 이어풀기 상태)에만 있어서, 그 문항을 다시
+ * 열지 않으면 "다시 볼 문항" 모아보기에 전혀 안 잡혔다(2026-10-26 지적). `markUnsure`와
+ * 같은 모양 — 아직 한 번도 안 푼 문항(attempts 레코드 자체가 없음)은 건드리지 않는다.
+ * 세션 안에서는 북마크가 그대로 동작하고, 답을 한 번이라도 고르면 그때부터 여기 반영된다.
+ */
+export async function markBookmark(exam, num, bookmarked, qid) {
+  const db = await open();
+  const id = attemptId(exam, num, qid);
+  const store = db.transaction(STORE_ATTEMPTS, 'readwrite').objectStore(STORE_ATTEMPTS);
+  const rec = await req2val(store.get(id));
+  if (!rec || !rec.last) return null;
+  if (!!rec.bookmarked === !!bookmarked) return rec;
+  rec.bookmarked = !!bookmarked;
   await tx(STORE_ATTEMPTS, 'readwrite', (s) => s.put(rec));
   return rec;
 }
@@ -253,6 +280,9 @@ export async function mergeAttempts(list) {
       merged.n = Math.max(inc.n || 0, mine?.n || 0);
       merged.wrongN = Math.max(inc.wrongN || 0, mine?.wrongN || 0);
       merged.unsureN = Math.max(inc.unsureN || 0, mine?.unsureN || 0);
+      // 북마크는 **한쪽에서만 찍었어도 유지**한다(OR) — 아이패드에서 찍고 맥 쪽 백업이
+      // 나중에 합쳐져도 그 표시가 지워지면 안 된다.
+      merged.bookmarked = !!(mine?.bookmarked || inc.bookmarked);
       // 지난 풀이는 **양쪽을 합친다** — 아이패드와 맥에서 번갈아 풀면 한쪽에만
       // 있는 회차가 생기고, 덮어쓰면 그게 사라진다. 시각이 같으면 한 번으로 본다.
       const seen = new Set();

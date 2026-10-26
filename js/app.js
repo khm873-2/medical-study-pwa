@@ -1,7 +1,7 @@
 // 메인 — 화면 전환, 모의고사 목록, 결과 저장, 동기화 큐.
 
 import { hasToken, setToken, clearToken, verifyToken, getRepo, setRepo } from './auth.js';
-import { listDir, getText, getBlobUrl, createFile, putFile, getTextIfExists } from './github.js';
+import { listDir, listTree, getText, getBlobUrl, createFile, putFile, getTextIfExists } from './github.js';
 import { parseExamHtml, prettyExamName, examDate, examSortKey, teacherName } from './parser.js';
 import { Quiz, isAns } from './quiz.js';
 import { PenLayer, tokenizeTree, wordPick } from './pen.js';
@@ -28,9 +28,9 @@ import { nameSimilarity } from './wiki.js';
 import {
   kvGet, kvSet, kvDel, cacheClear, enqueue, listOutbox, dequeue, bumpTries,
   saveCards, allCards, deleteCard,
-  allSessions, clearSession, allAttempts,
+  allSessions, clearSession, allAttempts, attemptId,
 } from './db.js';
-import { weakQueue, weakBySubject, examProgress } from './attempts.js';
+import { weakQueue, weakBySubject, sumBySubject, examProgress } from './attempts.js';
 
 // 모의고사와 퀴즈를 둘 다 읽는다 — vault에서 내가 만든 퀴즈도 앱에서 풀 수 있어야 한다.
 // 두 폴더의 HTML이 같은 QUESTIONS 스키마를 쓰므로 파서는 그대로 재사용한다(2026-10-10).
@@ -587,10 +587,11 @@ async function loadList(force) {
   try {
     const index = await buildExamIndex(force);
     const sessions = await allSessions();
-    renderList(index, sessions, '퀴즈');
-    renderList(index, sessions, '모의고사');
-    renderList(index, sessions, '족보');
-    renderList(index, sessions, '드릴');
+    const attempts = await allAttempts();
+    renderList(index, sessions, '퀴즈', attempts);
+    renderList(index, sessions, '모의고사', attempts);
+    renderList(index, sessions, '족보', attempts);
+    renderList(index, sessions, '드릴', attempts);
   } catch (e) {
     body.innerHTML = '';
     const box = document.createElement('div');
@@ -632,7 +633,11 @@ async function _buildExamIndex(force) {
   // 그대로 떠서 "안 고쳐졌다"가 된다(캐시가 정렬 결과까지 담고 있다).
   // v4: 07_드릴이 EXAM_ROOTS에 들어왔다. 캐시에는 드릴이 아예 없으므로 키를 올려야
   //     TTL(3분)을 기다리지 않고 바로 뜬다.
-  const cacheKey = 'exam_index_v4';
+  // v5: listDir 폴더 크롤(EXAM_ROOTS 수 × 과목 수 회 요청, 대략 수십~100회)을
+  //     listTree 한 번으로 바꿨다 — reader.js의 noteList()가 2026-10-18에 같은 이유로
+  //     이미 바꾼 것과 동일한 처방(2026-10-26). TTL이 3분이라 **공부 중 탭만 눌러도**
+  //     자주 다시 돌던 게 문제였는데, 이제 요청이 1번이라 괜찮다.
+  const cacheKey = 'exam_index_v5';
   const stampKey = 'exam_index_at';
   // ⚠️ 캐시가 **스스로 낡아야 한다**. 전에는 ↻ 같은 force가 없으면 영영 다시 안 읽어서,
   //    맥에서 퀴즈를 새로 만들어도 아이패드에는 영영 안 떴다(2026-10-21 신고:
@@ -645,37 +650,8 @@ async function _buildExamIndex(force) {
     if (Date.now() - at >= EXAM_TTL) index = null;     // 낡았으면 다시 읽는다
   }
   if (!index) {
-    const byKey = new Map();            // "과목 · 종류" 단위로 묶는다
-    for (const { root, kind, ext = '.html', only } of EXAM_ROOTS) {
-      let subjects;
-      try { subjects = (await listDir(root)).filter((e) => e.type === 'dir'); }
-      catch { continue; }               // 폴더가 없는 과목도 있다 — 조용히 넘어간다
-      if (only) subjects = subjects.filter((e) => only.includes(e.name));
-      for (const sub of subjects) {
-        let files;
-        try { files = await listDir(sub.path); } catch { continue; }
-        const items = files
-          .filter((f) => f.type === 'file' && f.name.endsWith(ext) && !f.name.startsWith('_')
-            // 족보는 `NN_챕터.md`만 문항이다 — `00_과목소개`는 총평이라 뺀다
-            && (kind !== '족보' || /^(?!00_)\d{2}_/.test(f.name)))
-          .map((f) => ({ file: f.name, path: f.path, kind }));
-        if (!items.length) continue;
-        const k = `${sub.name}|${kind}`;
-        if (!byKey.has(k)) byKey.set(k, { subject: sub.name, kind, exams: [] });
-        byKey.get(k).exams.push(...items);
-      }
-    }
-    index = [...byKey.values()];
-    for (const g of index) {
-      // 날짜 **오름차순** — 배운 순서대로 읽힌다(2026-10-12 요청: 역순이라 보기 나쁨).
-      // 날짜를 못 읽은 파일은 키가 '999999'라 자연히 맨 뒤로 간다.
-      g.exams.sort((a, b) => examSortKey(a.file).localeCompare(examSortKey(b.file))
-        || a.file.localeCompare(b.file, 'ko'));
-    }
-    // 모의고사를 먼저, 그 다음 퀴즈. 같은 종류 안에서는 과목 이름순.
-    const KIND_ORDER = { 모의고사: 0, 퀴즈: 1, 족보: 2, 드릴: 3 };
-    index.sort((a, b) => (a.kind === b.kind ? a.subject.localeCompare(b.subject, 'ko')
-      : (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9)));
+    index = await fetchExamIndexViaTree().catch(() => null);
+    if (!index) index = await fetchExamIndexViaListDir();   // tree 실패·잘림 → 옛 방식 폴백
     await kvSet(cacheKey, index);
     await kvSet(stampKey, Date.now());
   }
@@ -683,10 +659,87 @@ async function _buildExamIndex(force) {
 }
 
 /**
+ * git tree 한 번으로 퀴즈·모의고사·드릴·족보 목록을 만든다.
+ *
+ * ⚠️ 경로를 **NFC로 정규화한다**(noteList와 달리 여기선 꼭 필요하다). git tree는 한글
+ * 경로를 커밋 당시 바이트 그대로(종종 NFD 자소분리형) 돌려주는데, `attempts`/`session`
+ * 저장소는 지금까지 전부 `listDir`(Contents API, NFC 반환)로 만든 경로로만 채워져 왔다.
+ * 정규화 없이 그대로 쓰면 같은 파일인데도 문자열이 달라져 **기존 풀이 이력(오답·이어풀기)이
+ * 전부 못 찾는 것처럼** 보일 수 있다 — 표시용 라벨만 다듬는 걸로는 부족하고 경로 자체를
+ * 맞춰야 한다.
+ */
+async function fetchExamIndexViaTree() {
+  const tree = await listTree();
+  if (tree.truncated) return null;
+  const byKey = new Map();
+  for (const raw of tree) {
+    const path = raw.path.normalize('NFC');
+    for (const { root, kind, ext = '.html', only } of EXAM_ROOTS) {
+      if (!path.startsWith(`${root}/`)) continue;
+      const rest = path.slice(root.length + 1).split('/');
+      if (rest.length !== 2) break;          // {과목}/{파일} 모양이 아니면 이 규칙 대상이 아니다
+      const [subject, file] = rest;
+      if (!file.endsWith(ext) || file.startsWith('_')) break;
+      if (only && !only.includes(subject)) break;
+      // 족보는 `NN_챕터.md`만 문항이다 — `00_과목소개`는 총평이라 뺀다
+      if (kind === '족보' && !/^(?!00_)\d{2}_/.test(file)) break;
+      const k = `${subject}|${kind}`;
+      if (!byKey.has(k)) byKey.set(k, { subject, kind, exams: [] });
+      byKey.get(k).exams.push({ file, path, kind });
+      break;                                   // 한 경로는 한 EXAM_ROOTS 규칙에만 해당한다
+    }
+  }
+  return finishExamIndex(byKey);
+}
+
+/** tree를 못 쓸 때(잘렸거나 막혔거나)의 옛 방식 — 폴더를 하나씩 훑는다. */
+async function fetchExamIndexViaListDir() {
+  const byKey = new Map();            // "과목 · 종류" 단위로 묶는다
+  for (const { root, kind, ext = '.html', only } of EXAM_ROOTS) {
+    let subjects;
+    try { subjects = (await listDir(root)).filter((e) => e.type === 'dir'); }
+    catch { continue; }               // 폴더가 없는 과목도 있다 — 조용히 넘어간다
+    if (only) subjects = subjects.filter((e) => only.includes(e.name));
+    for (const sub of subjects) {
+      let files;
+      try { files = await listDir(sub.path); } catch { continue; }
+      const items = files
+        .filter((f) => f.type === 'file' && f.name.endsWith(ext) && !f.name.startsWith('_')
+          // 족보는 `NN_챕터.md`만 문항이다 — `00_과목소개`는 총평이라 뺀다
+          && (kind !== '족보' || /^(?!00_)\d{2}_/.test(f.name)))
+        .map((f) => ({ file: f.name, path: f.path, kind }));
+      if (!items.length) continue;
+      const k = `${sub.name}|${kind}`;
+      if (!byKey.has(k)) byKey.set(k, { subject: sub.name, kind, exams: [] });
+      byKey.get(k).exams.push(...items);
+    }
+  }
+  return finishExamIndex(byKey);
+}
+
+/** 그룹을 정렬해 최종 index 모양으로 마감한다(tree·listDir 두 경로가 공유). */
+function finishExamIndex(byKey) {
+  const index = [...byKey.values()];
+  for (const g of index) {
+    // 날짜 **오름차순** — 배운 순서대로 읽힌다(2026-10-12 요청: 역순이라 보기 나쁨).
+    // 날짜를 못 읽은 파일은 키가 '999999'라 자연히 맨 뒤로 간다.
+    g.exams.sort((a, b) => examSortKey(a.file).localeCompare(examSortKey(b.file))
+      || a.file.localeCompare(b.file, 'ko'));
+  }
+  // 모의고사를 먼저, 그 다음 퀴즈. 같은 종류 안에서는 과목 이름순.
+  const KIND_ORDER = { 모의고사: 0, 퀴즈: 1, 족보: 2, 드릴: 3 };
+  index.sort((a, b) => (a.kind === b.kind ? a.subject.localeCompare(b.subject, 'ko')
+    : (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9)));
+  return index;
+}
+
+/**
  * 시험 목록을 그린다. 퀴즈와 모의고사는 **탭이 다르므로 따로** 그린다(2026-10-10 요청).
  * @param {string} kind '모의고사' | '퀴즈'
+ * @param {Array} [attempts] 있으면 시험마다 "오답 N" 칩을 붙인다(2026-10-26) — "오늘" 탭에
+ *   가야만 보이던 약한 문항 다시풀기를, 시험을 실제로 고르는 이 목록 화면에도 놓는다.
  */
-function renderList(index, sessions, kind = '모의고사') {
+function renderList(index, sessions, kind = '모의고사', attempts = []) {
   const bodyId = kind === '퀴즈' ? 'quizBody' : kind === '족보' ? 'jokboBody'
     : kind === '드릴' ? 'drillBody' : 'listBody';
   const body = document.getElementById(bodyId);
@@ -771,6 +824,22 @@ function renderList(index, sessions, kind = '모의고사') {
       btn.appendChild(prog);
       btn.onclick = () => openExam(group.subject, ex);
       det.appendChild(btn);
+
+      // "오답 N" 칩 — 이 시험만 좁혀서 약한 문항을 다시 푼다. 전에는 "오늘" 탭에
+      // 가야만 보였는데, 실제로 시험을 고르는 이 자리에 있어야 바로 쓴다(2026-10-26).
+      // 버튼 안에 버튼을 넣을 수 없어 exam-item의 형제로 붙인다.
+      const prog2 = examProgress(attempts, ex.path);
+      if (prog2.weak) {
+        const wrap = document.createElement('div');
+        wrap.className = 'today-chips';
+        wrap.style.cssText = 'margin:-2px 0 8px 2px';
+        const wc = document.createElement('button');
+        wc.className = 'chip';
+        wc.textContent = `오답 ${prog2.weak} 다시풀기`;
+        wc.onclick = () => openWeakQueue({ exam: ex.path, subject: group.subject, kind: group.kind });
+        wrap.appendChild(wc);
+        det.appendChild(wrap);
+      }
     });
   });
 }
@@ -1438,7 +1507,7 @@ function closeOverview() {
   syncSideCol();
 }
 
-document.getElementById('toolOverview').onclick = () => {
+document.getElementById('toolOverview').onclick = async () => {
   const p = document.getElementById('overviewPanel');
   if (p.classList.contains('hidden')) {
     closeWikiAll();
@@ -1448,20 +1517,43 @@ document.getElementById('toolOverview').onclick = () => {
     p.classList.remove('hidden');
     document.getElementById('toolOverview').classList.add('active');
     syncSideCol();
-    renderOverview();
+    renderOverview();           // 일단 바로 그린다(풀이 횟수 없이) — 기다리게 하지 않는다
+    await loadOvAttemptStats();
+    if (!p.classList.contains('hidden')) renderOverview();   // 횟수가 들어오면 다시 그린다
   } else {
     closeOverview();
   }
 };
+
+/**
+ * "문항 전체보기" 행에 "3전2승" 같은 누적 풀이 횟수를 보여주기 위한 이력 캐시.
+ *
+ * `ovStatus`는 `quiz.answers`/`quiz.isCorrect`(이번 세션 상태)만 봐서 이전에 몇 번
+ * 풀었는지는 전혀 몰랐다(2026-10-26 지적 — "읽음/오답만 있고 몇 번 풀어서 몇 번
+ * 맞혔는지가 없다"). `db.js`의 `attempts` 저장소엔 이미 `n`/`wrongN`이 쌓여 있으므로
+ * 그걸 끌어와 키(`exam#num`)로 맞춰 보여주기만 하면 된다.
+ */
+let ovAttemptStats = new Map();
+async function loadOvAttemptStats() {
+  try {
+    const attempts = await allAttempts();
+    const map = new Map();
+    for (const a of attempts) map.set(a.id, { n: a.n || 0, wrongN: a.wrongN || 0 });
+    ovAttemptStats = map;
+  } catch { ovAttemptStats = new Map(); }
+}
 document.getElementById('ovClose').onclick = closeOverview;
 
 /** 문항 하나의 채점 상태 — 없는 함수(_renderOpen류)와 중복 없이 한 곳에서만 판단한다. */
 function ovStatus(i) {
   const q = quiz.all[i];
   const answered = quiz.answers[i] !== null;
-  if (q.type === 'open') return answered ? { label: '읽음', cls: 'read' } : { label: '안읽음', cls: 'new' };
-  if (!answered) return { label: '안 풂', cls: 'new' };
-  return quiz.isCorrect(i) ? { label: '정답', cls: 'ok' } : { label: '오답', cls: 'bad' };
+  // 모아 풀기로 들어온 문항은 원래 시험(__exam)에 이력이 쌓인다 — quiz.js의 _record()와
+  // 같은 키 규칙을 써야 같은 레코드를 찾는다.
+  const stat = ovAttemptStats.get(attemptId(q.__exam || quiz.examKey, q.num != null ? q.num : i + 1, q.id || null));
+  if (q.type === 'open') return { label: answered ? '읽음' : '안읽음', cls: answered ? 'read' : 'new', stat };
+  if (!answered) return { label: '안 풂', cls: 'new', stat };
+  return quiz.isCorrect(i) ? { label: '정답', cls: 'ok', stat } : { label: '오답', cls: 'bad', stat };
 }
 
 function renderOverview() {
@@ -1527,10 +1619,15 @@ function ovRow(i, status) {
   row.dataset.i = String(i);
   if (quiz.colors[i]) row.style.borderLeftColor = OV_TAGS[quiz.colors[i] - 1].hex;
 
+  // 2회 이상 풀었을 때만 "3전2승"을 보여준다 — 처음 푼 문항에 "1전1승"을 매번
+  // 띄우는 건 잡음이다(2026-10-26, "몇 번 풀어서 몇 번 맞혔는지 숫자로" 요청).
+  const stat = status.stat;
+  const statTxt = stat && stat.n > 1
+    ? `<span class="ov-stat">${stat.n}전${Math.max(0, stat.n - stat.wrongN)}승</span>` : '';
   const main = document.createElement('div');
   main.className = 'ov-main';
   main.innerHTML = `<span class="ov-num">${q.num}</span>`
-    + `<span class="ov-pill ov-pill-${status.cls}">${status.label}</span>`
+    + `<span class="ov-pill ov-pill-${status.cls}">${status.label}</span>${statTxt}`
     + `<span class="ov-stem">${escapeHtml(String(q.q || '').slice(0, 90))}</span>`;
   main.onclick = () => {
     quiz.goTo(i);
@@ -1546,12 +1643,7 @@ function ovRow(i, status) {
   star.title = '다시 볼 문항으로 표시';
   star.onclick = (e) => {
     e.stopPropagation();
-    quiz.bookmarks[i] = !quiz.bookmarks[i];
-    quiz.persist();
-    if (quiz.qIndex === i) {
-      quiz.el.bookmark.classList.toggle('active', quiz.bookmarks[i]);
-      quiz.el.bookmark.textContent = quiz.bookmarks[i] ? '★' : '☆';
-    }
+    quiz.setBookmark(i, !quiz.bookmarks[i]);   // 툴바 북마크 버튼과 같은 경로(attempts에도 반영)
     renderOverview();
   };
   acts.appendChild(star);
@@ -2742,6 +2834,12 @@ function showTab(which, { remember = true, force = false } = {}) {
 
 const KIND_OF = { quizzes: '퀴즈', exams: '모의고사', jokbo: '족보', drills: '드릴' };
 
+// 탭을 왔다갔다 누르기만 해도 매번 전체 목록을 통째로 다시 그렸다 — 퀴즈 79개·모의고사
+// 54개를 매번 DOM으로 새로 찍어내는 비용이 탭 전환마다 들었다(2026-10-26, "탭 전환이
+// 빠릿하지 않다" 지적). 내용이 바뀌지 않았으면 다시 그리지 않는다 — 바뀌는 경로(퀴즈 풀이
+// 종료, ↻ 새로고침)는 지문이 달라지므로 자동으로 다시 그려진다.
+const redrawFingerprint = {};   // which -> 마지막으로 그린 내용의 지문
+
 /** 캐시된 목록으로 그 탭을 다시 그린다. 캐시가 없으면 vault에서 한 번 읽는다. */
 async function redrawList(which) {
   if (!(await hasToken())) return;
@@ -2749,7 +2847,18 @@ async function redrawList(which) {
   const stale = !body.children.length || /중…/.test(body.textContent);
   const index = await buildExamIndex(false);
   if (!index.length && !stale) return;
-  renderList(index, await allSessions(), KIND_OF[which]);
+  const sessions = await allSessions();
+  const attempts = await allAttempts();
+  // 오답 칩(examProgress)도 지문에 넣는다 — 안 그러면 다른 탭에서 퀴즈를 풀고 돌아왔을 때
+  // 이 탭의 "오답 N" 칩이 바뀐 걸 안 보고 건너뛸 수 있다.
+  const weakByExam = index.flatMap((g) => g.exams.map((e) => [e.path, examProgress(attempts, e.path).weak]));
+  const fp = JSON.stringify(index.map((g) => [g.subject, g.kind, g.exams.map((e) => e.path)]))
+    + '|' + JSON.stringify(Object.entries(sessions).map(
+      ([p, s]) => [p, (s.answers || []).filter((a) => a !== null).length, s.total]))
+    + '|' + JSON.stringify(weakByExam);
+  if (!stale && redrawFingerprint[which] === fp) return;    // 내용이 그대로면 다시 안 그린다
+  redrawFingerprint[which] = fp;
+  renderList(index, sessions, KIND_OF[which], attempts);
 }
 
 /** 마지막으로 보던 탭으로 돌아간다 — 매번 퀴즈 탭부터 찾아 들어가지 않게. */
@@ -2826,14 +2935,25 @@ async function loadTodayTab(force) {
     // 다르므로 '_' 를 떼고 견준다.
     const norm = (s) => String(s || '').replace(/[_\s]/g, '');
     const hotSubject = next ? norm(next.src) : '';
-    const groups = weakBySubject(attempts);
-    groups.sort((a, b) => (norm(b.subject) === hotSubject) - (norm(a.subject) === hotSubject));
+    // 과목×종류(퀴즈/모의고사/드릴/족보)별로 먼저 나누고(2026-10-26, "과목별/드릴별/
+    // 모의고사별로 모으고 싶다"), 과목 행에는 sumBySubject로 다시 합친 전체 수를 보여준다.
+    const kindGroups = weakBySubject(attempts);
+    const subjectGroups = sumBySubject(kindGroups);
+    subjectGroups.sort((a, b) => (norm(b.subject) === hotSubject) - (norm(a.subject) === hotSubject));
 
     const weakSec = section(body, '다시 볼 문항');
-    if (!groups.length) {
+    const totalWeak = kindGroups.reduce((s, g) => s + g.weak, 0);
+    if (totalWeak) {
+      const totalLine = document.createElement('div');
+      totalLine.className = 'muted';
+      totalLine.style.cssText = 'font-size:12px;margin:-2px 0 6px 2px';
+      totalLine.textContent = `전체 ${totalWeak}개`;
+      weakSec.appendChild(totalLine);
+    }
+    if (!subjectGroups.length) {
       weakSec.appendChild(muted('아직 푼 문항이 없습니다. 모의고사를 하나 풀면 여기에 쌓입니다.'));
     } else {
-      groups.forEach((g) => {
+      subjectGroups.forEach((g) => {
         const row = document.createElement('button');
         row.className = 'exam-item';
         const name = document.createElement('span');
@@ -2841,6 +2961,7 @@ async function loadTodayTab(force) {
         const bits = [];
         if (g.wrong) bits.push(`틀림 ${g.wrong}`);
         if (g.unsure) bits.push(`찍음 ${g.unsure}`);
+        if (g.star) bits.push(`★ ${g.star}`);
         name.innerHTML = `<b>${escapeHtml(g.subject)}</b>`
           + `<span class="exam-meta">${bits.join(' · ') || '없음'} · 푼 문항 ${g.total}개</span>`;
         const tail = document.createElement('span');
@@ -2848,8 +2969,25 @@ async function loadTodayTab(force) {
         tail.textContent = g.weak ? `${g.weak}개 ›` : '✓';
         row.append(name, tail);
         row.disabled = !g.weak;
-        row.onclick = () => openWeakQueue(g.subject);
+        row.onclick = () => openWeakQueue({ subject: g.subject });
         weakSec.appendChild(row);
+
+        // 종류가 둘 이상 섞여 있을 때만 쪼개 보여준다 — 한 종류뿐이면 칩이 중복 정보라
+        // 잡음만 된다.
+        const withWeak = g.byKind.filter((k) => k.weak);
+        if (withWeak.length > 1) {
+          const chips = document.createElement('div');
+          chips.className = 'today-chips';
+          chips.style.marginLeft = '8px';
+          withWeak.forEach((k) => {
+            const b = document.createElement('button');
+            b.className = 'chip';
+            b.textContent = `${k.kind || '기타'} ${k.weak}`;
+            b.onclick = () => openWeakQueue({ subject: g.subject, kind: k.kind });
+            chips.appendChild(b);
+          });
+          weakSec.appendChild(chips);
+        }
       });
     }
 
@@ -2945,18 +3083,23 @@ async function openNoteByName(name, { groups: given, force = false } = {}) {
 }
 
 /**
- * 과목 전체에서 약한 문항만 모아 푼다.
+ * 약한 문항만 모아 푼다 — 과목 전체, 과목×종류, 또는 시험 하나로 좁힐 수 있다.
  *
  * 여러 시험에서 문항을 끌어오므로 문항마다 원래 시험을 `__exam`에 달아둔다 —
  * 풀이 이력이 원본 시험에 쌓여야 다음에도 같은 판단이 선다.
+ *
+ * @param {object} opts
+ * @param {string} [opts.subject] 과목으로 좁힌다
+ * @param {string} [opts.kind]    종류(퀴즈/모의고사/드릴/족보)로 더 좁힌다
+ * @param {string} [opts.exam]    한 시험(경로)으로 좁힌다 — 목록 화면의 "오답 N" 칩이 쓴다
  */
-async function openWeakQueue(subject) {
+async function openWeakQueue({ subject, kind, exam } = {}) {
   const body = document.getElementById('todayBody');
   const keep = body.innerHTML;
   body.innerHTML = '<p class="muted">약한 문항을 모으는 중…</p>';
   try {
     const attempts = await allAttempts();
-    const want = weakQueue(attempts, { subject, limit: 40 });
+    const want = weakQueue(attempts, { subject, kind, exam, limit: 40 });
     if (!want.length) { body.innerHTML = keep; toast('다시 볼 문항이 없습니다.'); return; }
 
     const byExam = new Map();
@@ -2983,8 +3126,12 @@ async function openWeakQueue(subject) {
     // 모아 풀기는 순서 자체가 섞여 있어야 "무슨 유형인지 고르는" 연습이 된다
     shuffle(picked);
 
+    const subj = subject || want[0].subject || '';
+    // 시험 하나로 좁힌 경우엔 과목명보다 그 시험 제목이 더 뜻이 선다.
+    const label = exam ? (want[0].title || prettyExamName(exam.split('/').pop()))
+      : kind ? `${subj} · ${kind}` : subj;
     // file이 비면 vault에 저장할 때 파일명이 "과목_날짜__모의고사풀이.md"로 빈다
-    currentExam = { subject, file: '다시볼문항.html', path: WEAK_KEY, title: `다시 볼 문항 — ${subject}` };
+    currentExam = { subject: subj, file: '다시볼문항.html', path: WEAK_KEY, title: `다시 볼 문항 — ${label}` };
     if (quiz) quiz.destroy();
     destroyPen();
     closeOverview();
@@ -2992,12 +3139,12 @@ async function openWeakQueue(subject) {
     quiz = new Quiz({
       examKey: WEAK_KEY,
       questions: picked,
-      title: `다시 볼 문항 — ${subject} (${picked.length})`,
+      title: `다시 볼 문항 — ${label} (${picked.length})`,
       onFinish: showResult,
       onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); loadList(false); },
       onRender: onQuestionRender,
       onCopy: copyQuestionText,
-      meta: { subject, kind: '모아풀기' },
+      meta: { subject: subj, kind: '모아풀기' },
     });
     show('quizScreen');
     quiz.start();
@@ -3009,90 +3156,120 @@ async function openWeakQueue(subject) {
 }
 
 // ---- 노트 목록 ----
+// 노트 390개를 뿌리×과목별 <details> 트리로 매번 통째로 다시 그리던 걸(탭을 눌러서 다시
+// 올 때마다) 지문이 그대로면 건너뛴다(2026-10-26, "탭 전환이 빠릿하지 않다" 지적) —
+// "이번 주 강의" 박스는 넘기기 버튼 상태(noteWeekPick)가 바뀔 수 있어 가볍게 매번 새로
+// 그리고, 무거운 트리만 가린다.
+const notesTreeFingerprint = { v: null };
+
 async function loadNotesTab(force) {
   const body = document.getElementById('notesBody');
-  body.innerHTML = '<p class="muted">불러오는 중…</p>';
+  // 트리가 이미 떠 있는가 — 없으면(처음 진입·로딩중·오류·빈 결과 직후) 전부 새로 그린다.
+  const hasTree = !!body.querySelector(':scope > .notes-tree');
+  if (!hasTree) body.innerHTML = '<p class="muted">불러오는 중…</p>';
+  let groups;
   try {
-    const groups = await noteList(force);
-    body.innerHTML = '';
-    if (!groups.length) {
-      // 빈 화면은 **어디를 보는 중이고 무엇을 하면 되는지**를 말해야 한다.
-      // 다른 탭(퀴즈·족보)은 이미 그렇게 하는데 노트만 한 줄로 끝났다(2026-10-14 점검).
-      body.innerHTML = '';
-      body.append(muted('노트를 찾지 못했습니다. vault의 02_Wiki/{과목}/ · 98_예습노트_보관/{과목}/ 를 읽습니다.'));
-      const again = document.createElement('button');
-      again.className = 'btn';
-      again.textContent = '↻ vault에서 다시 찾기';
-      again.onclick = () => loadNotesTab(true);
-      body.appendChild(again);
-      return;
-    }
-
-    // 이번 주 강의를 맨 위에 — 폴더를 더듬어 들어가지 않고 바로 열게(2026-10-13 요청).
-    // 노트 목록은 뿌리 3개 × 과목 28개라 "지금 배우는 것"을 찾는 데 손이 많이 간다.
-    await renderNoteWeek(body, groups);
-
-    // 뿌리(예습노트/Wiki/임종평)로 한 겹 묶는다. 임종평만 20개 과목이라
-    // 그냥 늘어놓으면 28개 그룹이 깔려서 내 과목을 못 찾는다(2026-10-09).
-    const ROOT_META = {
-      '98_예습노트_보관': { label: '예습노트', order: 0, open: true },
-      '02_Wiki': { label: '위키', order: 1, open: true },
-      '01_임종평_전범위': { label: '임종평 전범위', order: 2, open: false },
-    };
-    const byRoot = new Map();
-    for (const g of groups) {
-      if (!byRoot.has(g.root)) byRoot.set(g.root, []);
-      byRoot.get(g.root).push(g);
-    }
-    const roots = [...byRoot.entries()].sort(
-      (a, b) => (ROOT_META[a[0]]?.order ?? 9) - (ROOT_META[b[0]]?.order ?? 9));
-
-    const noteBtn = (n) => {
-      const b = document.createElement('button');
-      b.className = 'exam-item';
-      const name = document.createElement('span');
-      name.className = 'exam-name';
-      name.textContent = n.name.replace(/^\d{4}_/, '');
-      const arrow = document.createElement('span');
-      arrow.className = 'exam-progress';
-      arrow.textContent = '›';
-      b.append(name, passTag(n.path), arrow);
-      b.onclick = () => openNote(n.path);
-      return b;
-    };
-
-    for (const [root, gs] of roots) {
-      const meta = ROOT_META[root] || { label: root.replace(/^\d+_/, ''), open: false };
-      const total = gs.reduce((a, g) => a + g.notes.length, 0);
-
-      const outer = document.createElement('details');
-      outer.className = 'root-group';
-      outer.open = !!meta.open;
-      const osum = document.createElement('summary');
-      osum.className = 'root-head';
-      osum.innerHTML =
-        '<span class="head-row">' +
-        `<span>${escapeText(meta.label)}</span>` +
-        `<span class="subject-count">${gs.length}과목 · ${total}개</span>` + '</span>';
-      outer.appendChild(osum);
-      body.appendChild(outer);
-
-      for (const g of gs) {
-        const det = document.createElement('details');
-        det.className = 'subject-group';
-        const sum = document.createElement('summary');
-        sum.className = 'subject-head';
-        sum.innerHTML =
-          '<span class="head-row">' +
-        `<span>${escapeText(g.subject.replace(/^\d+_/, '').replace(/_/g, ' '))}</span>` +
-          `<span class="subject-count">${g.notes.length}개</span>` + '</span>';
-        det.appendChild(sum);
-        outer.appendChild(det);
-        g.notes.forEach((n) => det.appendChild(noteBtn(n)));
-      }
-    }
+    groups = await noteList(force);
   } catch (e) {
     body.innerHTML = `<div class="warn-box">노트 목록을 불러오지 못했습니다: ${e.message}</div>`;
+    notesTreeFingerprint.v = null;
+    return;
+  }
+
+  if (!groups.length) {
+    // 빈 화면은 **어디를 보는 중이고 무엇을 하면 되는지**를 말해야 한다.
+    // 다른 탭(퀴즈·족보)은 이미 그렇게 하는데 노트만 한 줄로 끝났다(2026-10-14 점검).
+    body.innerHTML = '';
+    body.append(muted('노트를 찾지 못했습니다. vault의 02_Wiki/{과목}/ · 98_예습노트_보관/{과목}/ 를 읽습니다.'));
+    const again = document.createElement('button');
+    again.className = 'btn';
+    again.textContent = '↻ vault에서 다시 찾기';
+    again.onclick = () => loadNotesTab(true);
+    body.appendChild(again);
+    notesTreeFingerprint.v = null;
+    return;
+  }
+
+  // 이번 주 강의를 맨 위에 — 폴더를 더듬어 들어가지 않고 바로 열게(2026-10-13 요청).
+  // 노트 목록은 뿌리 3개 × 과목 28개라 "지금 배우는 것"을 찾는 데 손이 많이 간다.
+  let weekSlot = body.querySelector(':scope > .nw-slot');
+  if (!weekSlot) {
+    weekSlot = document.createElement('div');
+    weekSlot.className = 'nw-slot';
+    body.prepend(weekSlot);
+  }
+  weekSlot.innerHTML = '';
+  await renderNoteWeek(weekSlot, groups);
+
+  const fp = JSON.stringify(groups.map((g) => [g.root, g.subject, g.notes.map((n) => n.path)]));
+  if (hasTree && notesTreeFingerprint.v === fp) return;   // 내용이 그대로면 트리는 다시 안 그린다
+  notesTreeFingerprint.v = fp;
+  let treeSlot = body.querySelector(':scope > .notes-tree');
+  if (!treeSlot) {
+    treeSlot = document.createElement('div');
+    treeSlot.className = 'notes-tree';
+    body.appendChild(treeSlot);
+  }
+  treeSlot.innerHTML = '';
+
+  // 뿌리(예습노트/Wiki/임종평)로 한 겹 묶는다. 임종평만 20개 과목이라
+  // 그냥 늘어놓으면 28개 그룹이 깔려서 내 과목을 못 찾는다(2026-10-09).
+  const ROOT_META = {
+    '98_예습노트_보관': { label: '예습노트', order: 0, open: true },
+    '02_Wiki': { label: '위키', order: 1, open: true },
+    '01_임종평_전범위': { label: '임종평 전범위', order: 2, open: false },
+  };
+  const byRoot = new Map();
+  for (const g of groups) {
+    if (!byRoot.has(g.root)) byRoot.set(g.root, []);
+    byRoot.get(g.root).push(g);
+  }
+  const roots = [...byRoot.entries()].sort(
+    (a, b) => (ROOT_META[a[0]]?.order ?? 9) - (ROOT_META[b[0]]?.order ?? 9));
+
+  const noteBtn = (n) => {
+    const b = document.createElement('button');
+    b.className = 'exam-item';
+    const name = document.createElement('span');
+    name.className = 'exam-name';
+    name.textContent = n.name.replace(/^\d{4}_/, '');
+    const arrow = document.createElement('span');
+    arrow.className = 'exam-progress';
+    arrow.textContent = '›';
+    b.append(name, passTag(n.path), arrow);
+    b.onclick = () => openNote(n.path);
+    return b;
+  };
+
+  for (const [root, gs] of roots) {
+    const meta = ROOT_META[root] || { label: root.replace(/^\d+_/, ''), open: false };
+    const total = gs.reduce((a, g) => a + g.notes.length, 0);
+
+    const outer = document.createElement('details');
+    outer.className = 'root-group';
+    outer.open = !!meta.open;
+    const osum = document.createElement('summary');
+    osum.className = 'root-head';
+    osum.innerHTML =
+      '<span class="head-row">' +
+      `<span>${escapeText(meta.label)}</span>` +
+      `<span class="subject-count">${gs.length}과목 · ${total}개</span>` + '</span>';
+    outer.appendChild(osum);
+    treeSlot.appendChild(outer);
+
+    for (const g of gs) {
+      const det = document.createElement('details');
+      det.className = 'subject-group';
+      const sum = document.createElement('summary');
+      sum.className = 'subject-head';
+      sum.innerHTML =
+        '<span class="head-row">' +
+      `<span>${escapeText(g.subject.replace(/^\d+_/, '').replace(/_/g, ' '))}</span>` +
+        `<span class="subject-count">${g.notes.length}개</span>` + '</span>';
+      det.appendChild(sum);
+      outer.appendChild(det);
+      g.notes.forEach((n) => det.appendChild(noteBtn(n)));
+    }
   }
 }
 

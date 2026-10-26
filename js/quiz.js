@@ -3,7 +3,7 @@
 
 import { getBlobUrl } from './github.js';
 import { imagePaths } from './parser.js';
-import { saveSession, loadSession, clearSession, recordAttempt, markUnsure,
+import { saveSession, loadSession, clearSession, recordAttempt, markUnsure, markBookmark,
   examRun, bumpExamRun, allAttempts, attemptId } from './db.js';
 import { scheduleBackup } from './backup.js';
 import { tokenize, tokenizeTree } from './pen.js';
@@ -125,13 +125,7 @@ export class Quiz {
     this.el.next.onclick = () => this.go(1);
     this.el.resultBtn.onclick = () => this.finish();
     this.el.back.onclick = () => { this.persist(); this.onExit(); };
-    this.el.bookmark.onclick = () => {
-      const i = this.order[this.cur];
-      this.bookmarks[i] = !this.bookmarks[i];
-      this.el.bookmark.classList.toggle('active', this.bookmarks[i]);
-      this.el.bookmark.textContent = this.bookmarks[i] ? '★' : '☆';
-      this.persist();
-    };
+    this.el.bookmark.onclick = () => this.toggleBookmark();
     this.el.memoBtn.onclick = () => {
       const show = this.el.memoBox.style.display !== 'block';
       this.el.memoBox.style.display = show ? 'block' : 'none';
@@ -210,7 +204,7 @@ export class Quiz {
   historyOf(idx) {
     const q = this.all[idx];
     if (!q) return [];
-    const id = attemptId(q.__exam || this.examKey, q.num != null ? q.num : idx + 1);
+    const id = attemptId(q.__exam || this.examKey, q.num != null ? q.num : idx + 1, q.id || null);
     return this._hist.get(id) || [];
   }
 
@@ -584,6 +578,10 @@ export class Quiz {
       // 모아 풀기에서는 문항마다 원래 시험이 다르다 — 이력은 원본 시험에 쌓아야 한다
       exam: q.__exam || this.examKey,
       num: q.num != null ? q.num : idx + 1,
+      // 문항에 안정적 원본 ID(qid)가 있으면 그걸로 이력을 모은다 — 즉석 랜덤 모의고사에서
+      // 같은 원본 문항이 다른 파일·다른 번호로 다시 뽑혀도 한 이력으로 이어진다(2026-10-26).
+      // 없으면 attemptId가 알아서 exam#num으로 돌아간다(지금까지의 모든 문항이 이 경우다).
+      qid: q.id || null,
       subject: q.__subject || this.meta.subject || '',
       kind: q.__kind || this.meta.kind || '',
       title: q.__title || this.title,
@@ -594,6 +592,28 @@ export class Quiz {
     }).catch(() => {});
   }
 
+  /**
+   * ★ 북마크를 켜고 끈다 — 툴바 버튼과 "문항 전체보기"의 별표가 같은 경로를 쓴다
+   * (2026-10-26 — 전에는 각자 `bookmarks[i]`를 따로 건드려 한쪽만 고치면 다른 쪽이
+   * 안 맞을 위험이 있었다). 과목 전체 모아보기에도 보이도록 attempts에도 남긴다 —
+   * 아직 한 번도 안 푼 문항이면(이력이 없으면) markBookmark가 조용히 아무 일도 안 한다.
+   */
+  setBookmark(i, on) {
+    this.bookmarks[i] = on;
+    this.persist();
+    if (this.qIndex === i) {
+      this.el.bookmark.classList.toggle('active', on);
+      this.el.bookmark.textContent = on ? '★' : '☆';
+    }
+    const q = this.all[i];
+    markBookmark(q.__exam || this.examKey, q.num != null ? q.num : i + 1, on, q.id || null).catch(() => {});
+  }
+
+  toggleBookmark() {
+    const i = this.qIndex;
+    this.setBookmark(i, !this.bookmarks[i]);
+  }
+
   /** "찍었음" 토글 — 맞았어도 다시 볼 큐에 넣는다. */
   toggleUnsure() {
     const idx = this.qIndex;
@@ -601,7 +621,7 @@ export class Quiz {
     const q = this.all[idx];
     this.unsure[idx] = !this.unsure[idx];
     this.persist();
-    markUnsure(q.__exam || this.examKey, q.num != null ? q.num : idx + 1, this.unsure[idx]).catch(() => {});
+    markUnsure(q.__exam || this.examKey, q.num != null ? q.num : idx + 1, this.unsure[idx], q.id || null).catch(() => {});
     this.render();
   }
 

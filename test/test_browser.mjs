@@ -2819,7 +2819,7 @@ const LECTURE_NAME = "전체보기 테스트";
     // 앞선 검사들이 남긴 상태를 치운다 — 특히 last_tab이 'cards'면 카드 화면으로 가버리고,
     // exam_index 캐시가 남아 있으면 가짜 시험이 목록에 안 들어온다.
     localStorage.setItem('last_tab', 'exams');
-    await d.kvSet('exam_index_v4', null);
+    await d.kvSet('exam_index_v5', null);
     await d.kvSet('schedule_cache', null);
   });
   await page.reload({ waitUntil: 'networkidle0' });
@@ -5251,7 +5251,7 @@ await run('새 퀴즈가 저절로 뜬다', async () => {
     return { ok: true, status: 200, json: async () => ([]), text: async () => '' };
   };
   try {
-    await d.kvSet('exam_index_v4', null);
+    await d.kvSet('exam_index_v5', null);
     await d.kvSet('exam_index_at', 0);
     const first = await window.__examIndex();
     const quizOf = (idx) => (idx.find((g) => g.kind === '퀴즈') || { exams: [] }).exams.length;
@@ -5273,7 +5273,7 @@ await run('새 퀴즈가 저절로 뜬다', async () => {
     out.push({ name: '새 퀴즈 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 130) });
   } finally {
     window.fetch = real;
-    await d.kvSet('exam_index_v4', null);
+    await d.kvSet('exam_index_v5', null);
     await d.kvSet('exam_index_at', 0);
   }
   return out;
@@ -8103,7 +8103,7 @@ await run('아이콘 통일', () => {
 await run('빈 화면 안내', async () => {
   const out = [];
   const d = await import('/js/db.js');
-  await d.kvSet('exam_index_v4', []);
+  await d.kvSet('exam_index_v5', []);
   await d.kvSet('note_index_v2', []);
   const says = {};
   const bodyOf = () => document.querySelector('#quizBody:not(.hidden), #listBody:not(.hidden), #jokboBody:not(.hidden), #notesBody:not(.hidden)');
