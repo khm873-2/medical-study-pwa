@@ -42,10 +42,36 @@ const EXAM_ROOTS = [
   // 나중에 문제은행에서 무작위로 뽑아 즉석으로 만드는 시험도 여기로 들어온다.
   { root: '07_드릴', kind: '드릴' },
   // 족보(학교 기출)는 HTML이 아니라 **가공된 마크다운**이고 과목별 가공 상태가 제각각이다.
-  // 지금 가공이 끝난 응급_중환자만 연다(2026-10-12 요청) — `only`를 늘리면 과목이 늘어난다.
-  { root: JOKBO_ROOT, kind: '족보', ext: '.md', only: ['응급_중환자'] },
+  // 가공이 끝난 과목만 연다(2026-10-12 요청) — `only`를 늘리면 과목이 늘어난다.
+  // 2026-10-27: `노년_생애말기의학` 추가(17챕터 가공 완료, 10/30 시험). 폴더를 만들어 두고
+  // 여기에 안 적으면 **앱에서는 없는 것처럼 보인다** — 실제로 그날 "족보 탭에 노인의학이
+  // 조회가 안 된다"는 신고가 들어왔다. 새 과목 족보를 가공하면 여기부터 늘린다.
+  { root: JOKBO_ROOT, kind: '족보', ext: '.md', only: ['응급_중환자', '노년_생애말기의학'] },
 ];
 const LOG_DIR = '00_Raw_Text/AI대화로그';
+
+/**
+ * 과목 이름을 견주기 위한 열쇠 — 시간표 이름과 폴더 이름이 다르게 적혀 있어서다.
+ *
+ *   시간표 `응급중환자`      ↔ 폴더 `응급_중환자`
+ *   시간표 `노년및생애말기의학` ↔ 폴더 `노년_생애말기의학`
+ *   시간표 `두경부및피부`     ↔ 폴더 `두경부_피부`
+ *
+ * `_`와 공백만 떼던 때는 **`및`이 들어간 두 과목이 영영 안 맞았다**(2026-10-27). 그래서
+ * 이어주는 말인 `및`도 함께 뗀다 — 떼고 나면 세 과목 모두 양쪽이 같은 글자가 된다.
+ */
+const subjectKey = (s) => String(s || '').replace(/[_\s및]/g, '');
+
+/**
+ * 시험 목록 캐시 키 — **버전이 붙어 있다**. EXAM_ROOTS가 바뀌면(과목·폴더가 늘면)
+ * 캐시에 그 항목이 아예 없으므로 번호를 올려야 TTL(3분)을 안 기다리고 바로 뜬다.
+ * 자세한 연혁은 `_buildExamIndex` 위 주석 참고.
+ *
+ * ⚠️ **export하는 이유**: 테스트가 이 키를 글자 그대로 박아두고 있어서, 번호를 올릴
+ * 때마다 test_browser가 "모의고사를 찾지 못했습니다"로 깨졌다(2026-10-27 실제로 겪음 —
+ * 앱은 v6에 쓰는데 테스트는 v5를 지우고 있었다). 한 곳에서 가져다 쓰면 다시는 어긋나지 않는다.
+ */
+export const EXAM_INDEX_KEY = 'exam_index_v6';
 
 /**
  * vault에 남길 파일 이름을 짓는다.
@@ -638,7 +664,10 @@ async function _buildExamIndex(force) {
   //     listTree 한 번으로 바꿨다 — reader.js의 noteList()가 2026-10-18에 같은 이유로
   //     이미 바꾼 것과 동일한 처방(2026-10-26). TTL이 3분이라 **공부 중 탭만 눌러도**
   //     자주 다시 돌던 게 문제였는데, 이제 요청이 1번이라 괜찮다.
-  const cacheKey = 'exam_index_v5';
+  // v6: 족보 `only`에 노년_생애말기의학이 들어왔다(2026-10-27). 캐시에는 그 과목이 아예
+  //     없으므로 v4와 같은 이유로 키를 올린다 — 안 올리면 TTL 3분 동안 "고쳤는데도
+  //     그대로"가 된다. 시험이 10/30이라 3분도 기다리게 하고 싶지 않다.
+  const cacheKey = EXAM_INDEX_KEY;
   const stampKey = 'exam_index_at';
   // ⚠️ 캐시가 **스스로 낡아야 한다**. 전에는 ↻ 같은 force가 없으면 영영 다시 안 읽어서,
   //    맥에서 퀴즈를 새로 만들어도 아이패드에는 영영 안 떴다(2026-10-21 신고:
@@ -868,7 +897,7 @@ async function renderNoteWeek(body, groups) {
   if (!schedule.length) return;
 
   // 시험이 임박한 과목을 먼저 — "오늘" 탭과 같은 기준
-  const norm = (x) => String(x || '').replace(/[_\s]/g, '');
+  const norm = subjectKey;
   const next = nextExam(exams);
   let pool = schedule;
   if (next) {
@@ -1123,7 +1152,7 @@ function renderDaySection(body, pool, index, attempts, noteGroups) {
 
 /** 이 강의가 어느 과목 폴더에 속하나 — 시간표의 과목명(응급중환자)과 폴더명(응급_중환자)이 다르다. */
 function subjectOfLecture(index, lecture) {
-  const norm = (x) => String(x || '').replace(/[_\s]/g, '');
+  const norm = subjectKey;
   const want = norm(lecture.src);
   const g = index.find((x) => norm(x.subject) === want);
   return g ? g.subject : '';
@@ -1178,11 +1207,19 @@ function assignExams(index, lectures, dayKeyYYMMDD) {
   return out;
 }
 
-/** 시간표의 `가공족보` 칸(파일명)으로 족보 챕터를 찾는다. */
+/**
+ * 시간표의 `가공족보` 칸(파일명)으로 족보 챕터를 찾는다.
+ *
+ * ⚠️ 과목 이름은 **subjectKey로 견준다**. 글자 그대로 맞추면 한 과목의 폴더 이름이
+ * 자리마다 다를 때 못 찾는다(2026-10-27): 노년은 퀴즈·위키가 `노년및생애말기의학`,
+ * 족보만 `노년_생애말기의학`이라 `subjectOfLecture`가 돌려준 이름과 족보 폴더 이름이
+ * 서로 달랐다. 응급은 세 곳이 다 `응급_중환자`로 같아서 여태 드러나지 않았을 뿐이다.
+ */
 function findJokboChapter(index, subject, file) {
+  const want = subjectKey(subject);
   for (const g of index) {
     if (g.kind !== '족보') continue;
-    if (subject && g.subject !== subject) continue;
+    if (want && subjectKey(g.subject) !== want) continue;
     const ex = g.exams.find((e) => e.file === file);
     if (ex) return { g, ex };
   }
@@ -2953,7 +2990,7 @@ async function loadTodayTab(force) {
     // ── 다시 볼 문항 ──
     // 시험이 임박한 과목을 먼저 보여준다 — 시간표 이름(응급중환자)과 폴더 이름(응급_중환자)이
     // 다르므로 '_' 를 떼고 견준다.
-    const norm = (s) => String(s || '').replace(/[_\s]/g, '');
+    const norm = subjectKey;
     const hotSubject = next ? norm(next.src) : '';
     // 과목×종류(퀴즈/모의고사/드릴/족보)별로 먼저 나누고(2026-10-26, "과목별/드릴별/
     // 모의고사별로 모으고 싶다"), 과목 행에는 sumBySubject로 다시 합친 전체 수를 보여준다.
@@ -6872,7 +6909,7 @@ async function renderQaImport() {
   try {
     const { schedule, exams } = await todayData(false);
     const next = nextExam(exams);
-    const norm = (s) => String(s || '').replace(/[_\s]/g, '');
+    const norm = subjectKey;
     lectures = next ? schedule.filter((l) => norm(l.src) === norm(next.src)) : [];
   } catch { /* 순서만 못 정할 뿐이라 그냥 넘어간다 */ }
 
