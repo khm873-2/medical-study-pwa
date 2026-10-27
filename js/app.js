@@ -1111,10 +1111,19 @@ function renderDaySection(body, pool, index, attempts, noteGroups) {
       () => openExam(g.subject, ex), 'exam');
     }
 
-    if (l.jokbo) {
+    // 족보 — 한 강의가 챕터 여러 개에 걸치면 **전부** 칩으로 깐다(2026-10-27).
+    // 과목 전체 목록(17챕터)을 뒤지게 하지 않고 **오늘 강의에 해당하는 것만** 준다.
+    // 둘 이상이면 챕터 이름을 칩에 적는다 — "족보" 두 개로는 뭐가 뭔지 모른다.
+    const jokboList = (l.jokbos && l.jokbos.length) ? l.jokbos : (l.jokbo ? [l.jokbo] : []);
+    if (jokboList.length) {
       const subject = subjectOfLecture(index, l) || '';
-      const hit = findJokboChapter(index, subject, l.jokbo);
-      if (hit) chip('📜 족보', () => openExam(hit.g.subject, hit.ex));
+      const hits = jokboList.map((f) => findJokboChapter(index, subject, f)).filter(Boolean);
+      for (const hit of hits) {
+        const label = hits.length > 1
+          ? `📜 족보 · ${prettyExamName(hit.ex.file)}`
+          : '📜 족보';
+        chip(label, () => openExam(hit.g.subject, hit.ex));
+      }
     }
     if (chips.children.length) row.appendChild(chips);
     else row.appendChild(muted('아직 만들어진 자료가 없습니다.'));

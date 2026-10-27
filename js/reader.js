@@ -1608,8 +1608,13 @@ export function parseSchedule(md, { year } = {}) {
       return m ? m[1].trim() : '';
     };
     // 가공족보 칸은 위키링크가 아니라 파일명이 그대로 적혀 있다(예: `02_기본소생술_BLS.md`)
+    //
+    // ⚠️ **한 강의가 족보 챕터 여러 개에 걸칠 수 있다**(2026-10-27). 노년 "노인의학"은
+    // 과목소개상 소개·인구학·노화특성·근감소증·노인증후군(01) + 포괄적 기능평가(02) +
+    // 노인과 약물(03) 세 챕터에 걸친다. 전에는 첫 번째 하나만 집어서 나머지 둘로는
+    // 홈 화면에서 영영 못 넘어갔다. 칸에 적힌 `NN_….md`를 **전부** 받는다.
     const jokboCell = cols.jokbo >= 0 ? (cells[cols.jokbo] || '') : '';
-    const jm = jokboCell.match(/(\d{2}_[^\s`|]+\.md)/);
+    const jokbos = [...new Set(jokboCell.match(/\d{2}_[^\s`|,·]+\.md/g) || [])];
     out.push({
       date,
       at,
@@ -1618,7 +1623,9 @@ export function parseSchedule(md, { year } = {}) {
       teacher: cols.teacher >= 0 ? (cells[cols.teacher] || '').replace(/^[-—]$/, '') : '',
       note: wikiLink(cols.note),
       wiki: wikiLink(cols.wiki),
-      jokbo: jm ? jm[1] : '',
+      // `jokbo`는 첫 챕터(기존 코드 호환), `jokbos`는 전부.
+      jokbo: jokbos[0] || '',
+      jokbos,
     });
   }
   return out;
