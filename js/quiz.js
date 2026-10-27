@@ -3,7 +3,7 @@
 
 import { getBlobUrl } from './github.js';
 import { imagePaths } from './parser.js';
-import { saveSession, loadSession, clearSession, recordAttempt, markUnsure, markBookmark,
+import { saveSession, loadSession, clearSession, recordAttempt, undoAttempt, markUnsure, markBookmark,
   examRun, bumpExamRun, allAttempts, attemptId, markExamFinished, unmarkExamFinished } from './db.js';
 import { scheduleBackup } from './backup.js';
 import { tokenize, tokenizeTree } from './pen.js';
@@ -59,7 +59,7 @@ export class Quiz {
    * @param {Function} opts.onExit   목록으로 나갈 때
    * @param {object} [opts.meta]     {subject, kind} — 풀이 이력을 과목 단위로 모으기 위해
    */
-  constructor({ examKey, questions, title, onFinish, onExit, onRender, onCopy, meta }) {
+  constructor({ examKey, questions, title, onFinish, onExit, onRender, onCopy, onToast, meta }) {
     this.examKey = examKey;
     this.meta = meta || {};
     this.all = questions;
@@ -71,6 +71,8 @@ export class Quiz {
     this.onRender = onRender || (() => {});
     // 클립보드는 앱이 맡는다 — 이 모듈은 **글만** 만든다(브라우저 밖 검사에서도 돌게)
     this.onCopy = onCopy || (async () => false);
+    // 짧은 안내 띄우기 — 앱이 넣어준다(없으면 조용히 넘어간다)
+    this.onToast = onToast || (() => {});
 
     this.cur = 0;
     this.answers = new Array(questions.length).fill(null);
@@ -567,6 +569,34 @@ export class Quiz {
   }
 
   /**
+   * 손가락이 미끄러져 엉뚱한 선지를 눌렀을 때 — **안 푼 상태로 되돌린다**
+   * (2026-10-28 요청: "가끔 잘못 누를 때가 있는데 다시풀기 하면 카운트 다시 초기화해야 함").
+   *
+   * 오입력은 모르는 게 아니라서, 그대로 두면 약점 통계(`wrongN`)가 오염되고 "다시 볼
+   * 문항"에 섞여 **정작 약한 문항을 가려버린다**. 화면의 답·해설을 지우는 데서 그치지
+   * 않고 이력에서도 그 한 번을 뗀다.
+   */
+  async unselect() {
+    const idx = this.qIndex;
+    if (this.answers[idx] === null) return false;
+    const q = this.all[idx];
+    this.answers[idx] = null;
+    this.unsure[idx] = false;
+    this.eliminated[idx] = new Set();    // 소거선(✕)도 같이 턴다 — 처음부터 다시 보는 게 맞다
+    this._recorded.delete(idx);
+    this.persist();
+    if (q && q.type !== 'open') {
+      await undoAttempt({
+        exam: q.__exam || this.examKey,
+        num: q.num != null ? q.num : idx + 1,
+        qid: q.id || null,
+      }).catch(() => {});
+    }
+    this.render();
+    return true;
+  }
+
+  /**
    * 이 문항의 풀이 결과를 이력에 남긴다 — 과목 전체에서 약한 문항을 모으기 위해.
    * 실패해도 풀이를 막지 않는다(저장소 문제로 시험을 못 보면 안 된다).
    */
@@ -688,6 +718,18 @@ export class Quiz {
     if (q.explain) this.el.expText.appendChild(mk(`📌 ${escapeHtml(q.explain)}`));
     if (Array.isArray(q.opt) && q.opt.some(Boolean) && q.type !== 'mc') {
       this.el.expText.appendChild(mk('오답노트:\n' + q.opt.map((t, i) => (t ? `${CIRCLED[i]} ${t}` : '')).filter(Boolean).join('\n')));
+    }
+    // 잘못 눌렀을 때 물릴 자리 — 해설 맨 아래에 둔다(2026-10-28 요청).
+    // 틀린 경우에만 보인다: 맞은 문항에 "다시 풀기"가 있으면 점수를 손으로 올리는
+    // 길이 되어버린다. 오입력을 되돌리는 것이지 답을 고치는 장치가 아니다.
+    if (!this.isCorrect(idx)) {
+      const again = document.createElement('button');
+      again.className = 'chip retry-miss';
+      again.textContent = '✋ 잘못 눌렀어요 — 이 문제 다시';
+      again.onclick = async () => {
+        if (await this.unselect()) this.onToast?.('안 푼 상태로 되돌렸습니다.');
+      };
+      this.el.expText.appendChild(again);
     }
     // 답을 고르면 선지별 해설(.opt-explain)이 새로 붙는다 — 문제 카드를 통째로 다시 깐다.
     // 해설 상자만 깔면 선지 밑에 붙은 글이 빠져 거기만 한 줄씩 잡혔다(2026-10-19).

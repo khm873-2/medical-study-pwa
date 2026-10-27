@@ -19,6 +19,7 @@ import {
   deckTree, cardsInDeck, liveCards, isArchivedCard, deckOf, subKey, noteKey,
   isStarred, isSuspended, isLeech, LEECH_AT, retrievability, parseExamDates, nextExam,
   parseSchedule, lecturesFor, lectureDays, weekOf, dayKey, qaCards, dueToday,
+  parseRoadmap, roadmapToday,
   splitAnswer,
   splitWord, wordScore, blockContext, blankNode, tidyCardHtml,
 } from './reader.js';
@@ -1310,6 +1311,7 @@ async function openExam(subject, ex) {
       onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); stopTimer(); loadList(false); },
       onRender: onQuestionRender,
       onCopy: copyQuestionText,
+      onToast: toast,
       meta: { subject, kind: ex.kind || '' },
     });
     const had = await quiz.restore();
@@ -2971,6 +2973,114 @@ async function todayData(force) {
   return todayCache;
 }
 
+/**
+ * 임종평 로드맵의 위키링크 하나가 **어디로 가야 하는지**만 판정한다(실행은 안 한다).
+ * 모양은 같아도 가리키는 대상이 둘이다: 대단원 노트(이 로드맵과 같은
+ * `01_임종평_전범위` 폴더 안)는 노트로, 드릴·모의고사([[../07_드릴/…]] 처럼 다른
+ * 루트로 나가는 상대경로)는 **시험 파일**이다. EXAM_ROOTS의 root→kind 매핑을 그대로
+ * 재사용해 분기한다.
+ *
+ * 판정과 실행(openNote/openExam 호출)을 分리해 둔 이유 — 판정 쪽(경로 정규화, 루트
+ * 매칭, 확장자 처리)이 실제 버그가 나기 쉬운 지점인데, 순수 함수로 떼어 두면 실제
+ * GitHub 통신 없이도 단위 테스트로 검증할 수 있다.
+ */
+export function resolveJongpyeongLink(path) {
+  const clean = path.replace(/^(\.\.\/)+/, '');
+  for (const { root, kind } of EXAM_ROOTS) {
+    if (clean.startsWith(`${root}/`)) {
+      return { kind: 'exam', subject: '임종평_전범위',
+        ex: { path: `${clean}.html`, file: `${clean.split('/').pop()}.html`, kind } };
+    }
+  }
+  return { kind: 'note', path: `01_임종평_전범위/${clean}.md` };
+}
+
+function openJongpyeongLink(path) {
+  const r = resolveJongpyeongLink(path);
+  if (r.kind === 'exam') openExam(r.subject, r.ex);
+  else openNote(r.path);
+}
+
+/** 로드맵 한 행(parts)을 DOM에 푼다 — 평문은 텍스트로, 위키링크는 누를 수 있는 칩으로. */
+function renderRoadmapParts(container, parts) {
+  parts.forEach((p) => {
+    if (p.t === 'text') { container.appendChild(document.createTextNode(p.v)); return; }
+    const a = document.createElement('span');
+    a.className = 'wikilink';
+    a.textContent = p.label;
+    a.onclick = () => openJongpyeongLink(p.path);
+    container.appendChild(a);
+  });
+}
+
+// 로드맵은 세션 동안 한 번만 찾으면 된다(매번 탭을 열 때마다 vault를 다시 뒤지지 않는다).
+// 실제로 찾은 경로도 같이 기억해 둔다 — "전체 일정표 보기" 버튼이 그 경로로 정확히
+// 열어야 하는데, 파일명이 나중에 바뀌어도(`_일정_1126시험.md` → 다른 이름) 깨지지
+// 않으려면 하드코딩하지 않고 찾은 그대로 써야 한다.
+let jpRoadmapCache = null;
+// 검사가 네트워크 없이 로드맵 카드를 바로 그려보게 하는 주입 통로 — db.js의
+// `export const _setNoteAt`과 같은 패턴이다(모듈 밖에서 `let`을 직접 재할당할 수 없으니
+// setter 함수로 연다).
+export const _setJpRoadmapCache = (v) => { jpRoadmapCache = v; };
+async function loadJongpyeongRoadmap(force) {
+  if (jpRoadmapCache && !force) return jpRoadmapCache;
+  let rows = [];
+  let path = null;
+  try {
+    const guess = '01_임종평_전범위/_일정_1126시험.md';
+    let md = await getTextIfExists(guess);
+    if (md) path = guess;
+    if (!md) {
+      const files = await listDir('01_임종평_전범위').catch(() => []);
+      const hit = files.find((f) => f.type === 'file' && /^_일정.*\.md$/.test(f.name));
+      if (hit) { md = await getText(hit.path); path = hit.path; }
+    }
+    if (md) rows = parseRoadmap(md);
+  } catch { /* 네트워크 실패 — 카드를 생략할 뿐, 탭 전체를 막지 않는다 */ }
+  jpRoadmapCache = { rows, path };
+  return jpRoadmapCache;
+}
+
+/** "임종평 전범위" 카드 — 오늘 범위 + 다시 볼 문항 + 전체 일정표, 세 갈래만 보여준다. */
+async function renderJongpyeongCard(body, jpGroup, force) {
+  const { rows, path } = await loadJongpyeongRoadmap(force);
+  if (!rows.length || !path) return;   // 로드맵 파일을 못 찾으면 카드 자체를 생략한다
+  const today = roadmapToday(rows);
+  if (!today) return;
+
+  const sec = section(body, '📚 임종평 전범위');
+  const card = document.createElement('div');
+  card.className = 'jp-card';
+
+  const head = document.createElement('div');
+  head.className = 'jp-head';
+  head.innerHTML = `<b>${today.date.slice(5).replace('-', '/')}(${today.dow})</b>`;
+  card.appendChild(head);
+
+  const textEl = document.createElement('div');
+  textEl.className = 'jp-text';
+  renderRoadmapParts(textEl, today.parts);
+  card.appendChild(textEl);
+
+  const chips = document.createElement('div');
+  chips.className = 'today-chips';
+  if (jpGroup && jpGroup.weak) {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.textContent = `다시 볼 문항 ${jpGroup.weak}개`;
+    b.onclick = () => openWeakQueue({ subject: jpGroup.subject });
+    chips.appendChild(b);
+  }
+  const allBtn = document.createElement('button');
+  allBtn.className = 'chip';
+  allBtn.textContent = '전체 일정표 보기';
+  allBtn.onclick = () => openNote(path);
+  chips.appendChild(allBtn);
+  card.appendChild(chips);
+
+  sec.appendChild(card);
+}
+
 async function loadTodayTab(force) {
   const body = document.getElementById('todayBody');
   body.innerHTML = '<p class="muted">불러오는 중…</p>';
@@ -3004,11 +3114,32 @@ async function loadTodayTab(force) {
     // 과목×종류(퀴즈/모의고사/드릴/족보)별로 먼저 나누고(2026-10-26, "과목별/드릴별/
     // 모의고사별로 모으고 싶다"), 과목 행에는 sumBySubject로 다시 합친 전체 수를 보여준다.
     const kindGroups = weakBySubject(attempts);
-    const subjectGroups = sumBySubject(kindGroups);
-    subjectGroups.sort((a, b) => (norm(b.subject) === hotSubject) - (norm(a.subject) === hotSubject));
+    const allSubjectGroups = sumBySubject(kindGroups);
+    allSubjectGroups.sort((a, b) => (norm(b.subject) === hotSubject) - (norm(a.subject) === hotSubject));
+
+    // 임종평_전범위는 "그날 강의"가 아니라 **독립 트랙**이다(틈틈이 준비하는 복습
+    // 로드맵). 일반 "다시 볼 문항" 목록에 과목 하나로 섞여 있으면 누르자마자 바로
+    // 오답 큐로 가버려서, 그 트랙의 로드맵(오늘 어디까지 왔는지)을 볼 길이 없었다
+    // (2026-10-28 지적: "임종평 전범위 버튼을 누르면 바로 틀렸던 문제로 연결되는
+    // 것 같은데, 그게 아니라 오늘 뭘 할 차례인지 보여주는 창을 거쳐야 한다"). 그래서
+    // 여기서 빼내 아래 renderJongpyeongCard()가 따로 그리는 자리로 보낸다.
+    const JP_SUBJECT = '임종평_전범위';
+    const isJp = (s) => norm(s) === norm(JP_SUBJECT);
+    const jpGroup = allSubjectGroups.find((g) => isJp(g.subject)) || null;
+    const subjectGroups = allSubjectGroups.filter((g) => !isJp(g.subject));
+
+    // 보관된 과목(= 시험이 끝나 더 안 볼 과목) — 카드 덱과 같은 키 체계, 지우지 않고 숨긴다.
+    const weakArchived = new Set((await kvGet(WEAK_ARCHIVE_KEY)) || []);
+    const saveWeakArchived = () => kvSet(WEAK_ARCHIVE_KEY, [...weakArchived]);
+    // ⚠️ live/gone은 **고정 배열로 한 번만 나누면 안 된다** — 보관·복원으로
+    // weakArchived가 바뀐 뒤에도 renderWeak()가 다시 불릴 때마다 최신 상태로 나눠야
+    // 한다(실제 버그: 복원했는데도 "보관된 과목" 헤더가 그대로 남아 있었다. 고정
+    // 배열이 처음 계산된 값을 그대로 들고 있었기 때문).
+    const liveGroups = () => subjectGroups.filter((g) => !weakArchived.has(norm(g.subject)));
+    const goneGroups = () => subjectGroups.filter((g) => weakArchived.has(norm(g.subject)));
 
     const weakSec = section(body, '다시 볼 문항');
-    const totalWeak = kindGroups.reduce((s, g) => s + g.weak, 0);
+    const totalWeak = kindGroups.filter((g) => !isJp(g.subject)).reduce((s, g) => s + g.weak, 0);
     if (totalWeak) {
       const totalLine = document.createElement('div');
       totalLine.className = 'muted';
@@ -3016,32 +3147,64 @@ async function loadTodayTab(force) {
       totalLine.textContent = `전체 ${totalWeak}개`;
       weakSec.appendChild(totalLine);
     }
-    if (!subjectGroups.length) {
-      weakSec.appendChild(muted('아직 푼 문항이 없습니다. 모의고사를 하나 풀면 여기에 쌓입니다.'));
-    } else {
-      subjectGroups.forEach((g) => {
-        const row = document.createElement('button');
-        row.className = 'exam-item';
-        const name = document.createElement('span');
-        name.className = 'exam-name';
-        const bits = [];
-        if (g.wrong) bits.push(`틀림 ${g.wrong}`);
-        if (g.unsure) bits.push(`찍음 ${g.unsure}`);
-        if (g.star) bits.push(`★ ${g.star}`);
-        name.innerHTML = `<b>${escapeHtml(g.subject)}</b>`
-          + `<span class="exam-meta">${bits.join(' · ') || '없음'} · 푼 문항 ${g.total}개</span>`;
-        const tail = document.createElement('span');
-        tail.className = 'exam-progress';
-        tail.textContent = g.weak ? `${g.weak}개 ›` : '✓';
-        row.append(name, tail);
-        row.disabled = !g.weak;
-        row.onclick = () => openWeakQueue({ subject: g.subject });
-        weakSec.appendChild(row);
 
-        // 종류가 둘 이상 섞여 있을 때만 쪼개 보여준다 — 한 종류뿐이면 칩이 중복 정보라
-        // 잡음만 된다.
-        const withWeak = g.byKind.filter((k) => k.weak);
-        if (withWeak.length > 1) {
+    // 과목 한 줄 — 보관/복원 버튼까지 포함해서 그린다. 보관 상태가 바뀌면 이 섹션만
+    // 다시 그린다(loadTodayTab 전체를 다시 돌 필요 없다 — 이미 손에 쥔 데이터다).
+    function renderWeakRow(list, g, { archived }) {
+      const key = norm(g.subject);
+      const wrap = document.createElement('div');
+      wrap.className = 'exam-row';
+
+      const row = document.createElement('button');
+      row.className = 'exam-item';
+      const name = document.createElement('span');
+      name.className = 'exam-name';
+      const bits = [];
+      if (g.wrong) bits.push(`틀림 ${g.wrong}`);
+      if (g.unsure) bits.push(`찍음 ${g.unsure}`);
+      if (g.star) bits.push(`★ ${g.star}`);
+      name.innerHTML = `<b>${escapeHtml(g.subject)}</b>`
+        + `<span class="exam-meta">${bits.join(' · ') || '없음'} · 푼 문항 ${g.total}개</span>`;
+      const tail = document.createElement('span');
+      tail.className = 'exam-progress';
+      tail.textContent = g.weak ? `${g.weak}개 ›` : '✓';
+      row.append(name, tail);
+      row.disabled = !g.weak || archived;
+      row.onclick = () => openWeakQueue({ subject: g.subject });
+      wrap.appendChild(row);
+
+      const arch = document.createElement('button');
+      arch.className = `deck-arch${archived ? ' on' : ''}`;
+      arch.textContent = archived ? '복원' : '보관';
+      arch.title = archived
+        ? `${g.subject} 되돌리기`
+        : `${g.subject} 보관 — 시험이 끝난 과목을 오늘 볼 것에서 뺍니다`;
+      arch.onclick = (e) => {
+        e.stopPropagation();
+        if (archived) weakArchived.delete(key); else weakArchived.add(key);
+        saveWeakArchived();
+        toast(archived ? `${g.subject}을(를) 되살렸습니다.` : `${g.subject}을(를) 보관했습니다.`);
+        renderWeak();
+      };
+      wrap.appendChild(arch);
+      list.appendChild(wrap);
+
+      // 종류별 세부(족보/퀴즈/모의고사)는 **기본 접힘** — "내가 펼치지 않으면 표시할
+      // 필요가 없다"(2026-10-28). 종류가 둘 이상 섞여 있을 때만 토글을 보여준다.
+      const withWeak = g.byKind.filter((k) => k.weak);
+      if (!archived && withWeak.length > 1) {
+        const open = weakChipsOpen.has(key);
+        const toggle = document.createElement('button');
+        toggle.className = 'chip weak-toggle';
+        toggle.style.marginLeft = '8px';
+        toggle.textContent = open ? '종류별 숨기기 ▴' : `종류별로 보기 (${withWeak.length}) ▾`;
+        toggle.onclick = () => {
+          if (open) weakChipsOpen.delete(key); else weakChipsOpen.add(key);
+          renderWeak();
+        };
+        list.appendChild(toggle);
+
+        if (open) {
           const chips = document.createElement('div');
           chips.className = 'today-chips';
           chips.style.marginLeft = '8px';
@@ -3052,10 +3215,51 @@ async function loadTodayTab(force) {
             b.onclick = () => openWeakQueue({ subject: g.subject, kind: k.kind });
             chips.appendChild(b);
           });
-          weakSec.appendChild(chips);
+          list.appendChild(chips);
         }
-      });
+      }
     }
+
+    function renderWeak() {
+      // weakSec 자체(제목+전체 N개 줄)는 그대로 두고, 그 아래 과목 목록만 다시 그린다.
+      weakSec.querySelectorAll('.weak-body').forEach((n) => n.remove());
+      const listBox = document.createElement('div');
+      listBox.className = 'weak-body';
+      weakSec.appendChild(listBox);
+
+      if (!subjectGroups.length) {
+        listBox.appendChild(muted('아직 푼 문항이 없습니다. 모의고사를 하나 풀면 여기에 쌓입니다.'));
+        return;
+      }
+      const live = liveGroups();
+      const gone = goneGroups();
+      if (!live.length) {
+        listBox.appendChild(muted('보이는 과목이 없습니다 — 전부 보관되어 있습니다.'));
+      } else {
+        live.forEach((g) => renderWeakRow(listBox, g, { archived: false }));
+      }
+
+      if (gone.length) {
+        const h = document.createElement('button');
+        h.className = `deck-arch-h${weakArchivedOpen ? ' open' : ''}`;
+        const goneN = gone.reduce((a, g) => a + g.weak, 0);
+        h.innerHTML = `<span>보관된 과목 ${gone.length}개</span>`
+          + (goneN ? `<span class="dt-n">${goneN}</span>` : '');
+        h.onclick = () => { weakArchivedOpen = !weakArchivedOpen; renderWeak(); };
+        listBox.appendChild(h);
+        if (weakArchivedOpen) {
+          gone.forEach((g) => renderWeakRow(listBox, g, { archived: true }));
+        }
+      }
+    }
+    renderWeak();
+
+    // ── 임종평 전범위(독립 트랙) ──
+    // "다시 볼 문항"에서 분리해온 jpGroup과, `01_임종평_전범위/_일정_1126시험.md`의
+    // 오늘 범위를 한 카드로 묶어 보여준다. 눌러야 할 다음 버튼이 바로 보이게
+    // ①오늘 범위 노트 ②다시 볼 문항 ③전체 일정표 세 갈래만 둔다 — 그 이상은
+    // 아직 쓸 데이터가 없다(오답 정리 주기 등은 §13 후속 과제로 남겨둔다).
+    await renderJongpyeongCard(body, jpGroup, force);
 
     // ── 수업 (날짜를 넘겨볼 수 있다) ──
     // 하루치만 보여주면 **어제 배운 걸 다시 꺼낼 길이 없다**(2026-10-13 지적).
@@ -3210,6 +3414,7 @@ async function openWeakQueue({ subject, kind, exam } = {}) {
       onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); loadList(false); },
       onRender: onQuestionRender,
       onCopy: copyQuestionText,
+      onToast: toast,
       meta: { subject: subj, kind: '모아풀기' },
     });
     show('quizScreen');
@@ -6792,6 +6997,17 @@ let deckView = {
 };
 
 const ARCHIVE_KEY = 'deck_archived';
+// "다시 볼 문항"의 보관 — 카드 덱(ARCHIVE_KEY)과 같은 패턴이다(2026-10-28 요청:
+// "족보 68·퀴즈 55 이렇게 있을 필요가 없음. 끝난 과목인데. 응급·두경부는 다 끝났으니
+// 안 보이는 곳에 두거나 지우는 기능을 만들든가"). 지우는 게 아니라 **숨기는 것**이라
+// attempts 기록은 그대로 남고, 보관 버튼을 다시 누르면 그대로 돌아온다.
+export const WEAK_ARCHIVE_KEY = 'weak_archived';
+// 종류칩(족보/퀴즈/모의고사 세부)을 펼쳐본 과목 — 세션 동안만 기억한다(새로고침하면
+// 다시 접힌 채 시작). "내가 펼치지 않으면 표시할 필요가 없다"는 요청의 핵심이라,
+// 기본값은 항상 닫힘이다.
+const weakChipsOpen = new Set();
+// "보관된 과목 N개" 접기 헤더가 열려 있는지 — 덱 화면의 showArchived와 같은 역할.
+let weakArchivedOpen = false;
 
 async function loadArchived() {
   const saved = await kvGet(ARCHIVE_KEY);

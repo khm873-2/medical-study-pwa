@@ -209,6 +209,44 @@ export async function recordAttempt({ exam, num, qid, subject, kind, title, pick
   return tx(STORE_ATTEMPTS, 'readwrite', (s) => s.put(rec));
 }
 
+/**
+ * 방금 남긴 풀이 한 번을 **없던 일로 되돌린다** — 손가락이 미끄러져 엉뚱한 선지를
+ * 눌렀을 때 쓴다(2026-10-28 요청: "가끔 잘못 누를 때가 있는데 다시풀기 하면 카운트
+ * 다시 초기화해야 함. 틀린 문제로 나와서").
+ *
+ * 왜 "안 푼 것으로" 되돌리나: 오입력은 **모르는 게 아니다**. 그대로 두면 `wrongN`이
+ * 올라 "다시 볼 문항"에 섞이고, 그러면 정작 약한 문항을 가려버린다. 약점 통계는
+ * 실제로 틀린 것만 담아야 쓸모가 있다.
+ *
+ * 되돌리는 것: `n`·`wrongN`·`unsureN`을 1씩 내리고, `history`의 **맨 끝 한 칸**을 뗀다.
+ * `last`는 그 전 기록으로 돌려놓는다(남은 게 없으면 지운다). 기록이 아예 없으면
+ * 아무 일도 하지 않는다.
+ */
+export async function undoAttempt({ exam, num, qid }) {
+  const db = await open();
+  const id = attemptId(exam, num, qid);
+  const store = db.transaction(STORE_ATTEMPTS, 'readwrite').objectStore(STORE_ATTEMPTS);
+  const rec = await req2val(store.get(id));
+  if (!rec || !rec.n) return false;
+
+  // 뗄 기록 — history가 잘려나갔으면 last로 대신한다(둘 다 없으면 셈만 내린다).
+  const hist = [...(rec.history || [])];
+  const gone = hist.length ? hist.pop() : rec.last;
+
+  rec.n = Math.max(0, rec.n - 1);
+  if (gone && !gone.correct) rec.wrongN = Math.max(0, (rec.wrongN || 0) - 1);
+  if (gone && gone.unsure) rec.unsureN = Math.max(0, (rec.unsureN || 0) - 1);
+  rec.history = hist;
+  if (hist.length) rec.last = hist[hist.length - 1];
+  else delete rec.last;
+
+  // 한 번도 안 푼 것과 같아졌으면 레코드 자체를 지운다 — 단 **북마크는 살려둔다**
+  // (오입력을 물렸다고 내가 찍어둔 별표까지 사라지면 안 된다).
+  const bare = !rec.n && !rec.history.length && !rec.bookmarked;
+  await tx(STORE_ATTEMPTS, 'readwrite', (s) => (bare ? s.delete(id) : s.put(rec)));
+  return true;
+}
+
 // ---- 시험 회차 — "이 시험을 몇 번째 푸는가" ----
 // 문항별 n은 "그 문항을 몇 번 풀었나"라서 시험 단위 회차와 다르다(건너뛴 문항도 있다).
 // 처음부터 다시·틀린 것만 다시를 누를 때 올린다(2026-10-21 요청).

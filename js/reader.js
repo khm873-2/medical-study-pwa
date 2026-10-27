@@ -24,7 +24,7 @@ const NOTE_ROOTS = ['98_예습노트_보관', '02_Wiki', '01_임종평_전범위
  * 그래서 자주 다시 읽을 수가 없었다. 이제 git tree로 **요청 한 번**에 전체 경로를 받는다.
  * 싸니까 자주 읽을 수 있고, 자주 읽으니 낡지 않는다.
  */
-const NOTE_KEY = 'note_index_v2';
+export const NOTE_KEY = 'note_index_v2';
 const NOTE_AT = 'note_index_at';
 const NOTE_TTL = 3 * 60 * 1000;        // 이만큼 지나면 다시 읽는다
 
@@ -1629,6 +1629,91 @@ export function parseSchedule(md, { year } = {}) {
     });
   }
   return out;
+}
+
+/**
+ * "복습 로드맵" 노트(예: `01_임종평_전범위/_일정_1126시험.md`)의 날짜 표를 읽는다.
+ *
+ * 왜 parseSchedule과 따로 두나 — 임종평은 **강의 시간표가 아니라 복습 순서**라 모양이
+ * 다르다: 교시·담당교수가 없고, "날짜 | 요일 | 대단원(위키링크) | 비고" 또는 마무리
+ * 구간처럼 "날짜 | 요일 | 범위" 두 칸뿐인 표도 섞여 있다. 한 파일 안에 표가 여러 개(주차별)
+ * 있어도 전부 모은다. 연도는 parseSchedule과 같은 방식으로, 글 속 완전한 날짜
+ * ("2026-10-26 작성")에서 빌린다 — 표 자체엔 MM-DD만 있다.
+ *
+ * @returns {Array<{date:string, dow:string, text:string,
+ *   parts:Array<{t:'text',v:string}|{t:'link',path:string,label:string}>}>} 날짜 오름차순
+ */
+export function parseRoadmap(md) {
+  const text = String(md).replace(/\r\n/g, '\n');
+  const seen = text.match(/\b(20\d{2})-\d{2}-\d{2}\b/);
+  const baseYear = seen ? Number(seen[1]) : new Date().getFullYear();
+
+  const out = [];
+  let cols = null;
+  for (const line of text.split('\n')) {
+    if (!/^\s*\|/.test(line)) { cols = null; continue; }
+    if (/^[\s:|-]+$/.test(line.replace(/\|/g, ''))) continue;   // ---- 구분선
+    // ⚠️ `\|`(위키링크 표시텍스트 `[[경로\|라벨]]`의 이스케이프)를 보호한 뒤 자른다 —
+    // CELLS가 이스케이프를 모르고 그냥 `|`로 보고 잘라서, 셀 하나(대단원 칸)에 위키링크와
+    // 괄호 설명이 같이 있으면 **셀 자체가 둘로 쪼개져 버렸다**(parseSchedule의 name처럼
+    // 단일 컬럼에 사후 치환하는 방식으로는 못 고친다 — 이미 쪼개진 뒤라서). 플레이스홀더로
+    // 바꿔 split을 피해 가고, 셀을 다 나눈 뒤에 원래대로 되돌린다.
+    const ESC = String.fromCharCode(1);
+    const cells = CELLS(line.replace(/\\\|/g, ESC)).map((c) => c.split(ESC).join('|'));
+
+    if (cells.some((c) => /^날짜$/.test(c))) {
+      cols = {
+        date: cells.findIndex((c) => /^날짜$/.test(c)),
+        dow: cells.findIndex((c) => /^요일$/.test(c)),
+      };
+      continue;
+    }
+    if (!cols || cols.date < 0) continue;
+
+    const raw = cells[cols.date] || '';
+    const m = raw.match(/\b(\d{1,2})-(\d{1,2})\b/);
+    if (!m) continue;
+    const date = `${baseYear}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+    const skip = new Set([cols.date, cols.dow].filter((i) => i >= 0));
+    // 날짜·요일을 뺀 나머지 칸(대단원+비고, 또는 범위 하나)을 이어 붙여 본문으로 쓴다.
+    const rest = cells.filter((_, i) => !skip.has(i)).map((c) => c.trim()).filter(Boolean);
+    const text = rest.join(' — ');
+
+    // 본문을 평문/위키링크 조각으로 쪼갠다 — 화면에서 둘을 다르게 다뤄야 한다.
+    // 대단원 노트([[01_소화기/_목차|…]])는 이 폴더(01_임종평_전범위) 안의 **노트**라
+    // openNote로 열면 되지만, 드릴·모의고사 링크([[../07_드릴/…|…]])는 다른 루트를
+    // 가리키는 **시험 파일**이라 openExam 계열로 열어야 한다. 그 분기는 호출하는
+    // 쪽(app.js)에서 하므로, 여기서는 "path"와 "label"만 정확히 떼어서 넘겨준다.
+    const parts = [];
+    let last = 0;
+    const linkRe = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+    let m2;
+    while ((m2 = linkRe.exec(text))) {
+      if (m2.index > last) parts.push({ t: 'text', v: text.slice(last, m2.index) });
+      parts.push({ t: 'link', path: m2[1].trim(), label: (m2[2] || m2[1]).trim() });
+      last = m2.index + m2[0].length;
+    }
+    if (last < text.length) parts.push({ t: 'text', v: text.slice(last) });
+
+    out.push({ date, dow: cols.dow >= 0 ? (cells[cols.dow] || '') : '', text, parts });
+  }
+  out.sort((a, b) => a.date.localeCompare(b.date));
+  return out;
+}
+
+/**
+ * parseRoadmap 결과에서 "오늘 볼 것"을 고른다 — 오늘 날짜 항목이 있으면 그것,
+ * 없으면 **가장 가까운 지난 날짜**(todayData가 "지난 수업일로 물러나는" 것과 같은
+ * 철학 — 복습이 밀렸어도 화면이 비면 안 된다). 전부 미래뿐이면 가장 이른 항목을 준다.
+ */
+export function roadmapToday(rows, now = Date.now()) {
+  if (!rows.length) return null;
+  const key = dayKey(now);
+  const exact = rows.find((r) => r.date === key);
+  if (exact) return exact;
+  const past = rows.filter((r) => r.date < key);
+  if (past.length) return past[past.length - 1];
+  return rows[0];
 }
 
 /** 로컬 시각을 YYYY-MM-DD로 — Date.toISOString()은 UTC라 한국에서 하루가 밀린다. */

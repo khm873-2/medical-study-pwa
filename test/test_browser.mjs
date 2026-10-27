@@ -2215,6 +2215,39 @@ await run('풀이 회차·지난 답 기억', async () => {
     ok: !!rec && rec.history[0].unsure === false && rec.history[1].unsure === true });
   out.push({ name: '누적 횟수는 그대로 센다', ok: !!rec && rec.n === 2, detail: `n=${rec && rec.n}` });
 
+  // ── 잘못 눌렀을 때 되돌리기(2026-10-28 요청) ──
+  // 오입력은 모르는 게 아니다. 그대로 두면 wrongN이 올라 "다시 볼 문항"에 섞여
+  // 정작 약한 문항을 가린다.
+  // ⚠️ 전용 키(EXu)로 돌린다 — `EX, num=1`은 아래 "20줄까지만 쌓인다" 등 뒤 검사들이
+  // 정확한 n·history 길이를 전제로 계속 쓰므로, 여기서 건드리면 그 검사들이 깨진다
+  // (실제로 한 번 이렇게 깨뜨려서 고쳤다).
+  const EXu = '테스트_되돌리기.html';
+  await db.recordAttempt({ exam: EXu, num: 1, subject: 'S', kind: '모의고사', title: 'T',
+    picked: 1, correct: false, unsure: false, run: 1 });
+  await db.recordAttempt({ exam: EXu, num: 1, subject: 'S', kind: '모의고사', title: 'T',
+    picked: 0, correct: true, unsure: true, run: 2 });
+  await db.undoAttempt({ exam: EXu, num: 1, qid: null });
+  const u1 = (await db.allAttempts()).find((a) => a.id === db.attemptId(EXu, 1));
+  out.push({ name: '되돌리면 횟수가 하나 줄고 마지막 줄이 떨어진다',
+    ok: !!u1 && u1.n === 1 && u1.history.length === 1,
+    detail: `n=${u1 && u1.n} history=${u1 && u1.history.length}` });
+  out.push({ name: '**앞 회차 기록은 살아있다**(통째로 지우지 않는다)',
+    ok: !!u1 && u1.history[0].picked === 1 && u1.last.picked === 1,
+    detail: u1 && u1.last ? JSON.stringify(u1.last) : '없음' });
+
+  // 틀린 한 번만 있던 문항을 되돌리면 → 안 푼 것과 같아져 레코드가 사라진다
+  const EXm = '테스트_오입력.html';
+  await db.recordAttempt({ exam: EXm, num: 7, subject: 'S', kind: '퀴즈', title: 'T',
+    picked: 3, correct: false, unsure: false, run: 1 });
+  const before = (await db.allAttempts()).find((a) => a.id === db.attemptId(EXm, 7));
+  await db.undoAttempt({ exam: EXm, num: 7, qid: null });
+  const after = (await db.allAttempts()).find((a) => a.id === db.attemptId(EXm, 7));
+  out.push({ name: '오입력 한 번뿐이면 **오답 기록이 통째로 사라진다**',
+    ok: !!before && before.wrongN === 1 && !after,
+    detail: `before wrongN=${before && before.wrongN} / after=${after ? '남음' : '없음'}` });
+  out.push({ name: '기록이 없는 문항을 되돌려도 조용히 넘어간다',
+    ok: (await db.undoAttempt({ exam: EXm, num: 999, qid: null })) === false });
+
   // 회차 세기 — 다시 풀기를 누르면 올라간다
   const r1 = await db.examRun(EX);
   const r2 = await db.bumpExamRun(EX);
@@ -2290,6 +2323,223 @@ await run('지난 풀이가 화면에 보인다', async () => {
   out.push({ name: '지금 회차는 지난 풀이에 안 섞인다(바로 위에 이미 떠 있다)',
     ok: !/3회/.test((txt.match(/지난 풀이[^\n]*/) || [''])[0]) });
   qz.destroy();
+  return out;
+});
+
+// ══════════ 임종평 로드맵 파서(2026-10-28 요청) ══════════
+// "임종평_전범위 버튼을 누르면 바로 틀렸던 문제로 연결되는 것 같은데, 그게 아니라
+// 오늘 뭘 할 차례인지 보여주는 창을 거쳐야 한다" — `_일정_1126시험.md`의 날짜 표를
+// 읽어 "오늘 범위"를 찾는 파서. 네트워크가 필요 없는 순수 함수라 fixture 문자열로
+// 바로 검증한다(가짜 vault 파일을 안 만들어도 된다).
+await run('parseRoadmap — 날짜 표를 읽고 위키링크를 분해한다', async () => {
+  const out = [];
+  const { parseRoadmap, roadmapToday } = await import('/js/reader.js');
+  const md = `# 제목
+
+> 2026-10-26 작성.
+
+## 1주차
+
+| 날짜 | 요일 | 대단원 | 비고 |
+|---|---|---|---|
+| 10-26 | 월 | [[01_소화기/_목차\\|01 소화기]] (1위) | |
+| 10-27 | 화 | [[01_소화기/_목차\\|01 소화기]] (이어서) | 끝나면 [[../07_드릴/임종평_전범위/1027_소화기_드릴\\|소화기 드릴 18문항]] |
+| 11-01 | 일 | 휴식 | 신규 진도 없음 |
+
+## 마무리
+
+| 날짜 | 요일 | 범위 |
+|---|---|---|
+| 11-26 | 목 | **시험일** |
+`;
+  const rows = parseRoadmap(md);
+  out.push({ name: '두 표(주차별+마무리)를 다 모은다', ok: rows.length === 4, detail: `${rows.length}행` });
+  out.push({ name: '연도를 글 속 완전한 날짜에서 빌린다', ok: rows[0].date === '2026-10-26' });
+  out.push({ name: '날짜 오름차순으로 정렬한다',
+    ok: rows.every((r, i) => i === 0 || r.date >= rows[i - 1].date) });
+  out.push({ name: '마지막 표(날짜|요일|범위, 대단원 칸 없음)도 읽는다',
+    ok: rows[3].date === '2026-11-26' && /시험일/.test(rows[3].text) });
+
+  const r27 = rows.find((r) => r.date === '2026-10-27');
+  out.push({ name: '`\\|`로 이스케이프된 위키링크가 셀 경계로 안 쪼개진다',
+    ok: r27.parts.some((p) => p.t === 'link' && p.path === '01_소화기/_목차' && p.label === '01 소화기'),
+    detail: JSON.stringify(r27.parts) });
+  out.push({ name: '한 칸에 위키링크가 둘이어도 둘 다 잡는다(대단원 + 드릴)',
+    ok: r27.parts.filter((p) => p.t === 'link').length === 2 });
+  out.push({ name: '드릴 링크는 상대경로(../)가 그대로 path에 남는다(열 때 EXAM_ROOTS로 분기)',
+    ok: r27.parts.some((p) => p.t === 'link' && p.path === '../07_드릴/임종평_전범위/1027_소화기_드릴') });
+
+  out.push({ name: '정확히 오늘 날짜가 있으면 그 행을 돌려준다',
+    ok: roadmapToday(rows, Date.parse('2026-10-27T09:00:00')).date === '2026-10-27' });
+  out.push({ name: '오늘 행이 없으면 가장 가까운 지난 날짜로 물러난다(복습이 밀려도 화면이 안 빈다)',
+    ok: roadmapToday(rows, Date.parse('2026-10-29T09:00:00')).date === '2026-10-27' });
+  out.push({ name: '전부 미래뿐이면 가장 이른 항목을 준다',
+    ok: roadmapToday(rows, Date.parse('2026-01-01T09:00:00')).date === '2026-10-26' });
+  return out;
+});
+
+// `resolveJongpyeongLink` — 로드맵 위키링크가 노트인지 시험 파일인지 판정하는 분기.
+// 실제 GitHub 통신(openNote/openExam 내부) 없이 **판정 결과만** 검증한다 — 여기가
+// 실제로 깨지기 쉬운 지점(경로 정규화·루트 매칭·확장자)이다.
+await run('resolveJongpyeongLink — 노트 vs 시험 파일 분기', async () => {
+  const out = [];
+  const { resolveJongpyeongLink } = await import('/js/app.js');
+
+  const note = resolveJongpyeongLink('01_소화기/_목차');
+  out.push({ name: '대단원 노트는 이 폴더(01_임종평_전범위) 안의 .md로 연다',
+    ok: note.kind === 'note' && note.path === '01_임종평_전범위/01_소화기/_목차.md',
+    detail: JSON.stringify(note) });
+
+  const drill = resolveJongpyeongLink('../07_드릴/임종평_전범위/1027_소화기_드릴');
+  out.push({ name: '`../` 상대경로로 나가는 드릴은 시험 파일로 연다(07_드릴 루트 인식)',
+    ok: drill.kind === 'exam' && drill.ex.kind === '드릴'
+      && drill.ex.path === '07_드릴/임종평_전범위/1027_소화기_드릴.html',
+    detail: JSON.stringify(drill) });
+
+  const mock = resolveJongpyeongLink('../06_모의고사/임종평_전범위/1026_세트');
+  out.push({ name: '모의고사 루트도 똑같이 시험 파일로 인식한다',
+    ok: mock.kind === 'exam' && mock.ex.kind === '모의고사' });
+
+  const nested = resolveJongpyeongLink('../../00_Raw_Text/기출문제_학교/노년_생애말기의학/01_노인의학');
+  out.push({ name: '`../`가 여러 겹이어도 전부 걷어낸다',
+    ok: !nested.path?.startsWith('.') && !(nested.ex && nested.ex.path.startsWith('.')) });
+  return out;
+});
+
+// ══════════ 끝난 과목은 접어서 숨긴다(2026-10-28 요청) ══════════
+// "족보 68·퀴즈 55 이렇게 있을 필요가 없음. 끝난 과목인데. 응급·두경부는 다 끝났으니
+// 안 보이는 곳에 두거나 지우는 기능을 만들든가" — 카드 덱의 보관(ARCHIVE_KEY)과 같은
+// 패턴을 "다시 볼 문항"에도 둔다. 실제 `loadTodayTab()`을 **진짜로 호출**해서 검증한다
+// (네트워크는 끊고 캐시만 미리 채운다 — todayData/buildExamIndex/noteList가 전부
+// 캐시 우선이라 이렇게 하면 실제 GitHub API 없이도 진짜 렌더 결과를 볼 수 있다).
+await run('다시 볼 문항 — 보관하면 숨고 복원하면 돌아온다(실제 렌더)', async () => {
+  const out = [];
+  const db = await import('/js/db.js');
+  const appMod = await import('/js/app.js');
+  const reader = await import('/js/reader.js');
+  const realFetch = window.fetch;
+  try {
+    // 네트워크를 아예 끊는다 — todayData/buildExamIndex/noteList가 전부 try/catch로
+    // 캐시 폴백을 타므로, 미리 심어둔 캐시 그대로 쓰인다.
+    window.fetch = async () => { throw new Error('네트워크 차단(테스트)'); };
+    await db.kvSet('schedule_cache', { schedule: [], exams: [] });
+    await db.kvSet(appMod.EXAM_INDEX_KEY, []);
+    await db.kvSet('exam_index_at', Date.now());
+    await db.kvSet(reader.NOTE_KEY, []);
+    await reader._setNoteAt(Date.now());
+
+    const EXl = '테스트_진행중과목_시험.html';
+    const EXg = '테스트_끝난과목_시험.html';
+    await db.recordAttempt({ exam: EXl, num: 1, subject: '진행중과목', kind: '퀴즈', title: 'T',
+      picked: 1, correct: false, unsure: false, run: 1 });
+    await db.recordAttempt({ exam: EXg, num: 1, subject: '끝난과목', kind: '퀴즈', title: 'T',
+      picked: 1, correct: false, unsure: false, run: 1 });
+    // "끝난과목"은 미리 보관해 둔다 — 지난 시험을 다 보고 숨긴 상태를 흉내낸다
+    await db.kvSet(appMod.WEAK_ARCHIVE_KEY, ['끝난과목']);
+
+    document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+    document.getElementById('listScreen').classList.remove('hidden');
+    document.querySelector('.tab[data-tab="today"]').click();
+    await new Promise((r) => setTimeout(r, 500));
+
+    const body = document.getElementById('todayBody');
+    out.push({ name: '보관 안 된 과목은 바로 보인다',
+      ok: /진행중과목/.test(body.innerHTML) });
+    out.push({ name: '**보관된 과목은 접힌 채 숨어 있다**(이름이 안 보인다)',
+      ok: !body.innerHTML.includes('끝난과목') });
+    const archHeader = [...body.querySelectorAll('.deck-arch-h')]
+      .find((h) => /보관된 과목/.test(h.textContent));
+    out.push({ name: '"보관된 과목 N개" 접기 헤더가 뜬다',
+      ok: !!archHeader, detail: archHeader && archHeader.textContent });
+
+    archHeader?.click();
+    await new Promise((r) => setTimeout(r, 60));
+    out.push({ name: '헤더를 누르면 펼쳐져서 보인다', ok: body.innerHTML.includes('끝난과목') });
+
+    // 복원 — 보관 목록에서 빠지고, 다시 "다시 볼 문항"의 보통 자리로 돌아온다
+    const restoreBtn = [...body.querySelectorAll('.deck-arch.on')]
+      .find((b) => b.textContent === '복원');
+    out.push({ name: '펼친 자리에 "복원" 버튼이 있다', ok: !!restoreBtn });
+    restoreBtn?.click();
+    await new Promise((r) => setTimeout(r, 60));
+    const saved = await db.kvGet(appMod.WEAK_ARCHIVE_KEY);
+    out.push({ name: '복원하면 **저장된 보관 목록에서도 빠진다**(지우는 게 아니라 숨긴 것)',
+      ok: Array.isArray(saved) && !saved.includes('끝난과목'), detail: JSON.stringify(saved) });
+    out.push({ name: '복원 직후 더 이상 "접힌 과목" 취급이 아니다 — 접기 헤더가 사라진다',
+      ok: ![...body.querySelectorAll('.deck-arch-h')].some((h) => /보관된 과목/.test(h.textContent)) });
+
+    // attempts 기록 자체는 보관과 무관하게 그대로 남아 있어야 한다(지운 게 아니다)
+    const keptRec = (await db.allAttempts()).find((a) => a.id === db.attemptId(EXg, 1));
+    out.push({ name: '**보관 중에도 풀이 기록은 지워지지 않는다**',
+      ok: !!keptRec && keptRec.n === 1, detail: keptRec ? `n=${keptRec.n}` : '없음' });
+  } finally {
+    window.fetch = realFetch;
+  }
+  return out;
+});
+
+// "임종평 전범위" 카드 — 실제 `loadTodayTab()`을 호출해서 카드가 뜨는지, 오늘 범위
+// 텍스트와 위키링크가 보이는지, 일반 "다시 볼 문항" 목록에는 안 섞이는지 검증한다.
+// 로드맵 파일 자체는 `_setJpRoadmapCache`로 주입한다(네트워크 없이 — parseRoadmap은
+// 위에서 이미 따로 검증했으니, 여기서는 "주입된 로드맵이 실제로 화면에 반영되는가"만 본다).
+await run('임종평 전범위 카드 — 오늘 범위가 뜨고 다시 볼 문항과 분리된다(실제 렌더)', async () => {
+  const out = [];
+  const db = await import('/js/db.js');
+  const appMod = await import('/js/app.js');
+  const reader = await import('/js/reader.js');
+  const realFetch = window.fetch;
+  try {
+    window.fetch = async () => { throw new Error('네트워크 차단(테스트)'); };
+    await db.kvSet('schedule_cache', { schedule: [], exams: [] });
+    await db.kvSet(appMod.EXAM_INDEX_KEY, []);
+    await db.kvSet('exam_index_at', Date.now());
+    await db.kvSet(reader.NOTE_KEY, []);
+    await reader._setNoteAt(Date.now());
+    await db.kvSet(appMod.WEAK_ARCHIVE_KEY, []);
+
+    // 오늘(테스트 실행 시각 무관하게 "정확히 오늘"로 잡히도록) 날짜로 로드맵 1행을 만든다
+    const todayKey = reader.dayKey(Date.now());
+    const [y, mo, da] = todayKey.split('-');
+    const fakeMd = `# 일정\n\n> ${todayKey} 작성.\n\n`
+      + `| 날짜 | 요일 | 대단원 | 비고 |\n|---|---|---|---|\n`
+      + `| ${mo}-${da} | 월 | [[01_소화기/_목차\\|01 소화기]] (1위) | |\n`;
+    appMod._setJpRoadmapCache({ rows: reader.parseRoadmap(fakeMd), path: '01_임종평_전범위/_일정_가짜.md' });
+
+    // 일반 "다시 볼 문항"과 분리되는지 보려고, 임종평_전범위 과목에도 오답을 하나 심는다
+    await db.recordAttempt({ exam: '테스트_임종평.html', num: 1, subject: '임종평_전범위', kind: '퀴즈',
+      title: 'T', picked: 1, correct: false, unsure: false, run: 1 });
+    await db.recordAttempt({ exam: '테스트_다른과목.html', num: 1, subject: '다른과목', kind: '퀴즈',
+      title: 'T', picked: 1, correct: false, unsure: false, run: 1 });
+
+    document.querySelectorAll('#app > section').forEach((x) => x.classList.add('hidden'));
+    document.getElementById('listScreen').classList.remove('hidden');
+    document.querySelector('.tab[data-tab="today"]').click();
+    await new Promise((r) => setTimeout(r, 500));
+
+    const body = document.getElementById('todayBody');
+    const jpSec = [...body.querySelectorAll('.today-h')].find((h) => /임종평 전범위/.test(h.textContent));
+    out.push({ name: '"📚 임종평 전범위" 섹션 제목이 뜬다', ok: !!jpSec, detail: jpSec && jpSec.textContent });
+
+    const card = body.querySelector('.jp-card');
+    out.push({ name: '카드가 실제로 그려진다', ok: !!card });
+    out.push({ name: '오늘 날짜가 보인다(월/일)', ok: !!card && card.textContent.includes(`${Number(mo)}/${Number(da)}`) });
+    out.push({ name: '대단원 이름이 위키링크로 보인다', ok: !!card && /01 소화기/.test(card.textContent) });
+    const link = card && card.querySelector('.jp-text .wikilink');
+    out.push({ name: '그 위키링크를 누를 수 있다(핸들러가 붙어 있다)', ok: !!link && typeof link.onclick === 'function' });
+
+    out.push({ name: '카드 안에 "다시 볼 문항 N개" 칩이 있다(임종평 전용 오답 수)',
+      ok: !!card && /다시 볼 문항 1개/.test(card.textContent) });
+    out.push({ name: '"전체 일정표 보기" 칩이 있다', ok: !!card && /전체 일정표 보기/.test(card.textContent) });
+
+    // 핵심 — 일반 "다시 볼 문항" 목록(.weak-body)에는 임종평_전범위가 섞이면 안 된다
+    const weakBody = body.querySelector('.weak-body');
+    out.push({ name: '**"다시 볼 문항" 일반 목록에는 임종평_전범위가 안 보인다**(독립 트랙으로 분리됨)',
+      ok: !!weakBody && !weakBody.textContent.includes('임종평_전범위') });
+    out.push({ name: '대신 그 자리엔 다른과목만 보인다', ok: !!weakBody && weakBody.textContent.includes('다른과목') });
+  } finally {
+    window.fetch = realFetch;
+    appMod._setJpRoadmapCache(null);   // 다음 테스트가 이 주입값을 물려받지 않게 비운다
+  }
   return out;
 });
 
