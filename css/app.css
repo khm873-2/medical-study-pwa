@@ -2257,6 +2257,25 @@ mark.peek-hit.on {
 }
 #scText:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .sc-shots { flex: 0 0 auto; display: flex; gap: 8px; flex-wrap: wrap; }
+/* 최근 모아둔 것 — 눌러보면 vault에 실제로 쓰인 글이 그대로 뜬다(2026-10-29) */
+.sc-recent { flex: 0 0 auto; border-top: 1px solid var(--border); padding-top: 8px; }
+.sc-recent > summary {
+  list-style: none; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--sub);
+  display: flex; align-items: baseline; gap: 6px;
+}
+.sc-recent > summary::-webkit-details-marker { display: none; }
+.sc-recent-list { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.sc-recent-item {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  padding: 7px 9px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); font-family: inherit; text-align: left; cursor: pointer;
+}
+.sc-recent-item:active { background: var(--badge-bg); }
+.sc-recent-item .sc-r-when { flex: 0 0 auto; font-size: 11px; color: var(--sub); font-variant-numeric: tabular-nums; }
+.sc-recent-item .sc-r-title {
+  flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .sc-shot { position: relative; width: 92px; height: 92px; }
 .sc-shot img {
   width: 100%; height: 100%; object-fit: cover;

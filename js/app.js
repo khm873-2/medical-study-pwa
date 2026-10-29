@@ -4886,8 +4886,64 @@ function openScrap() {
   document.getElementById('scrapFloat').classList.remove('hidden');
   if (scrapFloat) scrapFloat.place();
   setTimeout(() => document.getElementById('scText').focus(), 60);
+  loadScrapRecent();
 }
 function closeScrap() { document.getElementById('scrapFloat').classList.add('hidden'); }
+
+/**
+ * 최근 모아둔 것을 보여준다 — "이게 어디로 어떻게 되는지 알 방법이 없어서
+ * 답답하다"는 요청(2026-10-29). 모아두기는 저장 즉시 토스트 한 줄로 끝나서,
+ * 그 뒤로는 정말 vault에 들어갔는지, 뭐라고 쓰였는지 확인할 길이 없었다.
+ *
+ * `LOG_DIR`(00_Raw_Text/AI대화로그)를 통째로 긁어 `_모아두기.md`만 추리고,
+ * 파일 이름에 박힌 시각으로 최신순 정렬한다 — 과목마다 접두사가 달라
+ * 파일명 그 자체로는 뒤섞여 정렬된다(2026-10-29 확인).
+ */
+let scrapRecentCache = null;   // {at, items} — 열 때마다 새로 받되 짧게 캐시
+async function loadScrapRecent() {
+  const box = document.getElementById('scRecentList');
+  const n = document.getElementById('scRecentN');
+  if (scrapRecentCache && Date.now() - scrapRecentCache.at < 30000) {
+    paintScrapRecent(scrapRecentCache.items);
+    return;
+  }
+  try {
+    const all = await listDir(LOG_DIR);
+    const items = all
+      .filter((f) => f.type === 'file' && f.name.endsWith('_모아두기.md'))
+      .map((f) => {
+        const m = f.name.match(/(\d{2}-\d{2}-\d{2})_(\d{4})/);
+        return { ...f, sortKey: m ? `${m[1]}_${m[2]}` : f.name };
+      })
+      .sort((a, b) => (a.sortKey < b.sortKey ? 1 : -1))
+      .slice(0, 8);
+    scrapRecentCache = { at: Date.now(), items };
+    paintScrapRecent(items);
+  } catch (e) {
+    box.innerHTML = `<p class="muted">못 불러왔습니다: ${escapeHtml(e.message)}</p>`;
+    n.textContent = '';
+  }
+}
+function paintScrapRecent(items) {
+  const box = document.getElementById('scRecentList');
+  const n = document.getElementById('scRecentN');
+  n.textContent = items.length ? `(${items.length})` : '';
+  if (!items.length) { box.innerHTML = '<p class="muted">아직 없습니다.</p>'; return; }
+  box.innerHTML = '';
+  for (const f of items) {
+    // 파일명: {과목}_{yy-mm-dd}_{HHMM}_{제목}_모아두기.md — 사람이 읽을 꼴로 되돌린다
+    const m = f.name.match(/^(?:(.+?)_)?(\d{2}-\d{2}-\d{2})_(\d{4})_(.+)_모아두기\.md$/);
+    const when = m ? `${m[2].slice(3)} ${m[3].slice(0, 2)}:${m[3].slice(2)}` : '';
+    const title = (m ? m[4] : f.name.replace(/_모아두기\.md$/, '')).replace(/_/g, ' ');
+    const b = document.createElement('button');
+    b.className = 'sc-recent-item';
+    b.innerHTML = `<span class="sc-r-when">${escapeHtml(when)}</span><span class="sc-r-title">${escapeHtml(title)}</span>`;
+    // openPeek은 노트 미리보기 창을 그대로 재사용한다 — 저장한 글이 vault에
+    // **실제로 그 모양대로** 들어갔는지 눌러서 바로 확인할 수 있다.
+    b.onclick = () => openPeek({ path: f.path });
+    box.appendChild(b);
+  }
+}
 
 function renderShots() {
   const box = document.getElementById('scShots');
@@ -5080,7 +5136,8 @@ async function saveScrap() {
     // 안 됐을 때만 붙잡는다 — 뭘 해야 하는지 알려줘야 하니까
     alertSheet('모아두지 못했습니다', m.text, m.needSetup ? openSetup : null);
   } else {
-    toast(`✓ 모아뒀습니다 (${r.saved.length}건)`);
+    toast(`✓ 모아뒀습니다 (${r.saved.length}건) — "최근 모아둔 것"에서 확인할 수 있습니다`);
+    scrapRecentCache = null;            // 방금 올라간 게 목록에 바로 잡히게
   }
 }
 
@@ -9518,9 +9575,23 @@ function dockTools(dock, el = document.getElementById('readTools'), key = 'read_
  *
  * 막대가 뜨면서 생긴 문제다 — 머리줄은 자기 위에 뭐가 떠 있는지 모른다(2026-10-13).
  * 막대를 옮기면 비웠던 자리도 같이 돌려준다.
+ *
+ * ⚠️ **화면을 찾는 법이 #quizTools만 다르다.** `el.closest('section')`는
+ * #quizTools를 #readTools와 같은 자리(섹션 밖)로 옮기면서 더 이상 못 찾는다 —
+ * 옮기기 전에는 #quizScreen 안에 있어서 통했지만, 그러면 화면전환
+ * 애니메이션(transform)이 도는 동안 position:fixed의 기준이 그 section으로
+ * 바뀌어 막대가 통째로 안 보였다(2026-10-29 신고 — 사용자: "퀴즈나 모의고사
+ * 풀 때 도구모음이 싹 사라졌음"). 그래서 #quizTools는 #quizScreen을 직접
+ * 짚어준다. **#readTools는 건드리지 않는다** — 이미 같은 이유로 섹션 밖에
+ * 있고 closest('section')이 늘 실패해 왔는데, 그 "안 비워지는" 상태 그대로
+ * 잘 동작해 왔다. 억지로 똑같이 비워주게 고쳐봤더니 스크롤·창버튼 상태에
+ * 따라 --rt-base가 옛값에 멈춰 오히려 도구막대가 화면 밖으로 나가는 회귀가
+ * 생겼다(검사 2건 실패: 카드 버튼이 화면 위로 넘어감, 창버튼 자리를 비워도
+ * 도구막대가 안 내려옴) — #readTools는 원래 쓰던 CSS 기본값
+ * (`calc(50px + var(--win-top))`)이 오히려 더 안전하다.
  */
 function reserveForTools(el) {
-  const screen = el.closest('section');
+  const screen = el.id === 'quizTools' ? document.getElementById('quizScreen') : el.closest('section');
   if (!screen) return;
   const head = screen.querySelector(':scope > header');
   if (!head) return;

@@ -796,7 +796,7 @@ export function cardsFromBox(root, box, meta = {}) {
     const rows = unitOf.get(host);
     const els = rows.flatMap((b) => groups.get(b));
     const html = host.tagName === 'TABLE'
-      ? tableHtml(host, rows, els, answers)
+      ? tableHtml(host, rows, els, answers, plain)
       : cloneWithBlanks(host, els, answers, box, plain);
     if (html) parts.push(html);
   }
@@ -1113,7 +1113,7 @@ function blockOf(el) {
  * 표 — 표를 **한 번만** 복제하고 고른 행들의 강조만 가린다.
  * 행만 떼어내면 어느 칸이 무엇인지 알 수 없어서 머리글이 붙은 표째로 들고 간다.
  */
-function tableHtml(table, rows, els, answers) {
+function tableHtml(table, rows, els, answers, plain) {
   const all = [...table.querySelectorAll('tr')];
   const clone = table.cloneNode(true);
   const cloneRows = [...clone.querySelectorAll('tr')];
@@ -1131,6 +1131,16 @@ function tableHtml(table, rows, els, answers) {
       answers.push(replaceWithCloze(cloneEm[i], o.textContent.trim()));
       here++;
     });
+    // 강조가 없는 표(2026-10-29 신고: "볼드가 없는 표 같은 건 아예 만들 수가
+    // 없는 건 불합리함") — cloneWithBlanks가 문단·목록에서 이미 하던 일을
+    // 표 행에도 그대로 적용한다. 네모 안의 칸이 통째로 짧아(예: "연령"|"60%")
+    // blocksIn의 최소 글자수 필터에 걸리지 않았다면 plain에 그 행의 픽이 들어와 있다.
+    if (plain) {
+      for (const w of plain) {
+        if (w.block !== tr) continue;
+        if (blankTextIn(cloneRow, w.t)) { answers.push(w.t); here++; }
+      }
+    }
     if (here) { cloneRow.classList.add('card-row-focus'); made += here; }
   }
   if (!made) return '';
@@ -1194,13 +1204,31 @@ function sawEmphasis(root, box) {
   return false;
 }
 
+/**
+ * 블록의 글을 뽑는다 — **표 행은 칸 사이에 공백을 되살린다.**
+ *
+ * `<tr><td>연령</td><td>60%</td></tr>`의 textContent는 "연령60%"로 칸 경계 없이
+ * 붙어버린다. 그대로 쓰면 ① 글자수가 실제보다 짧게 잡혀 blocksIn의 최소 길이
+ * 필터에 걸리고(2026-10-29 신고: "볼드 없는 표는 아예 카드가 안 만들어짐"),
+ * ② 설사 통과해도 "연령60%"가 한 낱말로 묶여 plainPicks가 고른 말이 실제로는
+ * 두 칸에 걸쳐 있어 blankTextIn(한 텍스트 노드 안에서만 찾음)이 못 찾는다.
+ */
+function blockText(el) {
+  if (el.tagName === 'TR') {
+    return [...el.children].map((c) => c.textContent.trim()).filter(Boolean).join(' ');
+  }
+  return el.textContent;
+}
+
 /** 네모에 걸친 블록들 — 강조가 없을 때 글을 직접 들여다보려고 모은다. */
 function blocksIn(root, box) {
   const out = [];
   root.querySelectorAll('p, li, tr, blockquote, dd').forEach((el) => {
     if (el.querySelector('p, li, tr, blockquote')) return;    // 가장 안쪽만
-    const t = el.textContent.replace(/\s+/g, ' ').trim();
-    if (t.length < 6) return;
+    const t = blockText(el).replace(/\s+/g, ' ').trim();
+    // 표 행은 칸이 나뉘어 있어 짧아도 뜻이 분명하다("연령 | 60%") — 문단·목록보다
+    // 문턱을 낮춘다(2026-10-29).
+    if (t.length < (el.tagName === 'TR' ? 2 : 6)) return;
     const r = el.getBoundingClientRect();
     if (!r.width || !r.height) return;
     if (r.right < box.l || r.left > box.r || r.bottom < box.t || r.top > box.b) return;
@@ -1233,7 +1261,7 @@ function plainPicks(blocks, limit = 4) {
   const seen = new Set();
   const all = [];
   for (const block of blocks) {
-    const text = block.textContent.replace(/\s+/g, ' ').trim();
+    const text = blockText(block).replace(/\s+/g, ' ').trim();
     for (const w of text.split(' ')) {
       for (const piece of splitWord(w)) {
         const t = piece.trim();
