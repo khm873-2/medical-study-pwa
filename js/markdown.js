@@ -322,8 +322,25 @@ export function deTex(src) {
   return x.replace(/[ \t]{2,}/g, ' ');
 }
 
+// ───────────── 빨간 글씨(메디톡 강조) — <span style="color:red">...</span> ─────────────
+//
+// 노트 원문에 이 태그를 그대로 적어두면 Obsidian은 별도 처리 없이 바로 빨간 글씨로
+// 렌더링한다(Obsidian은 inline HTML을 그대로 그린다). 하지만 이 앱의 renderMarkdown은
+// escapeHtml로 모든 `<`를 무조건 글자로 바꿔버려서 똑같이 적어도 달모에서는
+// "<span style=..." 가 그대로 글자로 보인다(2026-10-31 신고 — 메디톡 빨간 글씨를
+// 두 군데서 똑같이 빨갛게 보이게 해달라는 요청). 그래서 이 한 가지 태그 모양만
+// escapeHtml 전에 미리 뽑아 보호해두고, 나머지 인라인 치환이 끝난 뒤에 다시 끼워 넣는다
+// — 임의의 HTML을 전부 허용하는 게 아니라 이 좁은 패턴 하나만 통과시킨다(안전).
+const COLOR_SPAN = /<span\s+style="color:\s*(red|#[0-9a-fA-F]{3,6})\s*;?\s*">([\s\S]*?)<\/span>/gi;
+
 function inline(s) {
-  let t = escapeHtml(deTex(s));
+  const colorSpans = [];
+  const protected_ = String(s).replace(COLOR_SPAN, (_, color, innerText) => {
+    const idx = colorSpans.length;
+    colorSpans.push({ color, innerText });
+    return ` CS${idx} `;
+  });
+  let t = escapeHtml(deTex(protected_));
 
   // [슬라이드 p.12] → 링크. 지금은 **꺼져 있다**(아래 SLIDE_LINKS 주석 참고).
   if (SLIDE_LINKS) {
@@ -373,6 +390,15 @@ function inline(s) {
     // "파란색을 떠올렸다면" → "파란색을떠올렸다면"). 고칠 곳은 렌더가 아니라 원문이라
     // 2026-10-15에 되돌린다 — 원문 70여 곳은 그때 같이 이어 붙였다.
     return ' ';
+  });
+
+  // 보호해둔 빨간 글씨 span을 다시 끼워 넣는다 — 안쪽 글자도 **굵게/기울임 등 다른
+  // 인라인 문법을 쓸 수 있게** 재귀로 한 번 더 처리한다(메디톡 빨간 글씨 안에
+  // 볼드가 같이 있는 경우가 있음).
+  t = t.replace(/\sCS(\d+)\s/g, (_, idx) => {
+    const sp = colorSpans[Number(idx)];
+    if (!sp) return '';
+    return `<span style="color:${escapeAttr(sp.color)}">${inline(sp.innerText)}</span>`;
   });
   return t;
 }
