@@ -331,7 +331,7 @@ export function deTex(src) {
 // 두 군데서 똑같이 빨갛게 보이게 해달라는 요청). 그래서 이 한 가지 태그 모양만
 // escapeHtml 전에 미리 뽑아 보호해두고, 나머지 인라인 치환이 끝난 뒤에 다시 끼워 넣는다
 // — 임의의 HTML을 전부 허용하는 게 아니라 이 좁은 패턴 하나만 통과시킨다(안전).
-const COLOR_SPAN = /<span\s+style="color:\s*(red|#[0-9a-fA-F]{3,6})\s*;?\s*">([\s\S]*?)<\/span>/gi;
+const COLOR_SPAN = /<span\s+style="color:\s*(red|blue|orange|#[0-9a-fA-F]{3,6})\s*;?\s*">([\s\S]*?)<\/span>/gi;
 
 function inline(s) {
   const colorSpans = [];
