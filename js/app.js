@@ -3485,10 +3485,12 @@ async function loadNotesTab(force) {
 
   // 뿌리(예습노트/Wiki/임종평)로 한 겹 묶는다. 임종평만 20개 과목이라
   // 그냥 늘어놓으면 28개 그룹이 깔려서 내 과목을 못 찾는다(2026-10-09).
+  // 2026-11-02: 임종평 전범위 위주로 공부 중이라 맨 위·펼침으로, 안 쓰는
+  // 위키(근골격 등)·예습노트는 아래로 내리고 접어둔다(사용자 요청).
   const ROOT_META = {
-    '98_예습노트_보관': { label: '예습노트', order: 0, open: true },
-    '02_Wiki': { label: '위키', order: 1, open: true },
-    '01_임종평_전범위': { label: '임종평 전범위', order: 2, open: false },
+    '01_임종평_전범위': { label: '임종평 전범위', order: 0, open: true },
+    '02_Wiki': { label: '위키', order: 1, open: false },
+    '98_예습노트_보관': { label: '예습노트', order: 2, open: false },
   };
   const byRoot = new Map();
   for (const g of groups) {
@@ -5680,7 +5682,14 @@ function makeWordsTappable(root, card) {
   bindCardBrush(root, card);
 }
 
-/** 아직 글자인 데를 낱말마다 `<span class="cf-w">`로 감싼다(빈칸 속은 건드리지 않는다). */
+/**
+ * 아직 글자인 데를 낱말마다 `<span class="cf-w">`로 감싼다(빈칸 속은 건드리지 않는다).
+ *
+ * 공백으로만 쪼개면 "함몰(umbilication)이"가 통째로 한 칩이 되어, 눌러서 가릴 때
+ * 괄호 원어까지 같이 가려져 빈칸이 쓸데없이 커진다(2026-11-02 지적: "카드만들기 할 때
+ * 괄호까지 포함하는거 되게 별로네... 그냥 단어단위로. 특수문자는 또 따로 파싱").
+ * splitWord로 괄호·숫자경계를 먼저 떼고, 가운뎃점·쉼표·더하기도 독립 칩으로 뗀다.
+ */
 function wrapCardWords(root) {
   const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(n) {
@@ -5697,10 +5706,12 @@ function wrapCardWords(root) {
     for (const piece of node.nodeValue.split(/(\s+)/)) {
       if (!piece) continue;
       if (/^\s+$/.test(piece)) { frag.appendChild(document.createTextNode(piece)); continue; }
-      const w = document.createElement('span');
-      w.className = 'cf-w pickable';
-      w.textContent = piece;
-      frag.appendChild(w);
+      for (const sub of splitWord(piece).flatMap((t) => t.split(/([·,+])/)).filter(Boolean)) {
+        const w = document.createElement('span');
+        w.className = 'cf-w pickable';
+        w.textContent = sub;
+        frag.appendChild(w);
+      }
     }
     node.replaceWith(frag);
   }
@@ -8314,11 +8325,13 @@ function runDocSearch(q) {
     b.className = 'search-hit';
     const s = document.createElement('div');
     s.className = 'sh-snip';
-    const start = Math.max(0, h.at - 40);
+    // 2026-11-02: 전체 검색(search.js snip)과 같은 비율로 2.5배 늘린다 — "이 문서"
+    // 찾기만 짧게 남아 있으면 범위를 바꿔도 여전히 맥락이 부족해 보인다.
+    const start = Math.max(0, h.at - 100);
     s.append((start ? '…' : '') + sec.text.slice(start, h.at).replace(/\n+/g, ' '));
     const mk = document.createElement('mark');
     mk.textContent = sec.text.slice(h.at, h.at + h.len);
-    s.append(mk, sec.text.slice(h.at + h.len, h.at + h.len + 60).replace(/\n+/g, ' ') + '…');
+    s.append(mk, sec.text.slice(h.at + h.len, h.at + h.len + 150).replace(/\n+/g, ' ') + '…');
     b.append(s);
     // 줄을 누르면 **그리로 가고 창을 닫는다**. 찾기 창은 화면의 3/4를 덮으므로
     // 열어둔 채로 보내면 간 자리가 창 뒤에 숨는다(2026-10-16 지적: "눌렀을 때 그 쪽으로

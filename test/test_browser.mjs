@@ -1275,8 +1275,11 @@ await run('카드 만들기', async () => {
   out.push({ name: '답은 빈칸 안에 숨어 있다(폭을 잡아두려고)',
     ok: [...peek.querySelectorAll('.cloze')].every((c) => c.querySelector('i')
       && c.querySelector('i').textContent === c.dataset.answer) });
-  out.push({ name: '빈칸에 답이 data로 붙어 있다(답 보기용)',
-    ok: /data-answer="수축기혈압 90mmHg 미만"/.test(cards[0].contextHtml) });
+  // 2026-11-02부터 한 강조 안에서도 **낱말마다** 따로 가린다(괄호·숫자 포함 통째로
+  // 한 빈칸이 되던 걸 고쳤다 — 위 "빈칸 쪼개기" 섹션 참고). data-answer도 낱말별로 붙는다.
+  out.push({ name: '빈칸마다 그 낱말이 data로 붙어 있다(답 보기용, 낱말단위)',
+    ok: ['수축기혈압', '90mmHg', '미만'].every((w) => cards[0].contextHtml.includes(`data-answer="${w}"`)),
+    detail: (cards[0].contextHtml.match(/data-answer="[^"]*"/g) || []).join(' ') });
 
   // ── 라벨은 가리지 않는다 ──
   body.innerHTML = renderMarkdown(
@@ -1319,9 +1322,11 @@ await run('카드 만들기', async () => {
   out.push({ name: '묻는 행이 표시된다', ok: holder.querySelectorAll('tr.card-row-focus').length === 2,
     detail: `${holder.querySelectorAll('tr.card-row-focus').length}행` });
   out.push({ name: '빈칸이 그 행 안에 있다', ok: !!holder.querySelector('tr.card-row-focus .cloze') });
-  out.push({ name: '고른 두 칸이 다 빈칸이 된다',
-    ok: holder.querySelectorAll('.cloze').length === 2 && cards[0].answers.length === 2,
-    detail: cards[0].answers.join(' / ') });
+  // 2026-11-02부터 "ORIF/CRIF 우선"·"whole body bone scan"도 낱말마다 따로 빈칸이 된다
+  // (card.answers는 강조 하나당 한 줄로 그대로 2개 — 바뀐 건 화면 빈칸 개수뿐이다).
+  out.push({ name: '고른 두 칸이 낱말단위로 다 빈칸이 된다',
+    ok: holder.querySelectorAll('.cloze').length >= 2 && cards[0].answers.length === 2,
+    detail: `${holder.querySelectorAll('.cloze').length}칸 / ${cards[0].answers.join(' / ')}` });
   out.push({ name: '머리글(#·진단·치료)은 그대로', ok: /진단/.test(holder.textContent) && /치료/.test(holder.textContent) });
 
   // ── 카드에 어느 대목인지 달려 나온다 ──
@@ -1412,25 +1417,29 @@ await run('카드 만들기', async () => {
       const mid = r.parts.map((x) => (x.blank ? `[${x.t}]` : x.t)).join('');
       return (r.lead || '') + mid + (r.tail || '');
     };
-    out.push({ name: '**묻는 부분(…에는)은 보인다**',
+    // ★ 2026-11-02 — "카드만들기 할 때 괄호까지 포함하는거 되게 별로네... cloze 되는
+    //   범위가 커져버리는 버그가 많음. 그냥 단어단위로. 특수문자는 또 따로 파싱".
+    //   이제 통째로 한 덩어리를 가리지 않고 **낱말마다 따로** 가린다 — 조사·접속어
+    //   (와/및 등)와 가운뎃점·쉼표 같은 길이 1 기호만 안 가려져 보인다.
+    out.push({ name: '**묻는 부분(…에는)은 보인다 — 낱말마다 따로 가린다**',
       ok: show('열사병(heat stroke)의 진단에는 체온 >40℃와 중추신경계 기능이상이 모두 필요')
-        === '열사병(heat stroke)의 진단에는 [체온 >40℃]와 [중추신경계 기능이상]이 모두 필요',
+        === '열사병(heat stroke)의 진단에는 [체온] [>40℃]와 [중추신경계] [기능이상]이 모두 필요',
       detail: show('열사병(heat stroke)의 진단에는 체온 >40℃와 중추신경계 기능이상이 모두 필요') });
     out.push({ name: '**"와"를 보여줘 몇 개인지 알린다**',
       ok: /\]와 \[/.test(show('열사병의 진단에는 체온 >40℃와 중추신경계 기능이상이 모두 필요')) });
-    out.push({ name: '쉼표로 늘어놓은 것도 따로따로',
-      ok: show('AST/ALT 상승, DIC, 횡문근융해증') === '[AST/ALT 상승], [DIC], [횡문근융해증]',
+    out.push({ name: '쉼표로 늘어놓은 것도 낱말마다 따로',
+      ok: show('AST/ALT 상승, DIC, 횡문근융해증') === '[AST/ALT] [상승], [DIC], [횡문근융해증]',
       detail: show('AST/ALT 상승, DIC, 횡문근융해증') });
-    out.push({ name: '가운뎃점도 따로따로',
+    out.push({ name: '가운뎃점도 낱말마다 따로',
       ok: show('해부학적 정복·견고한 내고정·혈류 보존·조기 안전 가동화')
-        === '[해부학적 정복]·[견고한 내고정]·[혈류 보존]·[조기 안전 가동화]' });
+        === '[해부학적] [정복]·[견고한] [내고정]·[혈류] [보존]·[조기] [안전] [가동화]' });
     out.push({ name: '**슬래시는 안 쪼갠다**(AST/ALT는 한 낱말)',
-      ok: show('AST/ALT 상승') === '[AST/ALT 상승]', detail: show('AST/ALT 상승') });
-    out.push({ name: '괄호 안의 & 도 안 쪼갠다',
+      ok: show('AST/ALT 상승') === '[AST/ALT] [상승]', detail: show('AST/ALT 상승') });
+    out.push({ name: '괄호 안의 & 도 안 쪼개고, 괄호는 앞말과 별도 빈칸',
       ok: show('능동적 및 수동적 관절가동범위(Active & Passive ROM)가 모든 방향에서 함께 제한')
-        === '[능동적 및 수동적 관절가동범위(Active & Passive ROM)]가 모든 방향에서 함께 제한' });
-    out.push({ name: '열거가 아니면 한 칸 그대로',
-      ok: show('수축기혈압 90mmHg 미만') === '[수축기혈압 90mmHg 미만]' });
+        === '[능동적] 및 [수동적] [관절가동범위][(Active & Passive ROM)]가 모든 방향에서 함께 제한' });
+    out.push({ name: '열거가 아니어도 낱말마다 따로 가린다',
+      ok: show('수축기혈압 90mmHg 미만') === '[수축기혈압] [90mmHg] [미만]' });
 
     // 실제 카드에서도 그렇게 나오는가
     body.innerHTML = renderMarkdown('증상: 구진, **중앙부 배꼽모양 함몰(umbilication)이 진단의 핵심 소견**. 무증상이 대부분이다.');

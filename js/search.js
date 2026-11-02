@@ -270,9 +270,12 @@ export async function search(query, limit = 40, opt = {}) {
   return hits;
 }
 
+// 2026-11-02: 앞뒤 맥락이 너무 짧아 찾은 말만 보고는 내용을 가늠하기 어려웠다
+// (사용자 지적: "더 많은 정보를 미리 보여줘야할것같음... 지금보다 약 두세배 정도
+// 분량이 보이도록"). 기존 50/70자에서 2.5배로 늘린다.
 function snip(text, at, len) {
-  const start = Math.max(0, at - 50);
-  const end = Math.min(text.length, at + len + 70);
+  const start = Math.max(0, at - 125);
+  const end = Math.min(text.length, at + len + 175);
   const pre = start > 0 ? '…' : '';
   const post = end < text.length ? '…' : '';
   const raw = text.slice(start, end).replace(/\n+/g, ' ');

@@ -982,19 +982,30 @@ export function splitWord(w) {
     const upto = rest.search(/[([{]/);
     const head = upto > 0 ? rest.slice(0, upto) : rest;
     rest = upto > 0 ? rest.slice(upto) : '';
-    // ② 숫자·기호 덩어리 뒤에 한글이 붙으면 거기서 끊는다(조사·서술어)
-    //    숫자 사이의 `:`·`~`·`/`·`.`·`-` 와 바로 뒤의 단위는 숫자 쪽에 붙인다
-    const UNIT = '%|℃|°[CF]|mmHg|mg|kg|mL|cm|mm|분|초|회|도|세|개|주|일|시간';
-    const num = head.match(new RegExp(
-      `^[<>≥≤]?\\d+(?:[.:~\\-–/]\\d+)*(?:(?:${UNIT})(?:\\/(?:${UNIT}))?)?`));
-    if (num && num[0].length < head.length && /[가-힣]/.test(head[num[0].length])) {
-      out.push(num[0]);
-      out.push(head.slice(num[0].length));
+    const [num, after] = numBoundarySplit(head);
+    if (after !== undefined) {
+      out.push(num);
+      out.push(after);
       continue;
     }
     if (head) out.push(head);
   }
   return out.filter(Boolean);
+}
+
+/**
+ * 숫자·단위 덩어리 뒤에 한글이 바로 붙으면 거기서 끊는다(조사·서술어).
+ * 숫자 사이의 `:`·`~`·`/`·`.`·`-` 와 바로 뒤의 단위는 숫자 쪽에 붙인다.
+ * 안 끊기면 `[head]`(조각 1개)를, 끊기면 `[숫자부분, 나머지]`를 돌려준다.
+ */
+function numBoundarySplit(head) {
+  const UNIT = '%|℃|°[CF]|mmHg|mg|kg|mL|cm|mm|분|초|회|도|세|개|주|일|시간';
+  const num = head.match(new RegExp(
+    `^[<>≥≤]?\\d+(?:[.:~\\-–/]\\d+)*(?:(?:${UNIT})(?:\\/(?:${UNIT}))?)?`));
+  if (num && num[0].length < head.length && /[가-힣]/.test(head[num[0].length])) {
+    return [num[0], head.slice(num[0].length)];
+  }
+  return [head];
 }
 
 /**
@@ -1485,36 +1496,48 @@ export function splitAnswer(text) {
 }
 
 /**
- * 열거를 쪼갠다 — "A와 B", "A·B·C", "A, B".
+ * 답 전체를 **낱말 단위**로 쪼개 빈칸 조각을 만든다 — "A와 B", "정복·견고한",
+ * "함몰(umbilication)" 전부 이 한 함수가 담당한다 (2026-11-02 재설계).
  *
- * 왜: 통째로 한 칸을 가리면 **몇 개를 답해야 하는지**가 안 보인다(2026-10-14 지적:
- * "-와 이런 거는 좀 보여야 몇 개인지 알겠지"). 잇는 말은 보이게 두고 항목만 가린다.
+ * 전에는 "와/과/·/,/+"로 찾은 **열거 경계에서만** 쪼갰다 — 그래서 열거가 아니면
+ * "중앙부 배꼽모양 함몰(umbilication)" 같은 긴 구절이 통째로 한 빈칸이 됐고, 괄호 속
+ * 원어까지 그 빈칸에 묻어 들어갔다(2026-11-02 지적: "카드만들기 할 때 괄호까지
+ * 포함하는거 되게 별로네... cloze 되는 범위가 커져버리는 버그가 많음. 그냥
+ * 단어단위로. 특수문자는 또 따로 파싱"). 이제 **낱말마다 따로** 가린다 — 조사·접속어
+ * (wordScore가 0을 주는 것들: 와/과/및/이/가/은/는... 그리고 가운뎃점·쉼표처럼 길이 1인
+ * 기호)만 안 가려서 몇 개를 답해야 하는지, 어디까지가 한 낱말인지 그대로 보인다.
  *
- * 괄호 안의 구분자는 건드리지 않는다 — "(Active & Passive ROM)"이 쪼개지면 안 된다.
+ * 괄호는 **통째로 한 조각**이다(splitWord와 같은 규칙) — 안을 쪼개면 뜻이 깨진다.
+ * 괄호 안에 공백이 있어도("(Active & Passive ROM)") 끄떡없다 — 공백보다 괄호를
+ * 먼저 찾기 때문이다.
  */
 export function enumerate(answer) {
-  const whole = [{ t: answer, blank: true }];
-  if (answer.length < 8) return whole;
-  const masked = answer.replace(/\([^)]*\)/g, (m) => ' '.repeat(m.length));
-  // 잇는 말: "와/과"(붙여 쓰고 뒤에 띄운다) · 가운뎃점 · 쉼표 · +
-  // ⚠️ 슬래시는 **빼 둔다** — "AST/ALT", "VF/pVT", "A/B형"처럼 한 낱말인 경우가 훨씬 많다.
-  const SEP = /(와|과)\s+(?=\S)|\s*([·,]|\+)\s*/g;
-  const parts = [];
-  let last = 0;
-  let m;
-  while ((m = SEP.exec(masked))) {
-    const piece = answer.slice(last, m.index).trim();
-    const sep = answer.slice(m.index, m.index + m[0].length);
-    // 양쪽이 너무 짧으면 열거가 아니라 한 낱말이다(예: "A/B형")
-    if (piece.length < 2) { continue; }
-    parts.push({ t: piece, blank: true }, { t: sep, blank: false });
-    last = m.index + m[0].length;
+  const out = [];
+  let rest = String(answer);
+  while (rest) {
+    const ws = rest.match(/^\s+/);
+    if (ws) { out.push({ t: ws[0], blank: false }); rest = rest.slice(ws[0].length); continue; }
+    const par = rest.match(/^[([{][^)\]}]*[)\]}]/);
+    if (par) {
+      out.push({ t: par[0], blank: wordScore(par[0]) > 0 });
+      rest = rest.slice(par[0].length);
+      continue;
+    }
+    // 다음 공백·괄호 전까지 한 덩어리 — 숫자경계로 자르고, 가운뎃점·쉼표·더하기도 뗀다.
+    // ⚠️ 슬래시는 안 뗀다 — "AST/ALT"처럼 한 낱말인 경우가 훨씬 많다.
+    // splitWord와 따로 두는 이유: splitWord는 드래그로 긁은 조각(끝에 붙은 쉼표 등도
+    // 그대로 살려야 하는 조각) 전용이라 나열기호를 떼지 않는다 — 여기서 떼면
+    // "10~30회/분인지,"의 쉼표가 분리돼 splitWord 테스트가 깨진다(2026-11-02 확인).
+    const upto = rest.search(/[\s([{]/);
+    const chunk = upto < 0 ? rest : rest.slice(0, upto);
+    rest = upto < 0 ? '' : rest.slice(upto);
+    const [num, after] = numBoundarySplit(chunk);
+    const pieces = after !== undefined
+      ? [num, ...after.split(/([·,+])/)]
+      : chunk.split(/([·,+])/);
+    for (const piece of pieces.filter(Boolean)) out.push({ t: piece, blank: wordScore(piece) > 0 });
   }
-  const rest = answer.slice(last).trim();
-  if (!parts.length || rest.length < 2) return whole;
-  parts.push({ t: rest, blank: true });
-  // 조각이 하나뿐이면 쪼갠 뜻이 없다
-  return parts.filter((x) => x.blank).length >= 2 ? parts : whole;
+  return out;
 }
 
 /** 강조 요소를 "앞말 + 빈칸 + 뒷말"로 바꾼다. */
