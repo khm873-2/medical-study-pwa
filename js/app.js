@@ -6397,14 +6397,18 @@ const HL_COLORS = [
 ];
 
 let highlightMode = false;
+let highlightErasing = false;          // 하이라이트 중 "지우개" 상태(펜의 erasing과 같은 자리)
 let activeHighlightColor = HL_COLORS[0].hex;   // 노트 열 때 kv에서 덮어쓴다
 // 노트 하나가 아니라 **전체** 하이라이트 캐시다 — 창을 나눠 다른 노트를 옆에 띄워도
 // (openInPane) 그 노트의 하이라이트가 바로 보이게. 쓰는 자리마다 notePath로 거른다.
 let readerHighlights = [];
 
-function setHighlightMode(on, { quiet = false } = {}) {
+function setHighlightMode(on, { quiet = false, erasing = false } = {}) {
   highlightMode = on;
-  document.getElementById('readHighlight').classList.toggle('active', on);
+  highlightErasing = on && erasing;
+  const btn = document.getElementById('readHighlight');
+  btn.classList.toggle('active', on);
+  btn.classList.toggle('erasing', highlightErasing);
   if (on) {
     setTool('select', { quiet: true, forHighlight: true });   // 카드/영역복사 중이었어도 중립 상태로
     if (readerPen) readerPen.setTool('select');
@@ -6412,11 +6416,35 @@ function setHighlightMode(on, { quiet = false } = {}) {
   // 고르기 버튼은 하이라이트 중엔 꺼 보인다 — 안에서는 select를 그대로 쓰지만(네이티브
   // 선택이 통하게), 사용자에게는 "지금 하이라이트 모드"만 또렷하게 보이는 게 맞다.
   document.getElementById('readSelect').classList.toggle('active', !on && penTool === 'select');
-  document.getElementById('hlSwatches').classList.toggle('hidden', !on);
-  if (on) { paintHlSwatches(); placeHlSwatches(); }
-  if (!quiet) capToast(on ? '하이라이트 — 긁으면 바로 칠해집니다' : '하이라이트를 마쳤습니다', 1500);
+  // 지우개 중엔 색 고를 일이 없다
+  document.getElementById('hlSwatches').classList.toggle('hidden', !on || highlightErasing);
+  if (on && !highlightErasing) { paintHlSwatches(); placeHlSwatches(); }
+  if (!quiet) {
+    const msg = !on ? '하이라이트를 마쳤습니다'
+      : highlightErasing ? '하이라이트 지우개 — 칠한 곳을 누르면 지워집니다'
+      : '하이라이트 — 긁으면 바로 칠해집니다';
+    capToast(msg, 1500);
+  }
 }
-document.getElementById('readHighlight').onclick = () => setHighlightMode(!highlightMode);
+// 하이라이트 → 지우개 → 끔 → 하이라이트. 필기 때 쓰던 순환과 같다(2026-11-03 요청:
+// "하이라이트 한번 더 누르면 지우개 활성화 되게").
+document.getElementById('readHighlight').onclick = () => {
+  if (!highlightMode) setHighlightMode(true);
+  else if (!highlightErasing) setHighlightMode(true, { erasing: true });
+  else setHighlightMode(false);
+};
+// 지우개 중엔 **칠한 자리를 누르면 바로 지운다** — 드래그로 새로 칠하는 길과 분리해둔다
+// (애플펜슬 사이드 버튼으로 모드를 토글하는 건 웹에서는 못 한다 — iOS가 더블탭 제스처를
+// 네이티브 앱에만 주고 Safari/PWA로는 넘겨주지 않는다. 그래서 버튼 순환으로 대신한다).
+document.addEventListener('click', (e) => {
+  if (!highlightMode || !highlightErasing) return;
+  const mark = e.target.closest && e.target.closest('mark.user-hl');
+  if (!mark || !document.getElementById('readBody')?.contains(mark)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const h = readerHighlights.find((x) => x.id === mark.dataset.hlId);
+  if (h) removeHighlight(h);
+});
 
 function paintHlSwatches() {
   const box = document.getElementById('hlSwatches');
@@ -6514,7 +6542,7 @@ function applyHighlightsToSection(body, notePath, sec) {
 // ── 하이라이트 모아보기 서랍 — 목차 서랍과 같은 생김새 ──
 
 function highlightsOpen(on) {
-  document.getElementById('readHighlights').classList.toggle('hl-off', !on);
+  document.getElementById('readHighlights').classList.toggle('hidden', !on);
   document.getElementById('readHighlightsScrim').classList.toggle('hidden', !on);
   if (on) renderHighlightPanel();
 }
@@ -6540,10 +6568,21 @@ function renderHighlightPanel() {
     const dot = document.createElement('span');
     dot.className = 'hl-dot';
     dot.style.background = h.color;
+    // 칠한 글이 **먼저, 제 줄로** 보여야 한다 — 소단원 제목이 길면 한 줄에 같이 넣었을 때
+    // 정작 칠한 내용이 잘려 하나도 안 보였다(2026-11-03 지적: "내용이 전혀 나오지 않음").
+    const info = document.createElement('span');
+    info.className = 'hl-info';
     const t = document.createElement('span');
     t.className = 'hl-snip';
-    t.textContent = `${h.sectionHeading ? `${h.sectionHeading} · ` : ''}${h.text.slice(0, 40)}${h.text.length > 40 ? '…' : ''}`;
-    b.append(dot, t);
+    t.textContent = h.text.length > 50 ? `${h.text.slice(0, 50)}…` : h.text;
+    info.appendChild(t);
+    if (h.sectionHeading) {
+      const sub = document.createElement('span');
+      sub.className = 'hl-sub';
+      sub.textContent = h.sectionHeading;
+      info.appendChild(sub);
+    }
+    b.append(dot, info);
     b.onclick = () => jumpToHighlight(h);
     const del = document.createElement('button');
     del.className = 'icon-btn hl-del';
@@ -6642,7 +6681,8 @@ function openBlankAsk() {
 
 /** 읽기 모드에서 긁었을 때 — 여기서도 바로 묻지 않고 팝업으로 고르게 한다. */
 function openAskFromReader(term, info) {
-  if (highlightMode) { commitHighlight(term); return; }
+  // 지우개 중엔 긁어도 아무 일도 안 한다 — 지우기는 칠한 자리를 직접 눌러서 한다(위 클릭 핸들러)
+  if (highlightMode) { if (!highlightErasing) commitHighlight(term); return; }
   const { note, secIdx } = reader;
   const sec = note.sections[secIdx];
   askCtx = { term, qnum: '—', qtext: `${note.title} · ${sec.heading}`, question: null, noteText: sec.text };

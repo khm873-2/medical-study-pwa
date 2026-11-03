@@ -952,17 +952,17 @@ body.boxing .resize-grip { pointer-events: none; }
    접은 상태는 localStorage에 기억한다. */
 
 .read-split { display: block; }
-.read-toc {
+.read-toc, .hl-drawer {
   background: var(--card); border: 1px solid var(--border); border-radius: 12px;
   overflow: hidden auto; -webkit-overflow-scrolling: touch;
 }
-.read-toc .toc-head {
+.read-toc .toc-head, .hl-drawer .toc-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 9px 6px 9px 13px; font-size: 12px; font-weight: 700; color: var(--sub);
   border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--card);
 }
-.read-toc ol { list-style: none; margin: 0; padding: 6px; }
-.read-toc li { margin: 0; }
+.read-toc ol, .hl-drawer ol { list-style: none; margin: 0; padding: 6px; }
+.read-toc li, .hl-drawer li { margin: 0; }
 .toc-link {
   display: flex; gap: 8px; width: 100%; text-align: left; align-items: baseline;
   background: none; border: none; font-family: inherit; color: var(--text);
@@ -2745,20 +2745,39 @@ mark.user-hl.flash { outline: 2px solid var(--hl, #fde047); outline-offset: 1px;
 }
 .hl-swatch.on { border-color: var(--text); }
 
-/* 하이라이트 모아보기 서랍 — 목차와 같은 생김새, 항상 오른쪽 플로팅으로 */
+/* 하이라이트 모아보기 서랍 — 목차와 같은 생김새, 항상 오른쪽 플로팅으로.
+ * ⚠️ 닫힌 상태를 transform: translateX(108%)로 화면 밖에 두려다가, 좁은 화면에서
+ * document.scrollWidth가 늘어나 가로 스크롤이 생겼다(2026-11-03 발견 — 목차 서랍의
+ * -108%(왼쪽)는 브라우저가 scrollWidth에 안 넣어주지만, 오른쪽으로 미는 +108%는
+ * 넣어준다. 왼쪽/오른쪽이 비대칭이다). 그래서 다른 패널들과 같은 .hidden(display:none)
+ * 으로 접고 편다 — 밀어 넣는 애니메이션은 포기한다. */
 .hl-drawer {
   position: fixed; z-index: 100; right: 8px; top: calc(env(safe-area-inset-top, 0px) + 56px);
   width: min(78vw, 320px); max-height: calc(100vh - 150px);
   box-shadow: 0 10px 34px rgba(0,0,0,.22);
-  transition: transform .18s ease-out, opacity .18s ease-out;
 }
-.hl-drawer.hl-off { transform: translateX(108%); opacity: 0; pointer-events: none; }
-.hl-link { display: flex; align-items: center; gap: 8px; }
+/* 한 줄(li)에 "칠한 글 누르기" 버튼 + "지우기" 버튼이 나란히 — 전에는 .toc-link의
+   width:100%가 지우기 버튼을 다음 줄로 밀어냈다(2026-11-03 발견). */
+.hl-drawer li { display: flex; align-items: center; gap: 2px; }
+.hl-link { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; width: auto; min-width: 0; }
 .hl-dot { width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto; }
-.hl-snip { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hl-del { flex: 0 0 auto; font-size: 13px; opacity: .6; }
+.hl-info { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.hl-snip {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 600;
+}
+.hl-sub {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11.5px; color: var(--sub); font-weight: 400;
+}
+.hl-del { flex: 0 0 auto; font-size: 13px; opacity: .6; margin-right: 4px; }
 .hl-del:active { opacity: 1; }
 .hl-empty { padding: 14px; text-align: center; }
+
+/* 하이라이터 버튼 — 다시 누르면 지우개로(펜 때 쓰던 것과 같은 순환, 2026-11-03) */
+#readHighlight .hl-erase-ic { display: none; }
+#readHighlight.erasing .hl-ic { display: none; }
+#readHighlight.erasing .hl-erase-ic { display: inline; }
 
 /* ── 단축키 안내 ── */
 .key-help { font-size: 13.5px; }

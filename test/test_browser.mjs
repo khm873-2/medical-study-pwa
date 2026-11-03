@@ -4426,16 +4426,51 @@ await run('답변 일부 저장', async () => {
     detail: made.rows.map((r) => r.text).join(',') });
   results.push({ name: '저장된 색도 일치한다', ok: !!saved && saved.color === '#86efac' });
 
-  // 하이라이트 모드를 끄면 다시 평소 긁기(팝업)로 돌아간다
+  // 다시 누르면 지우개로(필기 때와 같은 순환, 2026-11-03 요청) — 색 팝오버는 숨고
+  // 아이콘이 바뀐다. 이 상태에서 칠한 자리를 누르면 바로 지워진다.
+  const erasing1 = await page.evaluate(() => {
+    document.getElementById('readHighlight').click();
+    const btn = document.getElementById('readHighlight');
+    return {
+      active: btn.classList.contains('active'),
+      erasingClass: btn.classList.contains('erasing'),
+      swatchesHidden: document.getElementById('hlSwatches').classList.contains('hidden'),
+    };
+  });
+  results.push({ name: '다시 누르면 지우개로 바뀐다(꺼지지 않는다)',
+    ok: erasing1.active && erasing1.erasingClass });
+  results.push({ name: '지우개 중엔 색 팝오버가 숨는다', ok: erasing1.swatchesHidden });
+
+  const erasedByTap = await page.evaluate(async () => {
+    const mark = document.querySelector('#readBody mark.user-hl');
+    mark?.click();
+    await new Promise((r) => setTimeout(r, 150));
+    const d = await import('/js/db.js');
+    return { gone: !document.querySelector('#readBody mark.user-hl'),
+      dbEmpty: (await d.allHighlights()).length === 0,
+      hasUndo: !!document.getElementById('undoToast') };
+  });
+  results.push({ name: '지우개 중 칠한 곳을 누르면 바로 지워진다', ok: erasedByTap.gone });
+  results.push({ name: '지우개 탭도 DB에서 지운다', ok: erasedByTap.dbEmpty });
+  results.push({ name: '지우개 탭도 되돌리기 토스트가 뜬다', ok: erasedByTap.hasUndo });
+
+  // 뒤 검사들(재렌더·모아보기)이 쓸 수 있게 되돌려놓는다
+  await page.evaluate(async () => {
+    document.querySelector('#undoToast button')?.click();
+    await new Promise((r) => setTimeout(r, 150));
+  });
+
+  // 한 번 더 누르면 완전히 꺼지고 평소 긁기(팝업)로 돌아간다
   const exited = await page.evaluate(() => {
     document.getElementById('readHighlight').click();
     return {
       active: document.getElementById('readHighlight').classList.contains('active'),
+      erasingClass: document.getElementById('readHighlight').classList.contains('erasing'),
       swatches: document.getElementById('hlSwatches').classList.contains('hidden'),
       selOn: document.getElementById('readSelect').classList.contains('active'),
     };
   });
-  results.push({ name: '다시 누르면 하이라이터가 꺼진다', ok: !exited.active });
+  results.push({ name: '세 번째로 누르면 완전히 꺼진다', ok: !exited.active && !exited.erasingClass });
   results.push({ name: '색 팝오버도 숨는다', ok: exited.swatches });
   results.push({ name: '고르기가 다시 켜져 보인다', ok: exited.selOn });
 
@@ -4457,7 +4492,7 @@ await run('답변 일부 저장', async () => {
     document.getElementById('mmHighlights').click();
     const drawer = document.getElementById('readHighlights');
     const items = [...document.querySelectorAll('#readHighlightList .hl-link')];
-    return { open: !drawer.classList.contains('hl-off'), count: items.length,
+    return { open: !drawer.classList.contains('hidden'), count: items.length,
       text: items[0] ? items[0].textContent : '' };
   });
   results.push({ name: '더보기에서 모아보기를 열 수 있다', ok: panel.open });
@@ -4503,7 +4538,7 @@ await run('답변 일부 저장', async () => {
   await page.evaluate(async () => {
     const d = await import('/js/db.js');
     for (const h of await d.allHighlights()) await d.deleteHighlight(h.id);
-    document.getElementById('readHighlights').classList.add('hl-off');
+    document.getElementById('readHighlights').classList.add('hidden');
     document.getElementById('readMoreMenu').classList.add('hidden');
   });
 }
