@@ -417,6 +417,13 @@ body[data-screen="readScreen"] #syncBar { bottom: calc(env(safe-area-inset-botto
 }
 pre > code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wiki-body .wikilink { color: var(--accent); }
+/* 홑대괄호 덧붙임 글 — 🔴(기출)·wikilink(--accent)와 다른 톤으로, 다크모드에서도
+   또렷이 보이게 cyan 계열을 쓴다(2026-11-03). */
+.wiki-body .aside-note { color: #0e7490; font-style: italic; font-weight: 400; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .wiki-body .aside-note { color: #67e8f9; }
+}
+:root[data-theme="dark"] .wiki-body .aside-note { color: #67e8f9; }
 .wiki-body hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
 .tablewrap { overflow-x: auto; margin: 10px 0; }
 .wiki-body table { border-collapse: collapse; font-size: 13.5px; min-width: 100%; }
