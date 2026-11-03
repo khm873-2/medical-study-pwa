@@ -20,6 +20,7 @@ const SHELL_FILES = [
   './css/app.css',
   './js/app.js',
   './js/auth.js',
+  './js/icons.js',
   './js/db.js',
   './js/github.js',
   './js/parser.js',

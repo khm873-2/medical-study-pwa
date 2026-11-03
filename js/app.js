@@ -2,10 +2,11 @@
 
 import { hasToken, setToken, clearToken, verifyToken, getRepo, setRepo } from './auth.js';
 import { listDir, listTree, getText, getBlobUrl, createFile, putFile, getTextIfExists } from './github.js';
-import { parseExamHtml, prettyExamName, examDate, examSortKey, teacherName } from './parser.js';
+import { parseExamHtml, prettyExamName, examDate, examSortKey, teacherName, drillSubject, drillTitle } from './parser.js';
 import { Quiz, isAns } from './quiz.js';
 import { PenLayer, tokenizeTree, wordPick } from './pen.js';
 import * as gem from './gemini.js';
+import { ico } from './icons.js';
 import { wikiFor, fitLabel } from './wiki.js';
 import * as backup from './backup.js';
 import { captureRect, canvasToBlob, copyBlobToClipboard } from './capture.js';
@@ -804,84 +805,133 @@ function renderList(index, sessions, kind = '모의고사', attempts = [], finis
   const lastOpen = localStorage.getItem(`open_subject_${kind}`);
   index.forEach((group, gi) => {
     const det = document.createElement('details');
-    det.className = 'subject-group';
+    // 드릴은 "임종평_전범위" 같은 폴더가 subject로 잡혀 과목(소화기·호흡기…) 구분이 전혀
+    // 없다 — 22개가 날짜순으로 한 줄에 쭉 늘어서 찾기 어렵다는 지적(2026-11-03). 드릴만
+    // 이 바깥 묶음을 "뿌리"로 치고, 그 안에 과목별 묶음을 한 겹 더 깐다(아래
+    // renderDrillSubjectGroups) — loadNotesTab의 root-group > subject-group과 같은 CSS를 쓴다.
+    det.className = kind === '드릴' ? 'root-group' : 'subject-group';
     const gkey = `${group.subject}|${group.kind || ''}`;
     det.open = lastOpen ? gkey === lastOpen : gi === 0;
     det.ontoggle = () => { if (det.open) localStorage.setItem(`open_subject_${kind}`, gkey); };
 
     const sum = document.createElement('summary');
-    sum.className = 'subject-head';
-    const inProgress = group.exams.filter((e) => sessions[e.path]).length;
+    sum.className = kind === '드릴' ? 'root-head' : 'subject-head';
+    const { total, inProgress } = examCounts(group.exams, sessions);
     sum.innerHTML = '<span class="head-row">' +
       `<span>${escapeText(group.subject.replace(/_/g, ' '))}</span>` +
-      `<span class="subject-count">${group.exams.length}개` +
+      `<span class="subject-count">${total}개` +
       (inProgress ? ` · 풀던 중 ${inProgress}` : '') + '</span></span>';
     det.appendChild(sum);
     body.appendChild(det);
 
-    group.exams.forEach((ex) => {
-      const btn = document.createElement('button');
-      btn.className = 'exam-item';
-
-      // 족보는 날짜가 아니라 **강의 번호**로 묶인다(NN_챕터.md) — 그 번호를 날짜 자리에 쓴다
-      const isJokbo = (ex.kind || group.kind) === '족보';
-      const d = document.createElement('span');
-      d.className = 'exam-date';
-      d.textContent = isJokbo ? (ex.file.match(/^(\d{2})_/) || ['', ''])[1] : examDate(ex.file);
-
-      const nameWrap = document.createElement('span');
-      nameWrap.className = 'exam-name';
-      nameWrap.textContent = isJokbo ? chapterTitle(ex.file) : prettyExamName(ex.file);
-      const who = isJokbo ? '' : teacherName(ex.file);
-      if (who) {
-        const t = document.createElement('span');
-        t.className = 'teacher-tag';
-        t.textContent = who;
-        nameWrap.appendChild(t);
-      }
-
-      const s = sessions[ex.path];
-      const isDone = finished.has(ex.path);
-      if (s) {
-        const meta = document.createElement('div');
-        meta.className = 'exam-meta';
-        const done = (s.answers || []).filter((a) => a !== null).length;
-        meta.textContent = `풀던 중 — ${done}/${s.total ?? '?'}문항`;
-        nameWrap.appendChild(meta);
-      }
-
-      // 완료(결과 보기까지 끝남) / 풀던 중(세션은 있는데 아직 안 끝남) / 안 풂(기본) —
-      // 색이 다 똑같아서 구분이 안 된다는 지적으로 추가(2026-10-26). 완료가 session
-      // 유무보다 우선이다 — "저장"을 누르면 session이 지워지는데, 그래도 완료로 남아야 한다.
-      btn.classList.toggle('done', isDone);
-      btn.classList.toggle('in-progress', !isDone && !!s);
-
-      const prog = document.createElement('span');
-      prog.className = 'exam-progress';
-      prog.textContent = isDone ? '✓ 완료' : s ? '이어풀기 ›' : '›';
-
-      btn.appendChild(d);
-      btn.appendChild(nameWrap);
-      btn.appendChild(prog);
-      btn.onclick = () => openExam(group.subject, ex);
-
-      // 행 전체를 감싸서 "다시풀기" 칩을 오른쪽에 나란히 붙인다 — 전에는 칩이 줄 전체를
-      // 차지하는 별도 행이라 자리를 너무 잡아먹었다(2026-10-26 지적). 버튼 안에 버튼을
-      // 넣을 수 없어 exam-item의 형제로 둔다.
-      const row = document.createElement('div');
-      row.className = 'exam-row';
-      row.appendChild(btn);
-      const prog2 = examProgress(attempts, ex.path);
-      if (prog2.weak) {
-        const wc = document.createElement('button');
-        wc.className = 'chip exam-weak-chip';
-        wc.textContent = `다시풀기 - 오답 ${prog2.weak}개`;
-        wc.onclick = () => openWeakQueue({ exam: ex.path, subject: group.subject, kind: group.kind });
-        row.appendChild(wc);
-      }
-      det.appendChild(row);
-    });
+    if (kind === '드릴') renderDrillSubjectGroups(det, group, sessions, finished, attempts);
+    else renderExamRows(det, group.exams, group, sessions, finished, attempts);
   });
+}
+
+/** exams 중 몇 개가 풀던 중인지 — 뿌리·과목 묶음 머리글이 공유해서 쓴다. */
+function examCounts(exams, sessions) {
+  return { total: exams.length, inProgress: exams.filter((e) => sessions[e.path]).length };
+}
+
+/** exams를 det(details) 안에 행으로 그린다 — 평평한 과목묶음과 드릴 하위묶음이 공유한다. */
+function renderExamRows(det, exams, group, sessions, finished, attempts) {
+  exams.forEach((ex) => {
+    const btn = document.createElement('button');
+    btn.className = 'exam-item';
+
+    // 족보는 날짜가 아니라 **강의 번호**로 묶인다(NN_챕터.md) — 그 번호를 날짜 자리에 쓴다
+    const isJokbo = (ex.kind || group.kind) === '족보';
+    const isDrill = (ex.kind || group.kind) === '드릴';
+    const d = document.createElement('span');
+    d.className = 'exam-date';
+    d.textContent = isJokbo ? (ex.file.match(/^(\d{2})_/) || ['', ''])[1] : examDate(ex.file);
+
+    const nameWrap = document.createElement('span');
+    nameWrap.className = 'exam-name';
+    nameWrap.textContent = isJokbo ? chapterTitle(ex.file)
+      : isDrill ? drillTitle(ex.file)
+        : prettyExamName(ex.file);
+    // 드릴은 teacherName 대신 과목 자체를 태그로 보여준다 — teacherName은 2~4자 제한이라
+    // "정신건강의학과"(7자) 같은 긴 과목명에서 매치가 안 된다(2026-11-03 발견).
+    const who = isJokbo ? '' : isDrill ? drillSubject(ex.file) : teacherName(ex.file);
+    if (who) {
+      const t = document.createElement('span');
+      t.className = 'teacher-tag';
+      t.textContent = who;
+      nameWrap.appendChild(t);
+    }
+
+    const s = sessions[ex.path];
+    const isDone = finished.has(ex.path);
+    if (s) {
+      const meta = document.createElement('div');
+      meta.className = 'exam-meta';
+      const done = (s.answers || []).filter((a) => a !== null).length;
+      meta.textContent = `풀던 중 — ${done}/${s.total ?? '?'}문항`;
+      nameWrap.appendChild(meta);
+    }
+
+    // 완료(결과 보기까지 끝남) / 풀던 중(세션은 있는데 아직 안 끝남) / 안 풂(기본) —
+    // 색이 다 똑같아서 구분이 안 된다는 지적으로 추가(2026-10-26). 완료가 session
+    // 유무보다 우선이다 — "저장"을 누르면 session이 지워지는데, 그래도 완료로 남아야 한다.
+    btn.classList.toggle('done', isDone);
+    btn.classList.toggle('in-progress', !isDone && !!s);
+
+    const prog = document.createElement('span');
+    prog.className = 'exam-progress';
+    prog.textContent = isDone ? '✓ 완료' : s ? '이어풀기 ›' : '›';
+
+    btn.appendChild(d);
+    btn.appendChild(nameWrap);
+    btn.appendChild(prog);
+    btn.onclick = () => openExam(group.subject, ex);
+
+    // 행 전체를 감싸서 "다시풀기" 칩을 오른쪽에 나란히 붙인다 — 전에는 칩이 줄 전체를
+    // 차지하는 별도 행이라 자리를 너무 잡아먹었다(2026-10-26 지적). 버튼 안에 버튼을
+    // 넣을 수 없어 exam-item의 형제로 둔다.
+    const row = document.createElement('div');
+    row.className = 'exam-row';
+    row.appendChild(btn);
+    const prog2 = examProgress(attempts, ex.path);
+    if (prog2.weak) {
+      const wc = document.createElement('button');
+      wc.className = 'chip exam-weak-chip';
+      wc.textContent = `다시풀기 - 오답 ${prog2.weak}개`;
+      wc.onclick = () => openWeakQueue({ exam: ex.path, subject: group.subject, kind: group.kind });
+      row.appendChild(wc);
+    }
+    det.appendChild(row);
+  });
+}
+
+/**
+ * 드릴 하위 과목 묶음 — root-group(rootDet) 안에 subject-group을 한 겹 더 깐다.
+ * group.subject("임종평_전범위" 등 폴더명)는 openExam/openWeakQueue가 과목으로 해석하는
+ * 기준이라 그대로 둔다 — 여기서 새로 쪼개는 건 순전히 찾기 쉽게 보여주기 위한 표시용이다.
+ */
+function renderDrillSubjectGroups(rootDet, group, sessions, finished, attempts) {
+  const buckets = new Map();                       // 과목(drillSubject) → exams[] (날짜순 그대로)
+  group.exams.forEach((ex) => {
+    const subj = drillSubject(ex.file) || '기타';
+    if (!buckets.has(subj)) buckets.set(subj, []);
+    buckets.get(subj).push(ex);
+  });
+  [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0], 'ko'))
+    .forEach(([subj, exams]) => {
+      const det = document.createElement('details');
+      det.className = 'subject-group';            // 기본 접힘 — loadNotesTab의 내부 묶음과 동일
+      const sum = document.createElement('summary');
+      sum.className = 'subject-head';
+      const { total, inProgress } = examCounts(exams, sessions);
+      sum.innerHTML = '<span class="head-row">' +
+        `<span>${escapeText(subj)}</span>` +
+        `<span class="subject-count">${total}개` +
+        (inProgress ? ` · 풀던 중 ${inProgress}` : '') + '</span></span>';
+      det.appendChild(sum);
+      rootDet.appendChild(det);
+      renderExamRows(det, exams, group, sessions, finished, attempts);
+    });
 }
 
 /**
@@ -907,6 +957,10 @@ async function renderNoteWeek(body, groups) {
   }
   const days = lectureDays(pool);
   if (!days.length) return;
+  // 오늘이 어느 과목 시간표에도 없고(= 전부 끝났거나 아직 안 시작) 사용자가 수동으로 주를
+  // 넘긴 것도 아니면, 옛 과목의 "가장 이른 주"로 조용히 떨어지는 대신 위젯 자체를 숨긴다
+  // (2026-11-03 지적: "근골격이거는 좀 안뜨게... 시험이 지난건 위에 보여줄 필요없음").
+  if (!noteWeekPick && !days.some((d) => d.isToday)) return;
   const week = weekOf(days, noteWeekPick || undefined);
   if (!week.length) return;
 
@@ -963,15 +1017,15 @@ async function renderNoteWeek(body, groups) {
       nm.title = l.name;
       const btns = document.createElement('span');
       btns.className = 'nw-btns';
-      const mk = (label, name, cls) => {
+      const mk = (label, name, cls, icon) => {
         const b = document.createElement('button');
         b.className = `nw-btn${cls ? ' ' + cls : ''}`;
-        b.textContent = label;
+        b.innerHTML = ico(icon) + escapeHtml(label);
         b.onclick = () => openNoteByName(name, { groups });
         btns.appendChild(b);
       };
-      if (l.wiki) mk('📗 실강', l.wiki, 'primary');
-      if (l.note) mk('📖 예습', l.note);
+      if (l.wiki) mk('실강', l.wiki, 'primary', 'book');
+      if (l.note) mk('예습', l.note, '', 'note');
       row.append(dt, nm, btns);
       list.appendChild(row);
       shown++;
@@ -1086,17 +1140,17 @@ function renderDaySection(body, pool, index, attempts, noteGroups) {
 
     const chips = document.createElement('div');
     chips.className = 'today-chips';
-    const chip = (label, fn, cls = '') => {
+    const chip = (label, fn, cls = '', icon = '') => {
       const b = document.createElement('button');
       b.className = `chip${cls ? ' ' + cls : ''}`;
-      b.textContent = label;
+      b.innerHTML = ico(icon) + escapeHtml(label);
       b.onclick = fn;
       chips.appendChild(b);
     };
 
     // 노트 — 실강(수업 후 정리)이 먼저, 그 다음 예습
-    if (l.wiki) chip('📗 실강노트', () => openNoteByName(l.wiki, { groups: noteGroups }));
-    if (l.note) chip('📖 예습노트', () => openNoteByName(l.note, { groups: noteGroups }));
+    if (l.wiki) chip('실강노트', () => openNoteByName(l.wiki, { groups: noteGroups }), '', 'book');
+    if (l.note) chip('예습노트', () => openNoteByName(l.note, { groups: noteGroups }), '', 'note');
 
     // 이 강의의 모의고사·퀴즈 — 전에는 맨 아래 한 뭉치라 어느 강의 것인지 몰랐다
     const mine = byLecture.get(li) || [];
@@ -1106,10 +1160,10 @@ function renderDaySection(body, pool, index, attempts, noteGroups) {
     for (const { g, ex } of mine) {
       usedExams.add(ex.path);
       const p = examProgress(attempts, ex.path);
-      chip(`${g.kind === '퀴즈' ? '📝' : '🧪'} ${g.kind}`
+      chip(`${g.kind}`
         + (twice.has(g.kind) ? ` · ${prettyExamName(ex.file)}` : '')
         + (p.seen ? ` ${p.solid}/${p.seen}${p.weak ? ` · 약함 ${p.weak}` : ''}` : ''),
-      () => openExam(g.subject, ex), 'exam');
+      () => openExam(g.subject, ex), 'exam', g.kind === '퀴즈' ? 'help' : 'flask');
     }
 
     // 족보 — 한 강의가 챕터 여러 개에 걸치면 **전부** 칩으로 깐다(2026-10-27).
@@ -1151,8 +1205,8 @@ function renderDaySection(body, pool, index, attempts, noteGroups) {
       const b = document.createElement('button');
       b.className = 'chip';
       const p = examProgress(attempts, ex.path);
-      b.textContent = `${g.kind === '퀴즈' ? '📝' : '🧪'} ${prettyExamName(ex.file)}`
-        + (p.seen ? ` (${p.solid}/${p.seen})` : '');
+      b.innerHTML = ico(g.kind === '퀴즈' ? 'help' : 'flask')
+        + escapeHtml(`${prettyExamName(ex.file)}` + (p.seen ? ` (${p.solid}/${p.seen})` : ''));
       b.onclick = () => openExam(g.subject, ex);
       wrap.appendChild(b);
     });
@@ -2354,6 +2408,10 @@ document.getElementById('toolCapture').onclick = () => setTool(penTool === 'shot
 // 답을 알려주는 게 아니라 읽는 법을 훈련하는 용도(2026-10-10 요청).
 let breakdownBusy = false;
 let breakdownAbort = null;     // 뜯어보는 중에 그만두면 요청까지 끊는다(2026-10-13)
+// 체크된 단서 — "frag"(지문 원문 조각)를 키로 쓴다. numberClues가 매길 때마다 n을
+// 다시 계산하므로 n은 불안정하지만 frag는 스트리밍 재렌더에도 그대로다(2026-11-03,
+// "지문뜯어보기에서 결과 체크해서... 카드로 만들 수 있도록" 요청으로 도입).
+let bdSelected = new Set();
 
 async function runBreakdown() {
   if (!quiz) return;
@@ -2377,6 +2435,7 @@ async function runBreakdown() {
   }
   breakdownBusy = true;
   breakdownAbort = typeof AbortController === 'function' ? new AbortController() : null;
+  bdSelected.clear();
   el.dataset.forNum = String(q.num);
   el.classList.remove('hidden');
   document.getElementById('toolBreak').classList.add('active');
@@ -2438,6 +2497,7 @@ function cancelBreakdown() {
   if (breakdownAbort) { try { breakdownAbort.abort(); } catch {} }
   breakdownBusy = false;
   breakdownAbort = null;
+  bdSelected.clear();
   const el = document.getElementById('breakdown');
   el.classList.add('hidden');
   el.innerHTML = '';
@@ -2487,7 +2547,7 @@ function renderBreakdown(el, data, q) {
 
   const head = document.createElement('div');
   head.className = 'bd-head';
-  head.innerHTML = `<span>🔍 지문 뜯어보기${data.prebuilt ? ' · 미리 준비됨' : ''}</span>`;
+  head.innerHTML = `<span>${ico('search')}지문 뜯어보기${data.prebuilt ? ' · 미리 준비됨' : ''}</span>`;
   const close = document.createElement('button');
   close.className = 'bd-close';
   close.textContent = '✕';
@@ -2502,10 +2562,24 @@ function renderBreakdown(el, data, q) {
 
   // ① 단서 — 지문의 어느 말이 무엇을 가리키는가.
   //    **읽는 순서대로 번호를 매겨** 지문 쪽 밑줄과 1:1로 잇는다(2026-10-10 요청).
+  //    체크해서 암기카드로 뽑을 수 있다(2026-11-03 요청, 아래 refreshBar/commit 참고) —
+  //    "노트 읽기에서 긁어 카드 만들기"와는 별개로, 문제 지문의 단서 자체를 복습 대상으로
+  //    삼는 기능이다.
   const numbered = numberClues(clues);
+  let refreshBar = () => {};   // 체크 버튼 핸들러가 먼저 정의되므로 끌어올려둔다
   for (const c of numbered) {
     const row = document.createElement('div');
-    row.className = 'bd-row';
+    row.className = `bd-row${bdSelected.has(c.frag) ? ' bd-picked' : ''}`;
+    const pick = document.createElement('button');
+    pick.className = 'bd-pick';
+    pick.textContent = bdSelected.has(c.frag) ? '☑' : '☐';
+    pick.onclick = (ev) => {
+      ev.stopPropagation();      // 체크만 토글 — scrollToClue가 같이 불리지 않게
+      if (bdSelected.has(c.frag)) bdSelected.delete(c.frag); else bdSelected.add(c.frag);
+      pick.textContent = bdSelected.has(c.frag) ? '☑' : '☐';
+      row.classList.toggle('bd-picked', bdSelected.has(c.frag));
+      refreshBar();
+    };
     const idx = document.createElement('span');
     idx.className = 'bd-idx';
     idx.textContent = c.n;
@@ -2518,9 +2592,41 @@ function renderBreakdown(el, data, q) {
     const n = document.createElement('span');
     n.className = 'bd-note';
     n.textContent = c.note;
-    row.append(idx, f, ar, n);
+    row.append(pick, idx, f, ar, n);
     row.onclick = () => scrollToClue(c.n);
     el.appendChild(row);
+  }
+
+  if (numbered.length) {
+    const bar = document.createElement('div');
+    bar.className = 'bd-pick-bar';
+    const status = document.createElement('span');
+    status.className = 'bd-pick-status';
+    const mk = document.createElement('button');
+    mk.className = 'btn small primary';
+    const all = document.createElement('button');
+    all.className = 'btn small bd-pick-all hidden';
+    all.textContent = '한 장에 모두';
+    bar.append(status, all, mk);
+    el.appendChild(bar);
+    refreshBar = () => {
+      const n2 = bdSelected.size;
+      status.textContent = n2 ? `단서 ${n2}개 선택됨` : '복습 카드로 만들 단서를 체크하세요';
+      mk.disabled = !n2;
+      mk.textContent = n2 > 1 ? `＋ 하나씩 ${n2}장` : '＋ 카드 추가';
+      all.classList.toggle('hidden', n2 < 2);
+    };
+    refreshBar();
+    const commit = (combine) => {
+      const picked = numbered.filter((c) => bdSelected.has(c.frag));   // 읽는 순서 유지
+      const cards = breakdownClueCards(picked, q, combine);
+      if (!cards.length) return;
+      bdSelected.clear();
+      renderBreakdown(el, data, q);        // 체크 상태를 0으로 되돌리며 다시 그린다
+      openCardFloat(cards);
+    };
+    mk.onclick = () => commit(false);
+    all.onclick = () => commit(true);
   }
 
   // ② 인상 — 다 읽은 순간의 판단
@@ -2632,6 +2738,47 @@ function scrollToClue(n) {
     setTimeout(() => el.classList.remove('bd-flash'), 900);
   });
   if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+/**
+ * 선택한 단서를 카드로 만든다 — frag(지문 조각)를 보여주고 note(추론)를 가린다.
+ * combine=false(기본): 단서마다 카드 한 장씩 — buildClozeCards의 "둘 이상이면 나눠
+ * 담기가 기본"과 같은 원칙(index.html의 "한 장에 모두" 버튼으로 뒤집을 수 있다).
+ * combine=true: 고른 단서를 한 장에 모두, 단서마다 따로 가린다.
+ * #qcard 출처 카드의 기존 관례(cardSourceAt)를 그대로 따라 notePath/noteTitle/heading을
+ * 맞춘다 — 그래야 같은 문제에서 펜으로 만든 카드와 "이 시험의 카드" 스코프로 함께 묶인다.
+ */
+function breakdownClueCards(selected, q, combine) {
+  if (!selected.length || !currentExam) return [];
+  const heading = `${q.num}번`;
+  const stamp = Date.now();
+  const bodyHtml = (items) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'bd-card-body';
+    items.forEach((c) => {
+      const block = document.createElement('div');
+      block.className = 'bd-card-clue';
+      const frag = document.createElement('div');
+      frag.className = 'bd-card-frag';
+      frag.textContent = c.frag;
+      block.append(frag, blankNode(c.note));
+      wrap.appendChild(block);
+    });
+    return wrap.innerHTML;
+  };
+  const sets = combine ? [selected] : selected.map((c) => [c]);
+  return sets.map((items, i) => ({
+    id: `${currentExam.path}#${heading}#bd${stamp}${sets.length > 1 ? `-${i}` : ''}`,
+    notePath: currentExam.path,
+    noteTitle: currentExam.title,
+    heading,
+    trail: [],
+    topic: `${heading} · 지문 뜯어보기`,
+    contextHtml: tidyCardHtml(bodyHtml(items)),
+    answers: items.map((c) => c.note),
+    starred: false,
+    kind: 'block',
+  }));
 }
 
 document.getElementById('toolBreak').onclick = runBreakdown;
@@ -3048,7 +3195,7 @@ async function renderJongpyeongCard(body, jpGroup, force) {
   const today = roadmapToday(rows);
   if (!today) return;
 
-  const sec = section(body, '📚 임종평 전범위');
+  const sec = section(body, '임종평 전범위');
   const card = document.createElement('div');
   card.className = 'jp-card';
 
@@ -3724,11 +3871,11 @@ function noteDate(name) {
 }
 /** 노트가 어떤 갈래인가 — 서랍에서 한눈에 가르려고 쓴다. */
 function noteKind(path, name) {
-  if (/\/암기법\//.test(path) || /_암기법$/.test(name)) return { ic: '🧠', t: '암기법' };
-  if (/\/QA\//.test(path) || /_QA$/i.test(name)) return { ic: '❓', t: 'Q&A' };
-  if (path.startsWith('98_예습노트_보관')) return { ic: '📝', t: '예습' };
-  if (/\/국시종합\//.test(path)) return { ic: '🎓', t: '국시' };
-  return { ic: '📘', t: '위키' };
+  if (/\/암기법\//.test(path) || /_암기법$/.test(name)) return { ic: 'bulb', t: '암기법' };
+  if (/\/QA\//.test(path) || /_QA$/i.test(name)) return { ic: 'help', t: 'Q&A' };
+  if (path.startsWith('98_예습노트_보관')) return { ic: 'note', t: '예습' };
+  if (/\/국시종합\//.test(path)) return { ic: 'cap', t: '국시' };
+  return { ic: 'book', t: '위키' };
 }
 
 /**
@@ -3867,7 +4014,7 @@ function docItem(n, asPair) {
     const ic = document.createElement('span');
     ic.className = 'dd-kind';
     const kind = noteKind(n.path, n.name);
-    ic.textContent = `${kind.ic} ${kind.t}`;
+    ic.innerHTML = ico(kind.ic) + escapeHtml(kind.t);
     b.appendChild(ic);
   }
   const t = document.createElement('span');
@@ -5267,7 +5414,7 @@ async function toggleTask(btn) {
     }
 
     if (want) await recordPick(doc, at, lines, label);
-    toast(want ? '✅ 채택했습니다 — 고른 내용까지 vault로' : '선택을 풀었습니다');
+    toast(want ? '채택했습니다 — 고른 내용까지 vault로' : '선택을 풀었습니다');
   } catch (e) {
     toast(`바꾸지 못했습니다: ${e.message}`);
   } finally {
@@ -6642,7 +6789,7 @@ function renderAskLog(filter = '') {
 
     const pin = document.createElement('button');
     pin.className = 'icon-btn al-pin';
-    pin.textContent = '📌';
+    pin.innerHTML = ico('pin');
     pin.title = item.pin ? '꽂아둔 것 풀기' : '꽂아두기 — 오래돼도 안 지워집니다';
     pin.setAttribute('aria-pressed', String(!!item.pin));
     pin.onclick = async (e) => {
@@ -7297,14 +7444,14 @@ function renderDeck() {
 
 // ── 왼쪽: 상태 탭 + 과목 트리 ──
 const DECK_TABS = [
-  ['due', '오늘 볼 것', '🗓'],
-  ['star', '중요', '★'],
-  ['leech', '자주 틀림', '⚠'],
-  ['later', '학습 중', '📘'],
-  ['mature', '익힘', '✓'],
-  ['suspended', '버림', '🗑'],
-  ['all', '전체', '📚'],
-  ['import', '가져오기', '📥'],
+  ['due', '오늘 볼 것', 'calendar'],
+  ['star', '중요', 'star'],
+  ['leech', '자주 틀림', 'alert'],
+  ['later', '학습 중', 'book'],
+  ['mature', '익힘', 'check'],
+  ['suspended', '버림', 'trash'],
+  ['all', '전체', 'layers'],
+  ['import', '가져오기', 'download'],
 ];
 
 function renderDeckSide() {
@@ -7323,7 +7470,7 @@ function renderDeckSide() {
         : (g[key] || []).length;
     const b = document.createElement('button');
     b.className = `deck-tab${deckView.group === key ? ' active' : ''}`;
-    b.innerHTML = `<span class="dt-ico">${icon}</span><span class="dt-l">${label}</span><span class="dt-n">${n}</span>`;
+    b.innerHTML = `<span class="dt-ico">${ico(icon)}</span><span class="dt-l">${label}</span><span class="dt-n">${n}</span>`;
     b.onclick = () => { deckView.group = key; clearSel(); renderDeck(); };
     tabs.appendChild(b);
   }
@@ -7695,8 +7842,8 @@ function renderSelBar() {
   });
   btn('★ 중요', () => bulk((srs, id) => { if (!isStarred(srs, id)) toggleStar(srs, id); }, '중요 표시했습니다'));
   btn('☆ 해제', () => bulk((srs, id) => { if (isStarred(srs, id)) toggleStar(srs, id); }, '중요 표시를 뺐습니다'));
-  btn('💤 내일로', () => bulk((srs, id) => buryCard(srs, id), '내일 다시 나옵니다'));
-  btn('🗑 버리기', () => bulk((srs, id) => suspendCard(srs, id), '버렸습니다 — 다시 안 나옵니다'));
+  btn('내일로', () => bulk((srs, id) => buryCard(srs, id), '내일 다시 나옵니다'));
+  btn('버리기', () => bulk((srs, id) => suspendCard(srs, id), '버렸습니다 — 다시 안 나옵니다'));
   btn('↩ 되살리기', () => bulk((srs, id) => unsuspendCard(srs, id), '되살렸습니다'));
   btn('▶ 선택만 풀기', () => {
     const picked = (deckView.cards || []).filter((c) => ids.has(c.id));
@@ -8005,7 +8152,7 @@ async function runSearch(q) {
     const b = document.createElement('button');
     b.className = 'btn primary';
     b.style.marginTop = '10px';
-    b.textContent = '📚 vault 글 전체 받아두기 (한 번만)';
+    b.innerHTML = `${ico('layers')}vault 글 전체 받아두기 (한 번만)`;
     b.onclick = async () => {
       b.disabled = true;
       b.textContent = '받는 중… 잠시만';
@@ -8023,7 +8170,7 @@ async function runSearch(q) {
     b.className = 'search-hit';
     const t = document.createElement('div');
     t.className = 'sh-title';
-    t.textContent = `${h.kind === 'question' ? '📝' : '📖'} ${h.title}`;
+    t.innerHTML = ico(h.kind === 'question' ? 'help' : 'book') + escapeHtml(h.title);
     const s = document.createElement('div');
     s.className = 'sh-snip';
     s.append(h.snippet.before);
@@ -8687,7 +8834,7 @@ document.getElementById('saveToVaultBtn').onclick = async (e) => {
     // 눌렀다는 표시만 바로 주고, 안 됐을 때만 붙잡는다.
     askItems = [];
     clearSession(currentExam.path).catch(() => {});
-    btn.textContent = '✅ 저장됨';
+    btn.innerHTML = `${ico('check')}저장됨`;
     const msg = document.getElementById('saveMsg');
     msg.textContent = '저장 중…';
     setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 2000);
@@ -8797,7 +8944,7 @@ async function pushToVault(payloads) {
 /** 저장 결과를 사람 말로. 화면 글귀와 토스트가 **같은 말**을 하게 한다. */
 function vaultSaveMessage(r) {
   if (!r.queued.length) {
-    return { ok: true, text: `✅ vault에 저장했습니다 — ${r.saved.join(', ')}` };
+    return { ok: true, text: `vault에 저장했습니다 — ${r.saved.join(', ')}` };
   }
   if (r.offline) {
     return { ok: false, text: `📥 연결이 끊겨 ${r.queued.length}건을 기기에 넣어뒀습니다 — 세 번 해봤습니다. 연결되면 자동으로 올라갑니다(앱을 꺼도 남아 있습니다).` };
@@ -9945,6 +10092,10 @@ function hideSplash() {
   const wait = Math.max(0, MIN - (Date.now() - (window.__t0 || Date.now())));
   setTimeout(() => {
     el.classList.add('gone');
+    try {                                // 오늘은 봤다 — 하루에 한 번만(index.html이 읽는다)
+      const d = new Date();
+      localStorage.setItem('splash_day', `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`);
+    } catch {}
     setTimeout(() => el.remove(), 500);  // 사라진 뒤 DOM에서도 뺀다
   }, wait);
 }

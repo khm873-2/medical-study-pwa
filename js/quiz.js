@@ -6,6 +6,7 @@ import { imagePaths } from './parser.js';
 import { saveSession, loadSession, clearSession, recordAttempt, undoAttempt, markUnsure, markBookmark,
   examRun, bumpExamRun, allAttempts, attemptId, markExamFinished, unmarkExamFinished } from './db.js';
 import { scheduleBackup } from './backup.js';
+import { ico } from './icons.js';
 import { tokenize, tokenizeTree } from './pen.js';
 
 const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
@@ -217,7 +218,7 @@ export class Quiz {
     this.el.qnum.textContent = `문제 ${q.num}${q.type === 'ox' ? ' (O/X)' : ''}`;
 
     const src = q.source || q.srcTag;
-    if (src) { this.el.qsource.textContent = `📚 ${src}`; this.el.qsource.style.display = 'inline-block'; }
+    if (src) { this.el.qsource.innerHTML = `${ico('layers')}${escapeHtml(src)}`; this.el.qsource.style.display = 'inline-block'; }
     else { this.el.qsource.style.display = 'none'; }
 
     // 단어 단위 span으로 깔아둔다 — 올가미(동그라미)가 이걸 hit-test 한다.
@@ -395,7 +396,7 @@ export class Quiz {
     if (locked) {
       note.textContent = `답을 ${(q.ansAll || []).length}개 모두 고르는 문항이었습니다.`;
     } else {
-      note.innerHTML = `✅ 모두 고르는 문항입니다 — 해당하는 것을 <b>전부</b> 고르고 `
+      note.innerHTML = `${ico('check')}모두 고르는 문항입니다 — 해당하는 것을 <b>전부</b> 고르고 `
         + `"답 내기"를 누르세요.`;
     }
     this.el.opts.appendChild(note);
@@ -670,7 +671,7 @@ export class Quiz {
     this.el.expText.innerHTML = '';
     const mk = (html) => { const d = document.createElement('div'); d.className = 'line'; d.innerHTML = html; return d; };
 
-    // 'open'은 맞고 틀림이 없다 — ❌로 띄우면 틀린 줄 안다
+    // 'open'은 맞고 틀림이 없다 — 오답 표시로 띄우면 틀린 줄 안다
     const open = q.type === 'open';
     const correct = !open && this.isCorrect(idx);
     const ansLabel = q.type === 'ox' ? (q.ans === 0 ? 'O' : 'X') : ansLabel_(q);
@@ -680,8 +681,8 @@ export class Quiz {
       ? ' <span class="ans-guess" title="족보 원문에 정답 번호가 없어 해설·검증에서 미뤄 짚은 답입니다">추정</span>'
       : '';
     const head = mk(open
-      ? '📖 족보 원문 — 정답은 아래 해설에 있습니다'
-      : `${correct ? '✅ 정답' : '❌ 오답'} — 정답 <b class="opt-num">${ansLabel}</b>${guessTag}`);
+      ? `${ico('book')}족보 원문 — 정답은 아래 해설에 있습니다`
+      : `<span class="res-${correct ? 'ok' : 'no'}">${ico(correct ? 'check' : 'x')}${correct ? '정답' : '오답'}</span> — 정답 <b class="opt-num">${ansLabel}</b>${guessTag}`);
     // 선지를 잘못 눌렀을 때 되돌릴 수 있게(실수로 탭하는 경우가 잦다)
     const retry = document.createElement('button');
     retry.className = 'retry-one';
@@ -715,7 +716,7 @@ export class Quiz {
       }).join(' · ');
       this.el.expText.appendChild(mk(`<span class="muted">지난 풀이 — ${escapeHtml(trail)}</span>`));
     }
-    if (q.explain) this.el.expText.appendChild(mk(`📌 ${escapeHtml(q.explain)}`));
+    if (q.explain) this.el.expText.appendChild(mk(`${ico('pin')}${escapeHtml(q.explain)}`));
     if (Array.isArray(q.opt) && q.opt.some(Boolean) && q.type !== 'mc') {
       this.el.expText.appendChild(mk('오답노트:\n' + q.opt.map((t, i) => (t ? `${CIRCLED[i]} ${t}` : '')).filter(Boolean).join('\n')));
     }

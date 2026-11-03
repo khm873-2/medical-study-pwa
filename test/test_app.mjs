@@ -370,7 +370,7 @@ check('첫 문항 렌더: 지문 표시', qtextJoined === questions[0].q,
   `"${qtextJoined.slice(0, 40)}…"`);
 check('첫 문항 렌더: 단어가 tok span으로 감싸짐',
   (registry.qtext._children[0]?._children || []).some((c) => c.className === 'tok'));
-check('출처 표시(풀기 전부터)', registry.qsource.textContent.startsWith('📚'), registry.qsource.textContent);
+check('출처 표시(풀기 전부터)', /<svg/.test(registry.qsource.innerHTML), registry.qsource.innerHTML);
 check('5지선다 렌더', registry.optsContainer._children.length === questions[0].opts.length,
   `${registry.optsContainer._children.length}개`);
 check('진행 표시', registry.posLabel.textContent === `1/${questions.length}`);
@@ -657,7 +657,7 @@ check('retryWrong: 답안 비워짐', q2.order.every((i) => q2.answers[i] === nu
   }
   // 오늘 탭이 실제로 목록을 물려주는지 — 이게 사라지면 위 보호장치가 의미를 잃는다
   check('오늘 탭의 실강노트 칩이 openNoteByName을 쓴다',
-    /chip\('📗 실강노트', \(\) => openNoteByName\(l\.wiki/.test(src));
+    /chip\('실강노트', \(\) => openNoteByName\(l\.wiki/.test(src));
 }
 
 // ---------- 정답이 한 칸 밀리지 않는가 (2026-10-16 신고) ----------

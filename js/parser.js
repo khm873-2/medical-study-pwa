@@ -304,6 +304,29 @@ export function teacherName(filename) {
   return m ? m[1] : '';
 }
 
+/**
+ * 드릴 파일명에서 과목(소화기·호흡기·정신건강의학과 등). teacherName과 달리 글자수
+ * 제한이 없다 — "정신건강의학과"(7자)도 그대로 잡아야 한다(2026-11-03, 드릴 탭을
+ * 과목별로 묶으면서 teacherName의 2~4자 제한이 깨지는 걸 발견).
+ */
+export function drillSubject(filename) {
+  const m = filename.replace(/\.html$/, '').match(/^(?:\d{6}|\d{4})_([^_]+)/);
+  return m ? m[1] : '';
+}
+
+/**
+ * 드릴 파일명 → 제목. 날짜·과목(묶음 머리글에 이미 나온다)·"드릴" 꼬리말을 뗀 나머지.
+ *   "1102_소화기_01_복부증상및위장관출혈_드릴.html" → "01 복부증상및위장관출혈"
+ *   "1027_소화기_드릴.html"                       → "드릴"(챕터 없는 전체 복습용)
+ */
+export function drillTitle(filename) {
+  let n = filename.replace(/\.html$/, '').replace(/^(\d{6}|\d{4})_/, '');
+  const subj = drillSubject(filename);
+  if (subj && n.startsWith(`${subj}_`)) n = n.slice(subj.length + 1);
+  n = n.replace(/_?드릴$/, '').replace(/_/g, ' ').trim();
+  return n || '드릴';
+}
+
 /** 파일명 앞 날짜 → "10/12". YYMMDD·MMDD 둘 다 받는다. 없으면 빈 문자열. */
 export function examDate(filename) {
   const m = filename.match(/^(?:(\d{2}))?(\d{2})(\d{2})_/);
