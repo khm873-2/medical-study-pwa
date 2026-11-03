@@ -928,6 +928,22 @@ const VAGUE_ANSWERS = new Set([
   '증가', '감소', '상승', '저하', '정상', '비정상', '양성', '음성', '있음', '없음',
 ]);
 
+/**
+ * 그 블록 **제 몫의 글만**(하위 목록·표 등은 뺀) 이어붙인 글.
+ *
+ * `- **2-PAM**`처럼 줄 전체가 굵은 항목 아래 `  - 투여는 **aging 전**에…`가 중첩되면,
+ * `<li>`의 textContent는 하위 목록 글까지 다 포함해버려서 "줄 전체가 이 강조뿐"이라는
+ * 판정(라벨·소제목 인식)이 깨진다 — 2-PAM이 소제목이 아니라 답으로 잘못 뽑혔다
+ * (2026-11-03: 표 칸 `<br>` 줄바꿈을 고치며 중첩 목록을 실제로 들여써서 그리게 바꾼 뒤
+ * 발견). 하위 블록을 걷어내고 그 항목 **자신의** 글만 본다.
+ */
+function ownBlockText(block) {
+  if (!block) return '';
+  const c = block.cloneNode(true);
+  c.querySelectorAll('ul, ol, table, pre, blockquote').forEach((x) => x.remove());
+  return c.textContent;
+}
+
 /** 이 블록이 **족보 문제·해설**인가? 그 안은 외울 지식이 아니라 문제 그 자체다. */
 function isQuizBlock(block) {
   if (!block) return false;
@@ -954,7 +970,7 @@ export function isLabel(el, text) {
   // ③ 줄(블록) 맨 앞에 있고 바로 뒤가 콜론 — vault에서 가장 흔한 라벨 형태
   const block = blockOf(el);
   if (block) {
-    const txt = block.textContent;
+    const txt = ownBlockText(block);
     const idx = txt.indexOf(text);
     const head = idx <= 1;                       // 블록 시작
     const after = txt.slice(idx + text.length, idx + text.length + 3).trimStart();

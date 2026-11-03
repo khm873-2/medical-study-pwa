@@ -171,22 +171,34 @@ export function renderMarkdown(md, opts = {}) {
       continue;
     }
 
-    // --- 목록 (중첩 1단계까지) ---
+    // --- 목록 (중첩 지원) ---
     if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+      const baseIndent = line.match(/^\s*/)[0].length;
       const ordered = /^\s*\d+\./.test(line);
+      // 그 줄이 글머리 기호면 들여쓴 칸 수, 아니면 -1(글머리 아님)
+      const bulletIndent = (l) => {
+        const m = l.match(/^(\s*)([-*+]|\d+\.)\s+/);
+        return m ? m[1].length : -1;
+      };
       const items = [];
       const extras = [];            // 항목마다 딸린 **블록**(들여쓴 콜아웃·인용)
-      while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
+      const nested = [];            // 항목마다 딸린 **중첩 목록** 원본 줄(들여쓴 채로)
+      while (i < lines.length && bulletIndent(lines[i]) === baseIndent) {
         items.push(lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, ''));
         extras.push([]);
+        nested.push([]);
         i++;
-        // 이어지는 들여쓴 줄은 같은 항목에 붙인다
-        while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !/^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
+        // 이어지는 들여쓴 줄 — 더 들여쓴 글머리는 하위 목록, 아니면 같은 항목에 붙인다
+        while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && bulletIndent(lines[i]) !== baseIndent) {
           // ⚠️ 들여쓴 `>` 는 **그 항목 안의 콜아웃**이다(퀴즈 밑에 접어둔 정답 등).
           //    글로 이어붙이면 `> [!success]- 정답 >` 이 그대로 글자로 샌다
           //    (2026-10-14 신고: "이렇게 깨져서 나오는 거"). 따로 모아 블록으로 그린다.
           if (/^\s*>/.test(lines[i])) {
             extras[extras.length - 1].push(lines[i].replace(/^\s+/, ''));
+          } else if (bulletIndent(lines[i]) > baseIndent) {
+            // 더 들여쓴 글머리 — 원본 들여쓰기를 보존해뒀다가 재귀로 중첩 목록으로 그린다
+            // (2026-11-03 신고: "해석:" 아래 하위 항목이 들여쓰기 없이 다 같은 줄로 보임).
+            nested[nested.length - 1].push(lines[i]);
           } else {
             items[items.length - 1] += ' ' + lines[i].trim();
           }
@@ -196,8 +208,15 @@ export function renderMarkdown(md, opts = {}) {
       const tag = ordered ? 'ol' : 'ul';
       // 체크 상자 — `- [ ] 채택 (안 1)`. 노트에서 **고르는 일**이 실제로 있어서
       // (암기법 후보 중 하나 채택 등) 눌러서 바꿀 수 있게 한다(2026-10-14 요청).
-      const tail = (k) => (extras[k] && extras[k].length
-        ? renderMarkdown(extras[k].join('\n'), opts) : '');
+      const tail = (k) => {
+        let html = '';
+        if (nested[k] && nested[k].length) {
+          const minIndent = Math.min(...nested[k].map((l) => l.match(/^\s*/)[0].length));
+          html += renderMarkdown(nested[k].map((l) => l.slice(minIndent)).join('\n'), opts);
+        }
+        if (extras[k] && extras[k].length) html += renderMarkdown(extras[k].join('\n'), opts);
+        return html;
+      };
       out.push(`<${tag}>` + items.map((t, k) => {
         const m = t.match(/^\[([ xX])\]\s*(.*)$/);
         if (!m) return `<li>${inline(t)}${tail(k)}</li>`;
@@ -341,6 +360,12 @@ function inline(s) {
     return ` CS${idx} `;
   });
   let t = escapeHtml(deTex(protected_));
+
+  // 표 칸 안 줄바꿈용 <br> — 마크다운 표 문법엔 칸 안에 실제 개행을 넣을 수 없어서
+  // 노트 원문이 Obsidian 관례대로 `<br>`를 그대로 적어둔다(Obsidian은 바로 그려준다).
+  // escapeHtml이 다른 HTML과 똑같이 `&lt;br&gt;`로 글자화해버려서 달모에서는 "<br>"이
+  // 그대로 보였다(2026-11-03 신고). 이 좁은 모양만 다시 풀어 실제 줄바꿈으로 되돌린다.
+  t = t.replace(/&lt;br\s*\/?&gt;/gi, '<br>');
 
   // [슬라이드 p.12] → 링크. 지금은 **꺼져 있다**(아래 SLIDE_LINKS 주석 참고).
   if (SLIDE_LINKS) {
