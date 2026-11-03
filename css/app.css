@@ -200,6 +200,11 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
   display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; color: #475569;
 }
 .opt-text { flex: 1; font-size: calc(16px * var(--ui-scale)); line-height: 1.45; }
+/* 원본 문항 양식: 검사결과소견 카드 · 선지 선택률 (2026-11-03) */
+.lab-card { background: var(--card, #fff); border: 1px solid var(--border, #e2e8f0); border-radius: 12px; padding: 14px 16px; margin: 0 0 14px; font-size: calc(14px * var(--ui-scale)); line-height: 1.7; }
+.lab-card .lab-title { font-weight: 700; margin-bottom: 4px; }
+.rate { font-size: calc(12px * var(--ui-scale)); font-weight: 700; color: var(--sub, #64748b); min-width: 38px; text-align: right; align-self: center; }
+.opt-row.correct .rate { color: var(--correct, #16a34a); }
 .opt-explain { font-size: 13px; color: var(--sub); margin-top: 3px; line-height: 1.5; }
 .strike .opt-text { text-decoration: line-through; opacity: .45; }
 .eliminate { font-size: 15px; color: #cbd5e1; cursor: pointer; padding: 8px 10px; }

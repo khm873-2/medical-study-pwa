@@ -107,6 +107,9 @@ function normalize(raw, i, forcedType) {
     summary: raw.summary ?? raw.sum ?? '',
     ...(raw.img ? { img: raw.img } : {}),
     ...(raw.imgs ? { imgs: raw.imgs } : {}),
+    // 원본 문항 양식(2026-11-03): 검사결과소견 박스 줄들, 5지선다 선택률(%)
+    ...(Array.isArray(raw.lab) && raw.lab.length ? { lab: raw.lab.map(String) } : {}),
+    ...(Array.isArray(raw.rates) && raw.rates.length ? { rates: raw.rates.map(Number) } : {}),
     ...(raw.srcTag ? { srcTag: raw.srcTag } : {}),
     ...(raw.source ? { source: raw.source } : {}),
     ...(raw.wikiRefs ? { wikiRefs: raw.wikiRefs } : {}),

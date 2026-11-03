@@ -102,6 +102,7 @@ export class Quiz {
       qnum: document.getElementById('qnum'),
       qsource: document.getElementById('qsource'),
       qtext: document.getElementById('qtext'),
+      qlab: document.getElementById('qlab'),
       qimg: document.getElementById('qimgContainer'),
       opts: document.getElementById('optsContainer'),
       ox: document.getElementById('ox-row'),
@@ -223,6 +224,7 @@ export class Quiz {
 
     // 단어 단위 span으로 깔아둔다 — 올가미(동그라미)가 이걸 hit-test 한다.
     tokenize(this.el.qtext, q.q);
+    this._renderLab(q);
     this._renderImages(q);
 
     this.el.pos.textContent = `${this.cur + 1}/${this.order.length}`;
@@ -360,6 +362,13 @@ export class Quiz {
 
       row.appendChild(badge);
       row.appendChild(wrap);
+      // 원본 문항의 선택률(%) — 답을 고른 뒤에만 보여준다(미리 보이면 답이 새므로)
+      if (locked && Array.isArray(q.rates) && q.rates[i] != null) {
+        const rt = document.createElement('div');
+        rt.className = 'rate';
+        rt.textContent = `${q.rates[i]}%`;
+        row.appendChild(rt);
+      }
 
       if (!locked) {
         const el = document.createElement('div');
@@ -510,6 +519,20 @@ export class Quiz {
         else if (i === this.answers[idx]) b.classList.add('wrong');
       }
     });
+  }
+
+  /** 원본 문항의 '검사결과소견' 박스 — 증례 글 바로 아래, 사진 위에 둔다. */
+  _renderLab(q) {
+    const box = this.el.qlab;
+    if (!box) return;
+    box.innerHTML = '';
+    if (!q.lab || !q.lab.length) { box.style.display = 'none'; return; }
+    const t = document.createElement('div');
+    t.className = 'lab-title';
+    t.textContent = '검사결과소견:';
+    box.appendChild(t);
+    q.lab.forEach((l) => { const d = document.createElement('div'); d.textContent = l; box.appendChild(d); });
+    box.style.display = 'block';
   }
 
   async _renderImages(q) {
