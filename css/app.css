@@ -2736,16 +2736,18 @@ mark.find-mark.fading { opacity: 0; }
 
 /* ── 노트 읽기 하이라이트 (2026-11-03) ──
    노트 원문은 안 건드리고 렌더마다 다시 칠하는 앱 전용 표시다. 색은 --hl 변수로 받아서
-   한 규칙이 6색 전부를 처리한다. */
-mark.user-hl {
+   한 규칙이 6색 전부를 처리한다. 새 <mark>를 만드는 대신 기존 .tok(낱말) span에
+   클래스를 얹는 방식이라(여러 낱말에 걸친 하이라이트가 안 보이던 버그 수정,
+   2026-11-03) 태그 이름을 가리지 않는다 — class만 본다. */
+.user-hl {
   padding: 0 2px; border-radius: 3px;
   background: color-mix(in srgb, var(--hl, #fde047) 50%, transparent); color: inherit;
 }
-mark.user-hl.flash { outline: 2px solid var(--hl, #fde047); outline-offset: 1px; }
+.user-hl.flash { outline: 2px solid var(--hl, #fde047); outline-offset: 1px; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) mark.user-hl { background: color-mix(in srgb, var(--hl, #fde047) 32%, transparent); }
+  :root:not([data-theme="light"]) .user-hl { background: color-mix(in srgb, var(--hl, #fde047) 32%, transparent); }
 }
-:root[data-theme="dark"] mark.user-hl { background: color-mix(in srgb, var(--hl, #fde047) 32%, transparent); }
+:root[data-theme="dark"] .user-hl { background: color-mix(in srgb, var(--hl, #fde047) 32%, transparent); }
 
 /* 색 고르기 팝오버 — #readHighlight를 켜면 뜬다 */
 .hl-swatches {
@@ -2767,7 +2769,8 @@ mark.user-hl.flash { outline: 2px solid var(--hl, #fde047); outline-offset: 1px;
  * 으로 접고 편다 — 밀어 넣는 애니메이션은 포기한다. */
 .hl-drawer {
   position: fixed; z-index: 100; right: 8px; top: calc(env(safe-area-inset-top, 0px) + 56px);
-  width: min(78vw, 320px); max-height: calc(100vh - 150px);
+  /* 170%(2026-11-03 요청) — 320px이던 기준폭의 1.7배 */
+  width: min(90vw, 544px); max-height: calc(100vh - 150px);
   box-shadow: 0 10px 34px rgba(0,0,0,.22);
 }
 /* 한 줄(li)에 "칠한 글 누르기" 버튼 + "지우기" 버튼이 나란히 — 전에는 .toc-link의

@@ -4818,8 +4818,11 @@ function renderPaneBody(pi) {
   const sec = t.note.sections[t.secIdx];
   head.textContent = sec ? sec.heading : '';
   renderSection(body, sec || { text: '' });
-  applyHighlightsToSection(body, t.note.path, sec);   // 저장해둔 하이라이트를 다시 칠한다
   tokenizeTree(body);
+  // ⚠️ 반드시 tokenizeTree **다음**에 불러야 한다 — applyHighlightsToSection은 낱말을
+  // 감싼 .tok span을 찾아서 칠하는데, 먼저 부르면 .tok가 아직 없어 토큰이 0개라
+  // 아무것도 못 찾고 조용히 빠져나갔다("저장은 되는데 안 보임", 2026-11-03).
+  applyHighlightsToSection(body, t.note.path, sec);   // 저장해둔 하이라이트를 다시 칠한다
   makeWikiLinksDraggable(body);        // 관련 노트 링크를 끌어 나눌 수 있게
 }
 
@@ -6441,7 +6444,7 @@ document.getElementById('readHighlight').onclick = () => {
 // 네이티브 앱에만 주고 Safari/PWA로는 넘겨주지 않는다. 그래서 버튼 순환으로 대신한다).
 document.addEventListener('click', (e) => {
   if (!highlightMode || !highlightErasing) return;
-  const mark = e.target.closest && e.target.closest('mark.user-hl');
+  const mark = e.target.closest && e.target.closest('.user-hl');
   if (!mark || !document.getElementById('readBody')?.contains(mark)) return;
   e.preventDefault();
   e.stopPropagation();
@@ -6477,13 +6480,64 @@ function placeHlSwatches() {
 }
 
 /**
- * 하이라이트 저장 — frag(선택한 글)을 그대로 보관한다.
+ * 펜 제스처의 **실제 시작·끝 좌표**로 글자 단위 정밀 Range를 만든다.
+ *
+ * PenLayer._textInBox는 "가장 가까운 낱말"로 스냅하는 방식이라(펜/손가락으로 긁기
+ * 좋으라고 일부러 그렇게 만든 것 — 질문하기·클로즈카드엔 적당했다), 하이라이트에
+ * 쓰면 "줄 끝으로 튀거나 엉뚱한 낱말이 잡히는" 것처럼 보인다(2026-11-03 지적).
+ * 하이라이트는 보이는 그대로 칠해져야 하므로, 같은 드래그 제스처의 좌표를
+ * caretRangeFromPoint로 다시 읽어 **글자 단위** Range를 따로 만든다.
+ *
+ * readerPen._span은 비공개 필드지만 이미 window.__penForTest로도 노출해둔 값이고,
+ * 같은 모듈 안에서 읽는 것뿐이라 안전하다 — PenLayer 자체는 안 건드린다(질문하기·
+ * 클로즈카드 등 다른 기능은 지금 방식 그대로 둔다).
+ */
+function preciseHighlightRange() {
+  if (!readerPen || !readerPen._span || !readerPen.canvas) return null;
+  const caretAt = (x, y) => {
+    if (document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y);
+    if (document.caretPositionFromPoint) {
+      const pos = document.caretPositionFromPoint(x, y);
+      if (!pos || !pos.offsetNode) return null;
+      const rg = document.createRange();
+      rg.setStart(pos.offsetNode, pos.offset);
+      rg.collapse(true);
+      return rg;
+    }
+    return null;
+  };
+  const r = readerPen.canvas.getBoundingClientRect();
+  const { a, z } = readerPen._span;
+  const r1 = caretAt(r.left + a.x, r.top + a.y);
+  const r2 = caretAt(r.left + z.x, r.top + z.y);
+  if (!r1 || !r2) return null;
+  const body = document.getElementById('readBody');
+  if (!body || !body.contains(r1.startContainer) || !body.contains(r2.startContainer)) {
+    return null;
+  }
+  const range = document.createRange();
+  // 오른쪽→왼쪽, 아래→위로 그었을 수도 있다 — 문서 순서로 바로잡는다
+  if (r1.compareBoundaryPoints(Range.START_TO_START, r2) <= 0) {
+    range.setStart(r1.startContainer, r1.startOffset);
+    range.setEnd(r2.startContainer, r2.startOffset);
+  } else {
+    range.setStart(r2.startContainer, r2.startOffset);
+    range.setEnd(r1.startContainer, r1.startOffset);
+  }
+  return range.collapsed ? null : range;
+}
+
+/**
+ * 하이라이트 저장 — 제스처 좌표로 다시 읽은 **글자 단위** Range를 우선 쓰고,
+ * (사파리가 아니라서) 못 구하면 펜이 넘겨준 낱말 단위 글로 대신한다.
  * occurrence는 "저장된 순서" 기준 단순 카운트다 — 같은 구절을 문서 순서와 다르게
  * 골라 칠하면 어긋날 수 있는 걸 알고 가는 단순화(드문 경우라 지금은 감수한다).
  */
 async function commitHighlight(term) {
+  const range = preciseHighlightRange();
+  const precise = range ? range.toString() : '';
   try { window.getSelection().removeAllRanges(); } catch {}
-  const clean = String(term).replace(/\s+/g, ' ').trim();
+  const clean = String(precise || term).replace(/\s+/g, ' ').trim();
   if (!clean || !(reader && reader.note)) return;
   const { note, secIdx } = reader;
   const sec = note.sections[secIdx];
@@ -6498,47 +6552,62 @@ async function commitHighlight(term) {
   await saveHighlight(rec);
   readerHighlights.push(rec);
   backup.scheduleBackup();
-  panes.forEach((_, pi) => renderPaneBody(pi));   // 새 <mark>가 바로 보이게
+  panes.forEach((_, pi) => renderPaneBody(pi));   // 새 표시가 바로 보이게
   capToast('하이라이트를 저장했습니다', 1200);
 }
 
 /**
- * markAllIn(8394행 부근)과 같은 splitText 방식 — 이번엔 저장된 그 한 자리만,
- * 하이라이트별 색·id를 가진 <mark>로 칠한다.
+ * 저장된 글을 렌더된 본문에서 다시 찾아 칠한다.
+ *
+ * ⚠️ 전에는 텍스트 노드 하나 **안에서만** 찾았다 — 그런데 읽기 본문은
+ * tokenizeTree가 낱말마다 `<span class="tok">`로 쪼개놔서, 두 낱말 이상인
+ * 하이라이트는 어느 한 노드에도 전체가 안 들어 있어 **한 번도 못 찾았다**
+ * (2026-11-03 지적: "저장만 하고 안 보임"). 그래서 "지문 뜯어보기"의
+ * highlightFragments와 같은 방식으로 바꾼다 — .tok 전체를 이어붙인 글에서
+ * 찾고, 걸친 .tok 하나하나에 표시만 올린다(새 요소를 안 만드니 태그를
+ * 가로지를 일도 없다). 낱말 사이 공백은 안 칠해져 살짝 끊겨 보이지만,
+ * 범위가 밀리거나 아예 안 보이는 것보다는 훨씬 낫다.
  */
-function paintHighlightMark(root, needle, ord, color, id) {
-  const want = String(needle).normalize('NFC');
-  if (!want.trim()) return null;
-  const jobs = [];
-  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let node;
-  while ((node = walk.nextNode())) {
-    const v = node.nodeValue.normalize('NFC');
-    let from = 0;
-    let i;
-    while ((i = v.indexOf(want, from)) >= 0) { jobs.push({ node, i }); from = i + want.length; }
-  }
-  const job = jobs[ord];
-  if (!job) return null;
-  try {
-    const after = job.node.splitText(job.i);
-    after.splitText(want.length);
-    const m = document.createElement('mark');
-    m.className = 'user-hl';
-    m.style.setProperty('--hl', color);
-    m.dataset.hlId = id;
-    after.replaceWith(m);
-    m.textContent = want;
-    return m;
-  } catch { return null; }   // 태그를 가로지르는 자리는 건너뛴다
+function paintHighlightRun(toks, starts, at, end, color, id) {
+  let painted = false;
+  toks.forEach((t, i) => {
+    const a = starts[i];
+    const b = a + t.textContent.length;
+    if (b > at && a < end) {
+      t.classList.add('user-hl');
+      t.style.setProperty('--hl', color);
+      t.dataset.hlId = id;
+      painted = true;
+    }
+  });
+  return painted;
 }
 
 /** 렌더된 섹션 본문에 저장해둔 하이라이트를 전부 다시 칠한다. */
 function applyHighlightsToSection(body, notePath, sec) {
   if (!body || !sec) return;
-  for (const h of readerHighlights) {
-    if (h.notePath !== notePath || h.sectionHeading !== sec.heading) continue;
-    paintHighlightMark(body, h.text, h.occurrence, h.color, h.id);
+  const mine = readerHighlights.filter((h) => h.notePath === notePath && h.sectionHeading === sec.heading);
+  if (!mine.length) return;
+  const toks = [...body.querySelectorAll('.tok')];
+  if (!toks.length) return;
+  let acc = '';
+  const starts = [];
+  toks.forEach((t) => { starts.push(acc.length); acc += t.textContent; });
+  // tokenizeTree는 낱말만 .tok로 감싸고 공백은 그 사이 맨 텍스트로 둔다 — 그래서
+  // acc에는 공백이 없다. 찾는 글에서도 공백을 지우고 같은 기준으로 맞춘다
+  // (지문 뜯어보기의 numberClues와 같은 방식).
+  for (const h of mine) {
+    const needle = String(h.text).normalize('NFC').replace(/\s+/g, '');
+    if (!needle) continue;
+    let from = 0;
+    let at = -1;
+    for (let n = 0; n <= (h.occurrence || 0); n++) {
+      at = acc.indexOf(needle, from);
+      if (at < 0) break;
+      from = at + 1;                 // 겹치는 자리도 놓치지 않게 1칸씩만 민다
+    }
+    if (at < 0) continue;
+    paintHighlightRun(toks, starts, at, at + needle.length, h.color, h.id);
   }
 }
 
@@ -6604,11 +6673,13 @@ function jumpToHighlight(h) {
   if (i < 0) return;
   const go = () => {
     const body = document.getElementById('readBody');
-    const mark = body && body.querySelector(`mark.user-hl[data-hl-id="${h.id}"]`);
-    if (mark) {
-      mark.classList.add('flash');
-      mark.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      setTimeout(() => mark.classList.remove('flash'), 1600);
+    // 하이라이트 하나가 낱말(.tok) 여러 개에 걸쳐 있을 수 있다 — 전부 깜빡이고,
+    // 가운데로는 첫 낱말 기준으로 스크롤한다.
+    const marks = body ? [...body.querySelectorAll(`.user-hl[data-hl-id="${h.id}"]`)] : [];
+    if (marks.length) {
+      marks.forEach((m) => m.classList.add('flash'));
+      marks[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+      setTimeout(() => marks.forEach((m) => m.classList.remove('flash')), 1600);
     }
     if (window.innerWidth < 900) highlightsOpen(false);
   };
@@ -10726,6 +10797,24 @@ window.addEventListener('note-updated', async (e) => {
   if (onWiki) renderWikiSection();
   if (onWiki2) renderWiki2();
   capToast('노트가 맥에서 바뀌어 새로 불러왔습니다', 1800);
+});
+
+// ═══════════ 화면을 다시 봤을 때 열어둔 노트가 바뀌었는지 조용히 확인 (2026-11-03) ═══════════
+//
+// 위 'note-updated'는 github.js의 refreshInBackground가 쏴줘야 오는데, 그건 getText()를
+// 다시 부를 때만 실행된다. 노트 탭을 계속 열어둔 채로 다른 기기에서 그 사이 여러 번
+// 고쳐도 getText()가 다시 불릴 일이 없어 알림이 영영 안 온다 — 실제 신고: 노트를 띄워
+// 두고 있는 동안 맥에서 모아두기 반영을 여러 번 했는데 하나도 안 보였다. 앱이 백그라운드
+// 갔다가 다시 보일 때마다(아이패드를 다시 켜거나 다른 앱에서 돌아올 때) 지금 열려 있는
+// 노트 경로들에 대해 조용히 getText를 한 번 더 불러서, 캐시 히트→백그라운드 갱신→
+// note-updated 흐름이 다시 돌게 만든다.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  const paths = new Set();
+  for (const p of panes) for (const t of p.tabs) if (t.note) paths.add(t.note.path);
+  if (wikiState && wikiState.refs && wikiState.refs.notePath) paths.add(wikiState.refs.notePath);
+  if (wiki2State && wiki2State.refs && wiki2State.refs.notePath) paths.add(wiki2State.refs.notePath);
+  for (const path of paths) getText(path).catch(() => {});
 });
 
 // ═══════════ 섹션 고르기 — 넓게 펴서 읽히게 (2026-10-20 요청) ═══════════

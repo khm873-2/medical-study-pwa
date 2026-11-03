@@ -4407,7 +4407,7 @@ await run('답변 일부 저장', async () => {
   await new Promise((r) => setTimeout(r, 700));   // pen.js SETTLE_MS(420) + 저장 여유
 
   const made = await page.evaluate(async () => {
-    const mark = document.querySelector('#readBody mark.user-hl');
+    const mark = document.querySelector('#readBody .user-hl');
     const popHidden = document.getElementById('selPop').classList.contains('hidden');
     const d = await import('/js/db.js');
     const rows = await d.allHighlights();
@@ -4442,11 +4442,11 @@ await run('답변 일부 저장', async () => {
   results.push({ name: '지우개 중엔 색 팝오버가 숨는다', ok: erasing1.swatchesHidden });
 
   const erasedByTap = await page.evaluate(async () => {
-    const mark = document.querySelector('#readBody mark.user-hl');
+    const mark = document.querySelector('#readBody .user-hl');
     mark?.click();
     await new Promise((r) => setTimeout(r, 150));
     const d = await import('/js/db.js');
-    return { gone: !document.querySelector('#readBody mark.user-hl'),
+    return { gone: !document.querySelector('#readBody .user-hl'),
       dbEmpty: (await d.allHighlights()).length === 0,
       hasUndo: !!document.getElementById('undoToast') };
   });
@@ -4481,7 +4481,7 @@ await run('답변 일부 저장', async () => {
     await new Promise((r) => setTimeout(r, 150));
     links[0]?.click();                       // 되돌아온다
     await new Promise((r) => setTimeout(r, 150));
-    const mark = document.querySelector('#readBody mark.user-hl');
+    const mark = document.querySelector('#readBody .user-hl');
     return mark ? mark.textContent : null;
   });
   results.push({ name: '다른 섹션 갔다 와도 다시 칠해진다', ok: !!repainted, detail: repainted });
@@ -4502,8 +4502,8 @@ await run('답변 일부 저장', async () => {
   const jumped = await page.evaluate(async () => {
     document.querySelector('#readHighlightList .hl-link').click();
     await new Promise((r) => setTimeout(r, 200));
-    const mark = document.querySelector('#readBody mark.user-hl.flash')
-      || document.querySelector('#readBody mark.user-hl');
+    const mark = document.querySelector('#readBody .user-hl.flash')
+      || document.querySelector('#readBody .user-hl');
     return !!mark;
   });
   results.push({ name: '누르면 그 자리의 하이라이트로 간다', ok: jumped });
@@ -4516,7 +4516,7 @@ await run('답변 일부 저장', async () => {
     await new Promise((r) => setTimeout(r, 150));
     const d = await import('/js/db.js');
     return {
-      gone: !document.querySelector('#readBody mark.user-hl'),
+      gone: !document.querySelector('#readBody .user-hl'),
       dbEmpty: (await d.allHighlights()).length === 0,
       hasUndo: !!document.getElementById('undoToast'),
     };
@@ -4529,7 +4529,7 @@ await run('답변 일부 저장', async () => {
     document.querySelector('#undoToast button')?.click();
     await new Promise((r) => setTimeout(r, 150));
     const d = await import('/js/db.js');
-    return { markBack: !!document.querySelector('#readBody mark.user-hl'),
+    return { markBack: !!document.querySelector('#readBody .user-hl'),
       dbBack: (await d.allHighlights()).length === 1 };
   });
   results.push({ name: '되돌리면 하이라이트가 돌아온다', ok: undone.markBack && undone.dbBack });
