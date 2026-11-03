@@ -5,7 +5,7 @@
 // 날아가면 곤란한 데이터라 IndexedDB를 쓴다.
 
 const DB_NAME = 'medstudy';
-const DB_VER = 3;
+const DB_VER = 4;
 
 const STORE_KV = 'kv';            // 설정·토큰
 const STORE_OUTBOX = 'outbox';    // vault에 못 보낸 저장분(재시도 큐)
@@ -13,6 +13,7 @@ const STORE_SESSION = 'session';  // 모의고사별 이어풀기 상태
 const STORE_CACHE = 'cache';      // 시험 HTML/노트 텍스트 캐시
 const STORE_CARDS = 'cards';      // 네모로 만든 플래시카드(관리 화면에서 다시 본다)
 const STORE_ATTEMPTS = 'attempts'; // 문항별 풀이 이력(과목 전체에서 약한 문항을 모으기 위해)
+const STORE_HIGHLIGHTS = 'highlights'; // 노트 읽기에서 칠한 하이라이트(앱 전용, 노트 원문은 안 건드림)
 
 let _dbp = null;
 
@@ -32,6 +33,10 @@ function open() {
       if (!db.objectStoreNames.contains(STORE_ATTEMPTS)) {
         const st = db.createObjectStore(STORE_ATTEMPTS, { keyPath: 'id' });
         st.createIndex('subject', 'subject');   // 과목 전체에서 약한 문항 모으기
+      }
+      if (!db.objectStoreNames.contains(STORE_HIGHLIGHTS)) {
+        const st = db.createObjectStore(STORE_HIGHLIGHTS, { keyPath: 'id' });
+        st.createIndex('notePath', 'notePath');   // 노트 하나의 하이라이트만 모으기
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -371,4 +376,45 @@ export async function finishedExams() {
 
 export async function clearCards() {
   return tx(STORE_CARDS, 'readwrite', (s) => s.clear());
+}
+
+// ── 하이라이트 (2026-11-03) ──
+// 노트 읽기에서 긁어 칠한 자리. 노트 원문은 안 건드리고 앱(IndexedDB)에만 쌓이며,
+// 백업(js/backup.js)에 같이 실려 vault로 간다 — 실제 노트 .md 반영은 나중에 별도로.
+
+export async function saveHighlight(rec) {
+  return tx(STORE_HIGHLIGHTS, 'readwrite', (s) => s.put(rec));
+}
+export async function allHighlights() {
+  const db = await open();
+  return req2val(db.transaction(STORE_HIGHLIGHTS, 'readonly').objectStore(STORE_HIGHLIGHTS).getAll());
+}
+export async function highlightsForNote(path) {
+  return (await allHighlights()).filter((h) => h.notePath === path);
+}
+export async function deleteHighlight(id) {
+  return tx(STORE_HIGHLIGHTS, 'readwrite', (s) => s.delete(id));
+}
+
+/** 백업 복원용 — 하이라이트는 만든 뒤 안 바뀌는 레코드라 없는 id만 보탠다. */
+export async function mergeHighlights(list) {
+  if (!Array.isArray(list) || !list.length) return 0;
+  const db = await open();
+  const cur = new Set(
+    (await req2val(db.transaction(STORE_HIGHLIGHTS, 'readonly').objectStore(STORE_HIGHLIGHTS).getAll()))
+      .map((h) => h.id));
+  let n = 0;
+  await new Promise((res, rej) => {
+    const t = db.transaction(STORE_HIGHLIGHTS, 'readwrite');
+    const st = t.objectStore(STORE_HIGHLIGHTS);
+    for (const inc of list) {
+      if (!inc || !inc.id || cur.has(inc.id)) continue;
+      st.put(inc);
+      n++;
+    }
+    t.oncomplete = res;
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error);
+  });
+  return n;
 }

@@ -13,7 +13,7 @@ let pass = 0; const fail = [];
 const ok = (n, c, d) => { if (c) pass++; else fail.push(`${n}${d ? ' — ' + d : ''}`); };
 
 // github.js / db.js 를 가짜로 바꿔 끼운 사본을 만든다(네트워크·IndexedDB 없이 돌리려고)
-const store = { kv: {}, sessions: {}, outbox: [], attempts: [] };
+const store = { kv: {}, sessions: {}, outbox: [], attempts: [], highlights: [] };
 let putCalls = [];
 let remoteFile = null;
 
@@ -46,6 +46,16 @@ const mergeAttempts = async (list) => {
     else if ((inc.last?.at || 0) > (S.attempts[i].last?.at || 0)) S.attempts[i] = inc;
   }
   return (list || []).length;
+};
+const allHighlights = async () => S.highlights.map((h) => ({ ...h }));
+const mergeHighlights = async (list) => {
+  let n = 0;
+  for (const inc of list || []) {
+    if (!inc || !inc.id || S.highlights.some((h) => h.id === inc.id)) continue;
+    S.highlights.push(inc);
+    n++;
+  }
+  return n;
 };`)
   .replace("const mine = await (await import('./db.js')).loadSession(key);",
            "const mine = S.sessions[key];");
@@ -184,6 +194,37 @@ ok('올릴 게 없으면 flush는 아무것도 안 한다', (await B.flushBackup
   ok('더 최근에 푼 기록이 이긴다', merged.last.at === 9000 && merged.last.unsure === false,
     JSON.stringify(merged.last));
   store.attempts = [];
+}
+
+// ── 8.6 노트 읽기 하이라이트도 재설치를 넘어간다 ──
+// 노트 원문은 안 건드리고 앱(IndexedDB)에만 있어서, 백업이 유일한 보험이다(2026-11-03).
+{
+  store.highlights = [
+    { id: 'a.md#1. 서론#hl1', notePath: 'a.md', sectionHeading: '1. 서론',
+      occurrence: 0, text: '급성 췌장염', color: '#fde047', createdAt: 1000 },
+    { id: 'a.md#1. 서론#hl2', notePath: 'a.md', sectionHeading: '1. 서론',
+      occurrence: 0, text: 'Grey-Turner 징후', color: '#86efac', createdAt: 2000 },
+  ];
+  const state = await B.collectState();
+  ok('백업에 하이라이트가 담긴다', Array.isArray(state.highlights) && state.highlights.length === 2,
+    JSON.stringify(state.highlights && state.highlights.length));
+  ok('요약에 하이라이트 수가 보인다', /하이라이트 2개/.test(B.describe(state)), B.describe(state));
+
+  // 재설치 — 저장소가 비었다고 가정하고 복원
+  store.highlights = [];
+  const applied = await B.restore(JSON.parse(JSON.stringify(state)));
+  ok('복원이 하이라이트 개수를 보고한다', applied.highlights === 2, JSON.stringify(applied));
+  ok('하이라이트가 되살아난다', store.highlights.length === 2);
+
+  // 두 기기에서 따로 칠했을 때 — 둘 다 남아야 한다(없는 id만 보태는 merge)
+  store.highlights = [{ id: 'b.md#2. 본론#hl9', notePath: 'b.md', sectionHeading: '2. 본론',
+    occurrence: 0, text: '다른 기기에서 칠함', color: '#f9a8d4', createdAt: 3000 }];
+  await B.restore(JSON.parse(JSON.stringify(state)));
+  ok('합치기: 이 기기에만 있던 하이라이트를 지우지 않는다',
+    store.highlights.some((h) => h.id === 'b.md#2. 본론#hl9'));
+  ok('합치기: 양쪽 하이라이트가 다 남는다', store.highlights.length === 3,
+    JSON.stringify(store.highlights.map((h) => h.id)));
+  store.highlights = [];
 }
 
 // ── 9. 앱이 실제로 이 모듈을 쓰고 있나(배선 확인) ──

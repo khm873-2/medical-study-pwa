@@ -2426,12 +2426,6 @@ body.dragging-doc .doc-drawer { opacity: .16; }
   .pane-split-resizer.near::after, .pane-split-resizer.dragging::after { inset: -9px 0; }
 }
 
-/* ── 펜 버튼: 아이콘이 지금 모드를 보여준다 (2026-10-13) ──
-   펜 → 지우개 → 끔으로 돈다. 전에는 늘 펜 모양이라 뭐가 켜졌는지 알 수 없었다. */
-#readPen .erase-ic { display: none; }
-#readPen.erasing .pen-ic { display: none; }
-#readPen.erasing .erase-ic { display: inline; }
-
 /* ── 카드 창: 후보 / 이 노트의 카드 (2026-10-13) ──
    긁자마자 저장하지 않고 후보로 띄운다. 같은 창에서 지우기까지 된다. */
 .cf-tabs {
@@ -2725,6 +2719,46 @@ mark.find-mark.fading { opacity: 0; }
 }
 :root[data-theme="dark"] mark.find-mark { background: color-mix(in srgb, #b8790d 55%, transparent); color: #fff; }
 :root[data-theme="dark"] mark.find-mark.on { background: #b8790d; }
+
+/* ── 노트 읽기 하이라이트 (2026-11-03) ──
+   노트 원문은 안 건드리고 렌더마다 다시 칠하는 앱 전용 표시다. 색은 --hl 변수로 받아서
+   한 규칙이 6색 전부를 처리한다. */
+mark.user-hl {
+  padding: 0 2px; border-radius: 3px;
+  background: color-mix(in srgb, var(--hl, #fde047) 50%, transparent); color: inherit;
+}
+mark.user-hl.flash { outline: 2px solid var(--hl, #fde047); outline-offset: 1px; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) mark.user-hl { background: color-mix(in srgb, var(--hl, #fde047) 32%, transparent); }
+}
+:root[data-theme="dark"] mark.user-hl { background: color-mix(in srgb, var(--hl, #fde047) 32%, transparent); }
+
+/* 색 고르기 팝오버 — #readHighlight를 켜면 뜬다 */
+.hl-swatches {
+  position: fixed; z-index: 120; display: flex; gap: 8px; padding: 8px 10px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.18);
+}
+.hl-swatch {
+  width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent;
+  padding: 0; cursor: pointer;
+}
+.hl-swatch.on { border-color: var(--text); }
+
+/* 하이라이트 모아보기 서랍 — 목차와 같은 생김새, 항상 오른쪽 플로팅으로 */
+.hl-drawer {
+  position: fixed; z-index: 100; right: 8px; top: calc(env(safe-area-inset-top, 0px) + 56px);
+  width: min(78vw, 320px); max-height: calc(100vh - 150px);
+  box-shadow: 0 10px 34px rgba(0,0,0,.22);
+  transition: transform .18s ease-out, opacity .18s ease-out;
+}
+.hl-drawer.hl-off { transform: translateX(108%); opacity: 0; pointer-events: none; }
+.hl-link { display: flex; align-items: center; gap: 8px; }
+.hl-dot { width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto; }
+.hl-snip { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hl-del { flex: 0 0 auto; font-size: 13px; opacity: .6; }
+.hl-del:active { opacity: 1; }
+.hl-empty { padding: 14px; text-align: center; }
 
 /* ── 단축키 안내 ── */
 .key-help { font-size: 13.5px; }

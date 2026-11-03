@@ -31,6 +31,7 @@ import {
   kvGet, kvSet, kvDel, cacheClear, enqueue, listOutbox, dequeue, bumpTries,
   saveCards, allCards, deleteCard,
   allSessions, clearSession, allAttempts, attemptId, finishedExams,
+  saveHighlight, allHighlights, deleteHighlight,
 } from './db.js';
 import { weakQueue, weakBySubject, sumBySubject, examProgress } from './attempts.js';
 
@@ -1431,7 +1432,6 @@ function handlePenTap(el) {
 }
 
 document.getElementById('toolUndo').onclick = () => pen && pen.undo();
-document.getElementById('toolClear').onclick = () => pen && pen.clear();
 document.getElementById('toolErase').onclick = () => setTool(penTool === 'erase' ? 'off' : 'erase');
 document.getElementById('toolWiki').onclick = () => { closeOverview(); toggleWiki(); };
 // AI 해설도 위키처럼 탭으로 — 질문할 때마다 자동으로 열리기만 하던 걸 직접 열고 닫게 한다
@@ -3714,6 +3714,9 @@ async function openNote(path) {
     // 넓은 화면은 목차를 펴놓고, 좁은 화면은 본문을 가리지 않게 접어둔다(기억값 우선)
     const saved = localStorage.getItem('toc_open');
     tocOpen(saved === null ? window.innerWidth >= 900 : saved === '1');
+    // 하이라이트를 renderPanes보다 먼저 받아둬야 처음 그릴 때부터 칠해진다
+    readerHighlights = await allHighlights();
+    activeHighlightColor = (await kvGet('highlight_color')) || HL_COLORS[0].hex;
     renderPanes();
     ensureReaderPen();
   } catch (e) {
@@ -4213,9 +4216,9 @@ document.addEventListener('pointerdown', (e) => {
 
 const mm = (id, fn) => { document.getElementById(id).onclick = () => { closeMore(); fn(); }; };
 mm('mmCards', openCardManager);
+mm('mmHighlights', () => highlightsOpen(true));
 mm('mmAwake', () => document.getElementById('readAwake').click());
 mm('mmTts', () => toggleTts());
-mm('mmClear', () => document.getElementById('toolClear').click());
 mm('mmTop', () => scrollReadTop());
 mm('mmKeys', () => showKeyHelp());
 
@@ -4812,6 +4815,7 @@ function renderPaneBody(pi) {
   const sec = t.note.sections[t.secIdx];
   head.textContent = sec ? sec.heading : '';
   renderSection(body, sec || { text: '' });
+  applyHighlightsToSection(body, t.note.path, sec);   // 저장해둔 하이라이트를 다시 칠한다
   tokenizeTree(body);
   makeWikiLinksDraggable(body);        // 관련 노트 링크를 끌어 나눌 수 있게
 }
@@ -4848,7 +4852,9 @@ function ensureReaderPen() {
   window.__penForTest = readerPen;     // 미리보기 동작을 테스트가 들여다본다
   // 카드 창도 같은 방식으로 열어볼 수 있게 둔다 — 펜 없이 화면을 세우려면 이 길이 필요하다
   window.__openCardFloat = openCardFloat;
-  readerPen.setTool(penTool);   // 창을 바꿔 펜을 새로 만들어도 하던 모드가 이어진다
+  // 창을 바꿔 펜을 새로 만들어도 하던 모드가 이어진다 — 단 write/erase는 퀴즈 전용이라
+  // 읽기 화면에 들어올 때는 select로 대신한다(2026-11-03).
+  readerPen.setTool(penTool === 'write' || penTool === 'erase' ? 'select' : penTool);
 }
 
 // ---------- 읽다가 바로 카드 만들기 ----------
@@ -6301,6 +6307,8 @@ document.getElementById('readNext').onclick = () => {
  *   shot    네모 → 그림으로 복사
  *
  * 읽기 화면과 퀴즈 화면이 같은 상태를 쓴다 — 화면을 옮겨도 하던 모드가 유지된다.
+ * ⚠️ 단 write/erase(필기·지우개)는 예외다(2026-11-03) — 읽기 화면은 펜 대신 하이라이터를
+ * 쓰므로(아래 "하이라이트" 절 참고), 필기/지우개는 **퀴즈 화면의 pen에만** 적용한다.
  */
 let penTool = 'select';
 
@@ -6308,8 +6316,6 @@ let penTool = 'select';
 const TOOL_BTNS = [
   ['off', 'readOff', 'toolOff'],
   ['select', 'readSelect', 'toolSelect'],
-  ['write', 'readPen', 'toolWrite'],
-  ['erase', 'readPen', 'toolErase'],
   ['card', 'readMakeCard', 'toolCard'],
   ['shot', 'readShot', 'toolCapture'],
 ];
@@ -6323,9 +6329,18 @@ const TOOL_SAY = {
   shot: '영역 복사 — 네모를 치면 그림으로 복사됩니다',
 };
 
-function setTool(tool, { quiet = false } = {}) {
+function setTool(tool, { quiet = false, forHighlight = false } = {}) {
+  // 하이라이트 모드 중에 다른 도구를 고르면 하이라이트부터 끈다 — setHighlightMode(true)
+  // 자신이 거는 setTool('select', ...) 호출만 forHighlight로 빠져나간다(2026-11-03).
+  if (highlightMode && !forHighlight) setHighlightMode(false, { quiet: true });
   penTool = TOOL_SAY[tool] ? tool : 'select';
-  for (const p of [readerPen, pen]) if (p) p.setTool(penTool);
+  // write/erase(필기·지우개)는 퀴즈 화면의 pen에만 민다 — readerPen은 하이라이터를 쓰므로
+  // 더는 그 모드로 들어갈 길이 없다(2026-11-03, 펜 도구를 읽기 화면에서만 뺀 결정).
+  if (penTool === 'write' || penTool === 'erase') {
+    if (pen) pen.setTool(penTool);
+  } else {
+    for (const p of [readerPen, pen]) if (p) p.setTool(penTool);
+  }
 
   // 버튼 표시 — 켜진 것 하나만 밝다
   const on = (id, yes) => { const el = document.getElementById(id); if (el) el.classList.toggle('active', yes); };
@@ -6333,7 +6348,6 @@ function setTool(tool, { quiet = false } = {}) {
   on('toolOff', penTool === 'off');
   on('readSelect', penTool === 'select');
   on('toolSelect', penTool === 'select');
-  on('readPen', penTool === 'write' || penTool === 'erase');
   on('toolWrite', penTool === 'write');
   on('toolErase', penTool === 'erase');
   on('readMakeCard', penTool === 'card');
@@ -6350,10 +6364,6 @@ function setTool(tool, { quiet = false } = {}) {
   document.body.classList.toggle('boxing', boxing);
   if (boxing) document.querySelectorAll('.resize-grip.near').forEach((g) => g.classList.remove('near'));
 
-  // 펜 버튼은 지금 지우개인지 아이콘으로 보여준다
-  document.getElementById('readPen')?.classList.toggle('erasing', penTool === 'erase');
-  const rp = document.getElementById('readPen');
-  if (rp) rp.title = penTool === 'erase' ? '지우개 — 다시 누르면 필기' : '필기 — 다시 누르면 지우개';
   if (!quiet) capToast(TOOL_SAY[penTool], 1500);
 }
 
@@ -6365,13 +6375,218 @@ document.getElementById('readOff').onclick = () => setTool('off');
 document.getElementById('toolOff').onclick = () => setTool('off');
 document.getElementById('readSelect').onclick = () =>
   setTool(penTool === 'select' ? 'off' : 'select');
-// 필기 → 지우개 → 일반 → 필기. 끄는 길이 있어야 펜을 손가락처럼 쓸 수 있다.
-document.getElementById('readPen').onclick = () =>
-  setTool(penTool === 'write' ? 'erase' : (penTool === 'erase' ? 'off' : 'write'));
 document.getElementById('toolSelect').onclick = () =>
   setTool(penTool === 'select' ? 'off' : 'select');
 document.getElementById('toolWrite').onclick = () =>
   setTool(penTool === 'write' ? 'off' : 'write');
+
+// ═══════════ 노트 읽기: 하이라이터 (2026-11-03) ═══════════
+//
+// "필기" 자리를 대신한다. penTool/setTool과는 별개의 읽기 화면 전용 상태다 —
+// readerPen.tool을 바로 'select'로 둬서(네이티브 선택이 그대로 통하게) 토글만
+// highlightMode로 따로 관리한다. 노트 원문은 안 건드리고 IndexedDB에만 쌓인다
+// (js/db.js의 saveHighlight/allHighlights/deleteHighlight, js/backup.js로 백업).
+
+const HL_COLORS = [
+  { name: '노랑', hex: '#fde047' },
+  { name: '초록', hex: '#86efac' },
+  { name: '분홍', hex: '#f9a8d4' },
+  { name: '보라', hex: '#d8b4fe' },
+  { name: '하늘', hex: '#67e8f9' },
+  { name: '회색', hex: '#d1d5db' },
+];
+
+let highlightMode = false;
+let activeHighlightColor = HL_COLORS[0].hex;   // 노트 열 때 kv에서 덮어쓴다
+// 노트 하나가 아니라 **전체** 하이라이트 캐시다 — 창을 나눠 다른 노트를 옆에 띄워도
+// (openInPane) 그 노트의 하이라이트가 바로 보이게. 쓰는 자리마다 notePath로 거른다.
+let readerHighlights = [];
+
+function setHighlightMode(on, { quiet = false } = {}) {
+  highlightMode = on;
+  document.getElementById('readHighlight').classList.toggle('active', on);
+  if (on) {
+    setTool('select', { quiet: true, forHighlight: true });   // 카드/영역복사 중이었어도 중립 상태로
+    if (readerPen) readerPen.setTool('select');
+  }
+  // 고르기 버튼은 하이라이트 중엔 꺼 보인다 — 안에서는 select를 그대로 쓰지만(네이티브
+  // 선택이 통하게), 사용자에게는 "지금 하이라이트 모드"만 또렷하게 보이는 게 맞다.
+  document.getElementById('readSelect').classList.toggle('active', !on && penTool === 'select');
+  document.getElementById('hlSwatches').classList.toggle('hidden', !on);
+  if (on) { paintHlSwatches(); placeHlSwatches(); }
+  if (!quiet) capToast(on ? '하이라이트 — 긁으면 바로 칠해집니다' : '하이라이트를 마쳤습니다', 1500);
+}
+document.getElementById('readHighlight').onclick = () => setHighlightMode(!highlightMode);
+
+function paintHlSwatches() {
+  const box = document.getElementById('hlSwatches');
+  if (!box.children.length) {
+    for (const c of HL_COLORS) {
+      const b = document.createElement('button');
+      b.className = 'hl-swatch';
+      b.style.background = c.hex;
+      b.title = c.name;
+      b.onclick = () => { activeHighlightColor = c.hex; kvSet('highlight_color', c.hex); paintHlSwatches(); };
+      box.appendChild(b);
+    }
+  }
+  [...box.children].forEach((b, i) => b.classList.toggle('on', HL_COLORS[i].hex === activeHighlightColor));
+}
+
+/** 색 팝오버를 하이라이터 버튼 아래에 둔다 — 더보기 메뉴 자리 잡기(placeMoreMenu)와 같은 방식. */
+function placeHlSwatches() {
+  const btn = document.getElementById('readHighlight');
+  const box = document.getElementById('hlSwatches');
+  if (!btn || !box) return;
+  const r = btn.getBoundingClientRect();
+  const top = Math.min(r.bottom + 6, window.innerHeight - 54);
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - 240));
+  box.style.top = `${top}px`;
+  box.style.left = `${left}px`;
+}
+
+/**
+ * 하이라이트 저장 — frag(선택한 글)을 그대로 보관한다.
+ * occurrence는 "저장된 순서" 기준 단순 카운트다 — 같은 구절을 문서 순서와 다르게
+ * 골라 칠하면 어긋날 수 있는 걸 알고 가는 단순화(드문 경우라 지금은 감수한다).
+ */
+async function commitHighlight(term) {
+  try { window.getSelection().removeAllRanges(); } catch {}
+  const clean = String(term).replace(/\s+/g, ' ').trim();
+  if (!clean || !(reader && reader.note)) return;
+  const { note, secIdx } = reader;
+  const sec = note.sections[secIdx];
+  if (!sec) return;
+  const occurrence = readerHighlights.filter(
+    (h) => h.notePath === note.path && h.sectionHeading === sec.heading && h.text === clean).length;
+  const rec = {
+    id: `${note.path}#${sec.heading}#hl${Date.now()}`,
+    notePath: note.path, sectionHeading: sec.heading,
+    occurrence, text: clean, color: activeHighlightColor, createdAt: Date.now(),
+  };
+  await saveHighlight(rec);
+  readerHighlights.push(rec);
+  backup.scheduleBackup();
+  panes.forEach((_, pi) => renderPaneBody(pi));   // 새 <mark>가 바로 보이게
+  capToast('하이라이트를 저장했습니다', 1200);
+}
+
+/**
+ * markAllIn(8394행 부근)과 같은 splitText 방식 — 이번엔 저장된 그 한 자리만,
+ * 하이라이트별 색·id를 가진 <mark>로 칠한다.
+ */
+function paintHighlightMark(root, needle, ord, color, id) {
+  const want = String(needle).normalize('NFC');
+  if (!want.trim()) return null;
+  const jobs = [];
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walk.nextNode())) {
+    const v = node.nodeValue.normalize('NFC');
+    let from = 0;
+    let i;
+    while ((i = v.indexOf(want, from)) >= 0) { jobs.push({ node, i }); from = i + want.length; }
+  }
+  const job = jobs[ord];
+  if (!job) return null;
+  try {
+    const after = job.node.splitText(job.i);
+    after.splitText(want.length);
+    const m = document.createElement('mark');
+    m.className = 'user-hl';
+    m.style.setProperty('--hl', color);
+    m.dataset.hlId = id;
+    after.replaceWith(m);
+    m.textContent = want;
+    return m;
+  } catch { return null; }   // 태그를 가로지르는 자리는 건너뛴다
+}
+
+/** 렌더된 섹션 본문에 저장해둔 하이라이트를 전부 다시 칠한다. */
+function applyHighlightsToSection(body, notePath, sec) {
+  if (!body || !sec) return;
+  for (const h of readerHighlights) {
+    if (h.notePath !== notePath || h.sectionHeading !== sec.heading) continue;
+    paintHighlightMark(body, h.text, h.occurrence, h.color, h.id);
+  }
+}
+
+// ── 하이라이트 모아보기 서랍 — 목차 서랍과 같은 생김새 ──
+
+function highlightsOpen(on) {
+  document.getElementById('readHighlights').classList.toggle('hl-off', !on);
+  document.getElementById('readHighlightsScrim').classList.toggle('hidden', !on);
+  if (on) renderHighlightPanel();
+}
+document.getElementById('readHighlightsHide').onclick = () => highlightsOpen(false);
+document.getElementById('readHighlightsScrim').onclick = () => highlightsOpen(false);
+
+function renderHighlightPanel() {
+  const list = document.getElementById('readHighlightList');
+  list.innerHTML = '';
+  if (!reader) return;
+  const order = (h) => reader.note.sections.findIndex((s) => s.heading === h.sectionHeading);
+  const mine = readerHighlights.filter((h) => h.notePath === reader.note.path)
+    .sort((a, b) => order(a) - order(b) || a.createdAt - b.createdAt);
+  if (!mine.length) {
+    list.innerHTML = '<li class="muted hl-empty">아직 하이라이트가 없습니다.</li>';
+    return;
+  }
+  mine.forEach((h) => {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'toc-link hl-link';
+    const dot = document.createElement('span');
+    dot.className = 'hl-dot';
+    dot.style.background = h.color;
+    const t = document.createElement('span');
+    t.className = 'hl-snip';
+    t.textContent = `${h.sectionHeading ? `${h.sectionHeading} · ` : ''}${h.text.slice(0, 40)}${h.text.length > 40 ? '…' : ''}`;
+    b.append(dot, t);
+    b.onclick = () => jumpToHighlight(h);
+    const del = document.createElement('button');
+    del.className = 'icon-btn hl-del';
+    del.title = '지우기';
+    del.textContent = '✕';
+    del.onclick = (e) => { e.stopPropagation(); removeHighlight(h); };
+    li.append(b, del);
+    list.appendChild(li);
+  });
+}
+
+/** 다른 섹션에 있는 하이라이트로 간다 — goDocHit과 같은 "먼저 섹션 이동 → 잠시 뒤 찾기". */
+function jumpToHighlight(h) {
+  if (!reader) return;
+  const i = reader.note.sections.findIndex((s) => s.heading === h.sectionHeading);
+  if (i < 0) return;
+  const go = () => {
+    const body = document.getElementById('readBody');
+    const mark = body && body.querySelector(`mark.user-hl[data-hl-id="${h.id}"]`);
+    if (mark) {
+      mark.classList.add('flash');
+      mark.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      setTimeout(() => mark.classList.remove('flash'), 1600);
+    }
+    if (window.innerWidth < 900) highlightsOpen(false);
+  };
+  if (reader.secIdx !== i) { reader.secIdx = i; renderReader(); setTimeout(go, 80); } else go();
+}
+
+async function removeHighlight(h) {
+  await deleteHighlight(h.id);
+  readerHighlights = readerHighlights.filter((x) => x.id !== h.id);
+  backup.scheduleBackup();
+  renderHighlightPanel();
+  panes.forEach((_, pi) => renderPaneBody(pi));
+  toastUndo('하이라이트를 지웠습니다.', async () => {
+    await saveHighlight(h);
+    readerHighlights.push(h);
+    backup.scheduleBackup();
+    renderHighlightPanel();
+    panes.forEach((_, pi) => renderPaneBody(pi));
+  });
+}
 
 document.getElementById('readAwake').onclick = async () => {
   const btn = document.getElementById('readAwake');
@@ -6427,6 +6642,7 @@ function openBlankAsk() {
 
 /** 읽기 모드에서 긁었을 때 — 여기서도 바로 묻지 않고 팝업으로 고르게 한다. */
 function openAskFromReader(term, info) {
+  if (highlightMode) { commitHighlight(term); return; }
   const { note, secIdx } = reader;
   const sec = note.sections[secIdx];
   askCtx = { term, qnum: '—', qtext: `${note.title} · ${sec.heading}`, question: null, noteText: sec.text };

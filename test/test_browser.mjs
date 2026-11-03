@@ -967,7 +967,7 @@ await run('캡처 토스트', () => {
     const capIc = document.querySelector('#toolCapture .ic');
     out.push({ name: '캡처 버튼이 SVG 아이콘', ok: !!capIc && capIc.tagName.toLowerCase() === 'svg' });
     out.push({ name: '도구 아이콘이 전부 SVG로 통일',
-      ok: ['toolErase', 'toolCapture', 'toolUndo', 'toolClear', 'toolWiki', 'toolAi', 'toolBreak']
+      ok: ['toolErase', 'toolCapture', 'toolUndo', 'toolWiki', 'toolAi', 'toolBreak']
         .every((id) => !!document.querySelector(`#${id} .ic`)) });
     out.push({ name: '아이콘이 현재 색을 따른다(활성·다크모드 대응)',
       ok: getComputedStyle(capIc).stroke === getComputedStyle(document.getElementById('toolCapture')).color });
@@ -982,7 +982,7 @@ await run('캡처 토스트', () => {
     out.push({ name: '토스트가 입력을 막지 않는다', ok: cs.pointerEvents === 'none' });
     t.remove();
     // 도구 설명이 분명한가(무슨 버튼인지 몰랐다는 피드백)
-    ['toolErase', 'toolUndo', 'toolClear', 'toolCapture', 'toolBreak'].forEach((id) => {
+    ['toolErase', 'toolUndo', 'toolCapture', 'toolBreak'].forEach((id) => {
       const b = document.getElementById(id);
       out.push({ name: `${id} 설명이 한 줄 이상`, ok: (b.title || '').length > 8, detail: b.title });
     });
@@ -4055,7 +4055,7 @@ await run('분할 읽기', async () => {
     out.push({ name: '글씨 버튼이 제목보다 앞에 있다',
       ok: document.getElementById('readTocBtn').compareDocumentPosition(h1) & Node.DOCUMENT_POSITION_FOLLOWING });
     out.push({ name: '아이콘 버튼에 눌릴 경계(테두리)가 있다',
-      ok: getComputedStyle(document.getElementById('readPen')).borderStyle === 'solid' });
+      ok: getComputedStyle(document.getElementById('readHighlight')).borderStyle === 'solid' });
 
     // ★ 창을 줄여 쓰면 시스템 ●●● 버튼이 왼쪽 위를 덮는다 — 뒤로가기를 아예 못 눌렀다
     document.body.setAttribute('data-win-controls', '');
@@ -4068,34 +4068,34 @@ await run('분할 읽기', async () => {
     out.push({ name: '전체 화면이면 다시 올라간다',
       ok: document.getElementById('readBack').getBoundingClientRect().top < backTop });
 
-    // ★ 고르기와 필기를 **버튼으로 나눴다**(2026-10-14). 전에는 한 버튼이 둘을 겸해서
-    //   카드 만들기를 켜놔도 긁으면 선택 팝업이 떴다.
+    // ★ 고르기와 하이라이트를 **버튼으로 나눴다**(2026-11-03, 필기 자리를 대신함).
+    //   전에는 필기/지우개가 한 버튼을 돌았는데, 이제 그 자리는 하이라이터다 —
+    //   계속 켜진 채로 긁을 때마다 바로 칠해지고, 다른 도구를 고르면 꺼진다.
     const sel = document.getElementById('readSelect');
-    const pen = document.getElementById('readPen');
-    out.push({ name: '**고르기와 필기가 다른 버튼이다**', ok: !!sel && !!pen && sel !== pen });
+    const hl = document.getElementById('readHighlight');
+    const swatches = document.getElementById('hlSwatches');
+    out.push({ name: '**고르기와 하이라이트가 다른 버튼이다**', ok: !!sel && !!hl && sel !== hl });
     out.push({ name: '처음엔 고르기(긁으면 글이 잡힌다)', ok: sel.classList.contains('active') });
+    out.push({ name: '필기 버튼은 더 없다(하이라이터로 대체됨)', ok: !document.getElementById('readPen') });
 
-    pen.click();
-    out.push({ name: '필기를 누르면 고르기가 꺼진다',
-      ok: pen.classList.contains('active') && !sel.classList.contains('active') });
-    out.push({ name: '필기 중에는 지우개가 아니다', ok: !pen.classList.contains('erasing') });
-    pen.click();
-    out.push({ name: '필기를 다시 누르면 지우개', ok: pen.classList.contains('erasing') });
-    out.push({ name: '지우개 아이콘이 실제로 보인다',
-      ok: getComputedStyle(pen.querySelector('.erase-ic')).display !== 'none'
-        && getComputedStyle(pen.querySelector('.pen-ic')).display === 'none' });
+    hl.click();
+    out.push({ name: '하이라이터를 누르면 고르기가 꺼져 보인다',
+      ok: hl.classList.contains('active') && !sel.classList.contains('active') });
+    out.push({ name: '색 고르기 팝오버가 뜬다', ok: !swatches.classList.contains('hidden') });
+    out.push({ name: '색이 6가지다', ok: swatches.querySelectorAll('.hl-swatch').length === 6,
+      detail: `${swatches.querySelectorAll('.hl-swatch').length}개` });
+    out.push({ name: '안에서는 select를 그대로 써 긁기가 통한다',
+      ok: !!(window.__penForTest && window.__penForTest.tool === 'select') });
 
-    // ★ 카드 만들기를 켜면 **고르기도 필기도 꺼져야** 한다 — 이게 안 돼서 팝업이 떴다
+    // ★ 카드 만들기를 켜면 하이라이트가 꺼져야 한다 — 도구는 하나씩만
     document.getElementById('readMakeCard').click();
-    out.push({ name: '**카드 만들기를 켜면 다른 모드가 전부 꺼진다**',
+    out.push({ name: '**카드 만들기를 켜면 하이라이트가 꺼진다**',
       ok: document.getElementById('readMakeCard').classList.contains('active')
-        && !sel.classList.contains('active') && !pen.classList.contains('active'),
+        && !hl.classList.contains('active') && swatches.classList.contains('hidden'),
       detail: [...document.querySelectorAll('#readTools .active')].map((b) => b.id).join(',') });
     out.push({ name: '펜도 실제로 카드 모드다',
       ok: !!(window.__penForTest && window.__penForTest.tool === 'card'),
       detail: window.__penForTest ? window.__penForTest.tool : '펜 없음' });
-    out.push({ name: '그때는 글을 잡지 않는다(팝업이 안 뜬다)',
-      ok: !!(window.__penForTest && !window.__penForTest.writing) });
 
     document.getElementById('readShot').click();
     out.push({ name: '영역 복사로 바꾸면 카드가 꺼진다',
@@ -4350,6 +4350,162 @@ await run('답변 일부 저장', async () => {
     results.push({ name: '팝업에서 다음 할 일을 고를 수 있다', ok: btns.length >= 2, detail: btns.join(' / ') });
     await page.evaluate(() => document.getElementById('selPop').classList.add('hidden'));
   }
+}
+
+// ══════════ 하이라이터 — 긁으면 바로 칠해지고, 모아보기에서 다시 찾는다 (2026-11-03) ══════════
+// 펜(필기) 자리를 대신한 기능. "가노트"가 이미 열려 있는 상태(위 분할 테스트)를 그대로 쓴다.
+{
+  // 실제 섹션 내용("내용 가")으로 화면을 되돌린다 — 앞 테스트가 #readBody에 가짜
+  // 토큰 문단을 덮어썼으므로, 재렌더가 캐시에서 다시 칠하는지 보려면 진짜 내용이어야 한다.
+  await page.evaluate(() => { document.querySelectorAll('#readTocList .toc-link')[0]?.click(); });
+  await new Promise((r) => setTimeout(r, 150));
+
+  const before = await page.evaluate(() => ({
+    hasTok: document.querySelectorAll('#readBody .tok').length > 0,
+    text: document.getElementById('readBody').textContent.trim(),
+  }));
+  results.push({ name: '진짜 섹션 내용으로 돌아왔다', ok: before.hasTok && /내용/.test(before.text),
+    detail: before.text.slice(0, 20) });
+
+  // 하이라이트 모드 켜기 + 두 번째 색 고르기
+  const entered = await page.evaluate(() => {
+    document.getElementById('readHighlight').click();
+    return {
+      active: document.getElementById('readHighlight').classList.contains('active'),
+      swatches: !document.getElementById('hlSwatches').classList.contains('hidden'),
+      selOff: !document.getElementById('readSelect').classList.contains('active'),
+    };
+  });
+  results.push({ name: '하이라이터를 켜면 버튼이 켜진다', ok: entered.active });
+  results.push({ name: '색 팝오버가 뜬다', ok: entered.swatches });
+  results.push({ name: '고르기는 꺼져 보인다', ok: entered.selOff });
+
+  const picked = await page.evaluate(() => {
+    const sw = document.querySelectorAll('#hlSwatches .hl-swatch')[1];   // 두 번째 색(초록)
+    sw.click();
+    return sw.classList.contains('on');
+  });
+  results.push({ name: '색을 고르면 그 색이 켜져 보인다', ok: picked });
+
+  // "내용" 토큰을 긁어서 바로 칠해지는지 — 펜 긁기와 같은 포인터 제스처
+  const span = await page.evaluate(() => {
+    const t = document.querySelectorAll('#readBody .tok')[0];
+    const r = t.getBoundingClientRect();
+    return { x1: Math.round(r.left + 2), y1: Math.round(r.top + r.height / 2),
+             x2: Math.round(r.right - 2), y2: Math.round(r.top + r.height / 2) };
+  });
+  await page.evaluate(({ x1, y1, x2, y2 }) => {
+    const cv = document.querySelector('#readCard .penlayer');
+    const ev = (type, x, y) => cv.dispatchEvent(new PointerEvent(type, {
+      pointerType: 'pen', pointerId: 3, isPrimary: true,
+      buttons: type === 'pointerup' ? 0 : 1, pressure: 0.5,
+      clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    ev('pointerdown', x1, y1);
+    for (let i = 1; i <= 6; i++) ev('pointermove', Math.round(x1 + (x2 - x1) * i / 6), y1);
+    ev('pointerup', x2, y2);
+  }, span);
+  await new Promise((r) => setTimeout(r, 700));   // pen.js SETTLE_MS(420) + 저장 여유
+
+  const made = await page.evaluate(async () => {
+    const mark = document.querySelector('#readBody mark.user-hl');
+    const popHidden = document.getElementById('selPop').classList.contains('hidden');
+    const d = await import('/js/db.js');
+    const rows = await d.allHighlights();
+    return {
+      markText: mark ? mark.textContent : null,
+      markColor: mark ? mark.style.getPropertyValue('--hl').trim() : null,
+      popHidden,
+      rows,
+    };
+  });
+  results.push({ name: '긁으면 바로 <mark>가 생긴다(팝업 없이)', ok: !!made.markText && made.popHidden,
+    detail: made.markText });
+  results.push({ name: '고른 색이 그대로 들어간다', ok: made.markColor === '#86efac', detail: made.markColor });
+  const saved = made.rows.find((r) => r.text === made.markText);
+  results.push({ name: '하이라이트가 IndexedDB에 저장된다', ok: !!saved,
+    detail: made.rows.map((r) => r.text).join(',') });
+  results.push({ name: '저장된 색도 일치한다', ok: !!saved && saved.color === '#86efac' });
+
+  // 하이라이트 모드를 끄면 다시 평소 긁기(팝업)로 돌아간다
+  const exited = await page.evaluate(() => {
+    document.getElementById('readHighlight').click();
+    return {
+      active: document.getElementById('readHighlight').classList.contains('active'),
+      swatches: document.getElementById('hlSwatches').classList.contains('hidden'),
+      selOn: document.getElementById('readSelect').classList.contains('active'),
+    };
+  });
+  results.push({ name: '다시 누르면 하이라이터가 꺼진다', ok: !exited.active });
+  results.push({ name: '색 팝오버도 숨는다', ok: exited.swatches });
+  results.push({ name: '고르기가 다시 켜져 보인다', ok: exited.selOn });
+
+  // 재렌더(다른 섹션 → 되돌아오기)해도 다시 칠해지는지 — 캐시에서 다시 칠하는지가 핵심
+  const repainted = await page.evaluate(async () => {
+    const links = [...document.querySelectorAll('#readTocList .toc-link')];
+    links[1]?.click();                       // 다른 섹션으로
+    await new Promise((r) => setTimeout(r, 150));
+    links[0]?.click();                       // 되돌아온다
+    await new Promise((r) => setTimeout(r, 150));
+    const mark = document.querySelector('#readBody mark.user-hl');
+    return mark ? mark.textContent : null;
+  });
+  results.push({ name: '다른 섹션 갔다 와도 다시 칠해진다', ok: !!repainted, detail: repainted });
+
+  // 모아보기 — 더보기 메뉴에서 열고, 누르면 그 자리로 간다
+  const panel = await page.evaluate(() => {
+    document.getElementById('readMore').click();
+    document.getElementById('mmHighlights').click();
+    const drawer = document.getElementById('readHighlights');
+    const items = [...document.querySelectorAll('#readHighlightList .hl-link')];
+    return { open: !drawer.classList.contains('hl-off'), count: items.length,
+      text: items[0] ? items[0].textContent : '' };
+  });
+  results.push({ name: '더보기에서 모아보기를 열 수 있다', ok: panel.open });
+  results.push({ name: '모아보기에 방금 만든 하이라이트가 보인다', ok: panel.count >= 1 && /내용/.test(panel.text),
+    detail: `${panel.count}개 — ${panel.text}` });
+
+  const jumped = await page.evaluate(async () => {
+    document.querySelector('#readHighlightList .hl-link').click();
+    await new Promise((r) => setTimeout(r, 200));
+    const mark = document.querySelector('#readBody mark.user-hl.flash')
+      || document.querySelector('#readBody mark.user-hl');
+    return !!mark;
+  });
+  results.push({ name: '누르면 그 자리의 하이라이트로 간다', ok: jumped });
+
+  // 지우기 + 되돌리기
+  const removed = await page.evaluate(async () => {
+    document.getElementById('readMore').click();
+    document.getElementById('mmHighlights').click();
+    document.querySelector('#readHighlightList .hl-del').click();
+    await new Promise((r) => setTimeout(r, 150));
+    const d = await import('/js/db.js');
+    return {
+      gone: !document.querySelector('#readBody mark.user-hl'),
+      dbEmpty: (await d.allHighlights()).length === 0,
+      hasUndo: !!document.getElementById('undoToast'),
+    };
+  });
+  results.push({ name: '지우면 표시도 같이 사라진다', ok: removed.gone });
+  results.push({ name: 'DB에서도 지워진다', ok: removed.dbEmpty });
+  results.push({ name: '되돌리기 토스트가 뜬다', ok: removed.hasUndo });
+
+  const undone = await page.evaluate(async () => {
+    document.querySelector('#undoToast button')?.click();
+    await new Promise((r) => setTimeout(r, 150));
+    const d = await import('/js/db.js');
+    return { markBack: !!document.querySelector('#readBody mark.user-hl'),
+      dbBack: (await d.allHighlights()).length === 1 };
+  });
+  results.push({ name: '되돌리면 하이라이트가 돌아온다', ok: undone.markBack && undone.dbBack });
+
+  // 뒷정리 — 다음 테스트에 남은 하이라이트가 영향 주지 않게
+  await page.evaluate(async () => {
+    const d = await import('/js/db.js');
+    for (const h of await d.allHighlights()) await d.deleteHighlight(h.id);
+    document.getElementById('readHighlights').classList.add('hl-off');
+    document.getElementById('readMoreMenu').classList.add('hidden');
+  });
 }
 
 // ══════════ 되돌리면 선택이 풀린다 · 더보기 메뉴 (2026-10-13) ══════════
@@ -8373,12 +8529,11 @@ await run('아이콘 통일', () => {
     out.push({ name: `${name}: 읽기와 퀴즈가 같은 그림`, ok: !!g(a) && g(a) === g(b),
       detail: g(a) === g(b) ? '' : '다름' });
   }
-  // 필기 — 읽기 쪽은 지우개로 바뀌므로 획이 더 있다. **펜 모양 자체**는 같아야 한다.
-  const penPath = 'M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z';
-  out.push({ name: '필기: 펜 모양이 양쪽 같다',
-    ok: g('readPen').includes(penPath) && g('toolWrite').includes(penPath) });
-  out.push({ name: '읽기 쪽 필기는 지우개로도 바뀐다(한 버튼이 둘을 겸한다)',
-    ok: /pen-ic/.test(g('readPen')) && /erase-ic/.test(g('readPen')) });
+  // 필기 — 읽기 화면에는 더 이상 없다(2026-11-03, 그 자리를 하이라이터가 대신한다).
+  // 퀴즈 화면의 #toolWrite/#toolErase는 그대로 남아 있다(독립된 기능).
+  out.push({ name: '읽기 화면엔 필기 버튼이 없다', ok: !document.getElementById('readPen') });
+  out.push({ name: '퀴즈 화면 필기·지우개는 그대로 있다',
+    ok: !!document.getElementById('toolWrite') && !!document.getElementById('toolErase') });
   // 역으로: 하는 일이 다르면 그림도 달라야 한다
   out.push({ name: '고르기와 영역 복사는 다른 그림', ok: g('readSelect') !== g('readShot') });
   out.push({ name: '모아두기와 영역 복사도 다른 그림', ok: g('readScrapBtn') !== g('readShot') });

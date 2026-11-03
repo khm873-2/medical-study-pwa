@@ -14,15 +14,16 @@
 import { putFile, getTextIfExists } from './github.js';
 import {
   kvGet, kvSet, allSessions, saveSession, listOutbox, enqueue,
-  allAttempts, mergeAttempts,
+  allAttempts, mergeAttempts, allHighlights, mergeHighlights,
 } from './db.js';
 
 export const BACKUP_PATH = '.medstudy/state.json';
 
 /** 백업에 담는 kv 키. 비밀과 "다시 만들면 되는 캐시"는 뺀다. */
 // deck_archived — 어느 과목을 치워뒀는지. 빠뜨리면 새 기기에서 끝난 과목이 전부 되살아난다.
+// highlight_color — 마지막으로 고른 하이라이트 색(2026-11-03).
 export const BACKUP_KEYS = ['srs', 'theme', 'cached_paths', 'gemini_model', 'side_w', 'ai_h',
-  'deck_archived', 'display', 'read_pos', 'read_pass'];
+  'deck_archived', 'display', 'read_pos', 'read_pass', 'highlight_color'];
 
 /** 절대 백업하지 않는 키(실수로 추가되는 걸 테스트가 잡게 명시해둔다). */
 export const SECRET_KEYS = ['github_pat', 'gemini_key'];
@@ -43,6 +44,8 @@ export async function collectState() {
     outbox,
     // 문항별 풀이 이력 — 2주에 걸쳐 쌓이는 것이라 재설치로 날아가면 가장 아프다
     attempts: await allAttempts(),
+    // 노트 읽기 하이라이트 — 노트 원문은 안 건드리고 앱에만 있어서 백업이 유일한 보험이다
+    highlights: await allHighlights(),
   };
 }
 
@@ -53,11 +56,13 @@ export function describe(state) {
   const sessions = state.sessions ? Object.keys(state.sessions).length : 0;
   const outbox = Array.isArray(state.outbox) ? state.outbox.length : 0;
   const attempts = Array.isArray(state.attempts) ? state.attempts.length : 0;
+  const highlights = Array.isArray(state.highlights) ? state.highlights.length : 0;
   const when = state.savedAt ? new Date(state.savedAt).toLocaleString('ko-KR') : '시각 미상';
   const parts = [];
   if (srs) parts.push(`플래시카드 ${srs}장`);
   if (attempts) parts.push(`푼 문항 ${attempts}개`);
   if (sessions) parts.push(`풀던 시험 ${sessions}개`);
+  if (highlights) parts.push(`하이라이트 ${highlights}개`);
   if (outbox) parts.push(`저장 대기 ${outbox}건`);
   return `${when} · ${parts.length ? parts.join(' · ') : '내용 없음'}`;
 }
@@ -89,7 +94,7 @@ export async function fetchBackup() {
  */
 export async function restore(state) {
   if (!state || state.v !== 1) throw new Error('백업 형식을 알 수 없습니다.');
-  const applied = { srs: 0, sessions: 0, outbox: 0, attempts: 0 };
+  const applied = { srs: 0, sessions: 0, outbox: 0, attempts: 0, highlights: 0 };
 
   for (const [k, v] of Object.entries(state.kv || {})) {
     if (!BACKUP_KEYS.includes(k)) continue;        // 모르는 키는 무시(앞으로의 포맷 변화 대비)
@@ -121,6 +126,7 @@ export async function restore(state) {
     applied.outbox++;
   }
   applied.attempts = await mergeAttempts(state.attempts || []);
+  applied.highlights = await mergeHighlights(state.highlights || []);
   await kvSet('backup_at', state.savedAt);
   return applied;
 }
