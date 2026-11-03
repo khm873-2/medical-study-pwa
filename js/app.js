@@ -23,6 +23,7 @@ import {
   parseRoadmap, roadmapToday,
   splitAnswer,
   splitWord, wordScore, blockContext, blankNode, tidyCardHtml,
+  refitVisibleTables,
 } from './reader.js';
 import { search, cacheSubject, storageInfo, matcher, findAll, buildIndex, indexInfo } from './search.js';
 import { JOKBO_ROOT, parseJokbo, chapterTitle } from './jokbo.js';
@@ -204,6 +205,7 @@ async function setDisplay(patch) {
   // 읽기 화면이 열려 있으면 펜 레이어 크기가 어긋난다 — 다시 맞춘다
   if (readerPen) requestAnimationFrame(() => readerPen.resize());
   if (pen) requestAnimationFrame(() => pen.resize());
+  refitVisibleTables();   // 글줄 너비가 바뀌면 표가 들어갈 자리도 바뀐다
 }
 
 /** 설정 화면의 버튼·슬라이더를 지금 값에 맞춘다. */
@@ -3734,6 +3736,7 @@ function tocOpen(on) {
   document.getElementById('readTocBtn').classList.toggle('active', on);
   localStorage.setItem('toc_open', on ? '1' : '0');
   if (readerPen) requestAnimationFrame(() => readerPen.resize());
+  refitVisibleTables();   // 목차 여닫이로 본문 너비가 바뀌면 표도 다시 맞춘다
 }
 function tocIsOpen() { return !document.getElementById('readScreen').classList.contains('toc-off'); }
 

@@ -200,7 +200,54 @@ function frontTitle(md) {
 export function renderSection(container, section) {
   container.innerHTML = renderMarkdown(section.text);
   hydrateEmbeds(container, (name) => getBlobUrl(`attachments/${name}`)).catch(() => {});
+  fitTables(container);
 }
+
+// ───────────── 표가 옆으로 잘리지 않게 글자 크기를 줄여서 맞춘다 ─────────────
+//
+// 표는 `.tablewrap`(overflow-x:auto)로 감싸 있어 원래도 가로로 밀어서 볼 수는
+// 있었지만, 스크롤 힌트가 안 보여서 "그냥 잘려 보인다"는 지적이 있었다
+// (2026-11-03). 살짝만 넘치는 표는 글자를 줄여 한 화면에 들어오게 하고, 그래도
+// 안 들어가는 진짜 큰 표만 가로 스크롤로 남긴다 — 줄이는 데도 한계(10px)를 둬서
+// 읽을 수 없을 만큼 작아지지는 않게 한다.
+const TABLE_FONT_MAX = 13.5;
+const TABLE_FONT_MIN = 10;
+const TABLE_FONT_STEP = 0.5;
+
+function fitOneTable(wrap) {
+  const table = wrap.querySelector('table');
+  if (!table) return;
+  table.style.fontSize = '';
+  const avail = wrap.clientWidth;
+  if (!avail) return;
+  let size = TABLE_FONT_MAX;
+  table.style.fontSize = `${size}px`;
+  let guard = 0;
+  while (table.scrollWidth > avail + 1 && size > TABLE_FONT_MIN && guard < 14) {
+    size -= TABLE_FONT_STEP;
+    table.style.fontSize = `${size}px`;
+    guard += 1;
+  }
+}
+
+/** container 안의 표를 전부 맞춘다. 레이아웃이 잡힌 다음 프레임에 잰다. */
+export function fitTables(container) {
+  const wraps = container.querySelectorAll('.tablewrap');
+  if (!wraps.length) return;
+  requestAnimationFrame(() => wraps.forEach(fitOneTable));
+}
+
+/** 화면에 지금 떠 있는 표를 전부 다시 맞춘다 — 방향 전환·분할창 변경·글자 크기
+ *  설정 변경처럼 너비가 바뀔 수 있는 시점에 부른다. */
+export function refitVisibleTables() {
+  requestAnimationFrame(() => document.querySelectorAll('.tablewrap').forEach(fitOneTable));
+}
+
+let resizeT;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(refitVisibleTables, 150);
+});
 
 // ───────────── 하이라이트 → 플래시카드 ─────────────
 

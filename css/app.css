@@ -505,7 +505,9 @@ pre > code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   /* ⚠️ **class로 잡는다.** `#readCard`로 잡으면 그 id가 활성 창을 따라 옮겨다니므로
      (moveReaderIds), 다른 창을 누를 때마다 **양쪽 여백이 서로 바뀌며 글이 출렁였다**
      (2026-10-14: "다른 split을 클릭할 때 갑자기 크기가 변하면서 이질감"). */
-  .read-card { padding: 26px 30px; }
+  /* 좌우 여백을 절반 가까이로 줄였다 — 표가 잘리는데 정작 옆은 비어 있다는
+     지적(2026-11-03). 위아래도 살짝 줄여 체감 여백을 더 덜어낸다. */
+  .read-card { padding: 18px 15px; }
 }
 
 /* ---- 플래시카드 ---- */
