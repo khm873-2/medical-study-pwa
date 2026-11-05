@@ -54,6 +54,17 @@ const EXAM_ROOTS = [
 ];
 const LOG_DIR = '00_Raw_Text/AI대화로그';
 
+// 모의고사 탭 전용 — `01_임종평_전범위`의 20개 대단원과 이름이 같은 06_모의고사 과목은
+// "임종평 모의고사" 뿌리로, 거기 없는 과목(두경부_피부·응급_중환자·근골격계 등 — 이
+// 학기 강의+족보 기반 "내신" 트랙)은 "내신" 뿌리로 한 겹 더 묶는다(2026-11-05 요청:
+// "두 개가 나와야 하는 것임", 임종평 쪽이 위에 오게). 드릴 탭의 root-group>subject-group과
+// 같은 CSS를 재사용한다(renderMockExamRoots).
+const JIMJONGPYEONG_SUBJECTS = new Set([
+  '소화기', '정신건강의학과', '호흡기', '마이너', '순환기', '내분비', '예방의학',
+  '부인과', '신장', '의료법규', '산과', '감염', '혈액', '외과총론', '외과각론',
+  '류마티스', '소아청소년과각론', '알레르기', '소아청소년과총론', '종양',
+]);
+
 /**
  * 과목 이름을 견주기 위한 열쇠 — 시간표 이름과 폴더 이름이 다르게 적혀 있어서다.
  *
@@ -803,6 +814,7 @@ function renderList(index, sessions, kind = '모의고사', attempts = [], finis
     body.appendChild(b);
     return;
   }
+  if (kind === '모의고사') { renderMockExamRoots(body, index, sessions, finished, attempts); return; }
   // 과목을 접을 수 있게 한다 — 전부 펼쳐져 있으면 찾는 데 오래 걸린다(2026-10-09 피드백).
   // 마지막으로 연 과목만 펼친 채로 기억한다(탭마다 따로).
   const lastOpen = localStorage.getItem(`open_subject_${kind}`);
@@ -835,6 +847,56 @@ function renderList(index, sessions, kind = '모의고사', attempts = [], finis
 /** exams 중 몇 개가 풀던 중인지 — 뿌리·과목 묶음 머리글이 공유해서 쓴다. */
 function examCounts(exams, sessions) {
   return { total: exams.length, inProgress: exams.filter((e) => sessions[e.path]).length };
+}
+
+/**
+ * 모의고사 탭 전용 — "임종평 모의고사"·"내신" 두 뿌리로 과목을 묶어 그린다
+ * (2026-11-05 요청). 과목별 묶음(group) 자체는 손대지 않는다 — openExam 등이 과목으로
+ * 해석하는 group.subject는 그대로 유지하고, 순전히 보여주는 순서·뿌리만 감싼다.
+ */
+function renderMockExamRoots(body, index, sessions, finished, attempts) {
+  const jong = index.filter((g) => JIMJONGPYEONG_SUBJECTS.has(g.subject));
+  const naesin = index.filter((g) => !JIMJONGPYEONG_SUBJECTS.has(g.subject));
+  const roots = [];
+  if (jong.length) roots.push({ key: '임종평', label: '임종평 모의고사', members: jong });
+  if (naesin.length) roots.push({ key: '내신', label: '내신', members: naesin });
+
+  const lastRoot = localStorage.getItem('open_subject_모의고사_root');
+  roots.forEach((r, ri) => {
+    const rootDet = document.createElement('details');
+    rootDet.className = 'root-group';
+    rootDet.open = lastRoot ? r.key === lastRoot : ri === 0;
+    rootDet.ontoggle = () => { if (rootDet.open) localStorage.setItem('open_subject_모의고사_root', r.key); };
+
+    const rsum = document.createElement('summary');
+    rsum.className = 'root-head';
+    const totalCount = r.members.reduce((n, g) => n + g.exams.length, 0);
+    const inProg = r.members.reduce((n, g) => n + g.exams.filter((e) => sessions[e.path]).length, 0);
+    rsum.innerHTML = '<span class="head-row">' +
+      `<span>${escapeText(r.label)}</span>` +
+      `<span class="subject-count">${totalCount}개` + (inProg ? ` · 풀던 중 ${inProg}` : '') + '</span></span>';
+    rootDet.appendChild(rsum);
+    body.appendChild(rootDet);
+
+    const lastSub = localStorage.getItem(`open_subject_모의고사_${r.key}`);
+    r.members.forEach((group, gi) => {
+      const det = document.createElement('details');
+      det.className = 'subject-group';
+      det.open = lastSub ? group.subject === lastSub : gi === 0;
+      det.ontoggle = () => { if (det.open) localStorage.setItem(`open_subject_모의고사_${r.key}`, group.subject); };
+
+      const sum = document.createElement('summary');
+      sum.className = 'subject-head';
+      const { total, inProgress } = examCounts(group.exams, sessions);
+      sum.innerHTML = '<span class="head-row">' +
+        `<span>${escapeText(group.subject.replace(/_/g, ' '))}</span>` +
+        `<span class="subject-count">${total}개` +
+        (inProgress ? ` · 풀던 중 ${inProgress}` : '') + '</span></span>';
+      det.appendChild(sum);
+      rootDet.appendChild(det);
+      renderExamRows(det, group.exams, group, sessions, finished, attempts);
+    });
+  });
 }
 
 /** exams를 det(details) 안에 행으로 그린다 — 평평한 과목묶음과 드릴 하위묶음이 공유한다. */
