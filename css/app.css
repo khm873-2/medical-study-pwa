@@ -2738,9 +2738,13 @@ mark.find-mark.fading { opacity: 0; }
    노트 원문은 안 건드리고 렌더마다 다시 칠하는 앱 전용 표시다. 색은 --hl 변수로 받아서
    한 규칙이 6색 전부를 처리한다. 새 <mark>를 만드는 대신 기존 .tok(낱말) span에
    클래스를 얹는 방식이라(여러 낱말에 걸친 하이라이트가 안 보이던 버그 수정,
-   2026-11-03) 태그 이름을 가리지 않는다 — class만 본다. */
+   2026-11-03) 태그 이름을 가리지 않는다 — class만 본다.
+   ⚠️ 좌우 padding을 주면 안 된다 — 하이라이트가 여러 낱말(.tok 여러 개)에 걸쳐
+   칠해지는데, 낱말마다 padding이 붙으면 그만큼 폭이 늘어나 뒤 글자가 밀려나고
+   장평·자간이 넓어진 것처럼 보였다(2026-11-05 신고: "글자 위치가 바뀐다"). 배경색만
+   글자 뒤에 깔고 폭에는 손대지 않는다 — 네이티브 텍스트 선택 하이라이트와 같은 원리. */
 .user-hl {
-  padding: 0 2px; border-radius: 3px;
+  padding: 0; border-radius: 2px;
   background: color-mix(in srgb, var(--hl, #fde047) 50%, transparent); color: inherit;
 }
 .user-hl.flash { outline: 2px solid var(--hl, #fde047); outline-offset: 1px; }
