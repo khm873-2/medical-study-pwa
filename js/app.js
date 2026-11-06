@@ -4910,12 +4910,17 @@ function renderReader() {
   if (readerPen) requestAnimationFrame(() => readerPen.resize());
 }
 
+window.__ensureReaderPen = (...a) => ensureReaderPen(...a);
 function ensureReaderPen() {
   if (readerPen) return;
   readerPen = new PenLayer(document.getElementById('readCard'), {
     onSelect: (text, info) => { if (text) openAskFromReader(text, info); },
     onCard: (box) => makeCardsFromBox(box, readerPen),
     onCapture: (box) => captureFromPen(readerPen, box),
+    // 읽기 화면엔 필기 도구 자체가 없다(하이라이터로 대체됨, 2026-11-03) — 너무 작게
+    // 긋거나 글자를 못 찾았을 때 손글씨로 남기지 않는다. 지우개가 없어 지울 방법이
+    // 없는 "낙서"가 생기는 사고를 막는다(2026-11-06 신고).
+    allowScribbleFallback: false,
   });
   window.__penForTest = readerPen;     // 미리보기 동작을 테스트가 들여다본다
   // 카드 창도 같은 방식으로 열어볼 수 있게 둔다 — 펜 없이 화면을 세우려면 이 길이 필요하다
@@ -6471,6 +6476,7 @@ let activeHighlightColor = HL_COLORS[0].hex;   // 노트 열 때 kv에서 덮어
 // (openInPane) 그 노트의 하이라이트가 바로 보이게. 쓰는 자리마다 notePath로 거른다.
 let readerHighlights = [];
 
+window.__setHighlightMode = (...a) => setHighlightMode(...a);
 function setHighlightMode(on, { quiet = false, erasing = false } = {}) {
   highlightMode = on;
   highlightErasing = on && erasing;

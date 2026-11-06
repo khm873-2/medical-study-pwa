@@ -31,14 +31,21 @@ export class PenLayer {
    * @param {Function} opts.onChange ()=>void              획 변화(저장용)
    * @param {Function} opts.onCapture (box) => void         캡처 모드에서 네모를 쳤을 때
    * @param {Function} opts.onCard    (box) => void         카드 모드에서 네모를 쳤을 때
+   * @param {boolean} opts.allowScribbleFallback  너무 작게 긋거나 글자를 못 찾았을 때
+   *        손글씨 획으로 남길지. select/write가 한 도구였던 시절의 호환 동작이라
+   *        기본은 true(퀴즈·이미지뷰어는 실제로 필기 도구가 있어 그대로 둔다).
+   *        읽기 화면 하이라이터(readerPen)처럼 **필기 기능 자체가 없는** 레이어는
+   *        false로 넘긴다 — 지우개가 없어 지울 길이 없는 "낙서"가 남는 사고를 막는다
+   *        (2026-11-06 신고).
    */
-  constructor(host, { onSelect, onTap, onChange, onCapture, onCard } = {}) {
+  constructor(host, { onSelect, onTap, onChange, onCapture, onCard, allowScribbleFallback = true } = {}) {
     this.host = host;
     this.onSelect = onSelect || (() => {});
     this.onTap = onTap || (() => false);
     this.onChange = onChange || (() => {});
     this.onCapture = onCapture || (() => {});
     this.onCard = onCard || (() => {});
+    this.allowScribbleFallback = allowScribbleFallback;
 
     // 지금 펜이 할 일 — 하나만 켜진다(setTool 참고)
     this.tool = 'select';
@@ -295,7 +302,14 @@ export class PenLayer {
     //    버려서, 가는 펜으로 마침표나 점을 찍으면 그대로 사라졌다(2026-10-21 신고:
     //    "펜 그릴 때 점이 지워지는 문제, 0.8 이런 거 쓸 때").
     //    탭으로 넘기는 건 **글을 고르거나 네모 치는 중**일 때만이다.
+    // ⚠️ 바로 위 _refreshPreview()가 "손 떼기 직전 범위"를 미리보기 상자로 남겨뒀는데,
+    //    tap이면 그 상자는 애초에 뜻한 선택이 아니다. 지우지 않으면 **아무도 치우지
+    //    않는 미리보기 상자가 화면에 눌어붙는다** — onTap을 안 받는 readerPen(읽기
+    //    화면의 하이라이터)에서는 그 뒤로 다시 그려질 일도 없어 영영 남았다
+    //    (2026-11-06 신고: "낙서가 됐는데 지우개도 없다"의 또 다른 경로).
     if (!this.writing && classify(stroke.pts) === 'tap') {
+      this._previewBox = null;
+      this._coveredLines = null;
       this.redraw();
       const el = document.elementFromPoint(this._start.x, this._start.y);
       this.onTap(el, e);
@@ -552,8 +566,16 @@ export class PenLayer {
       return;
     }
 
-    // 너무 작으면 선택 의도가 아니다 → 필기로 남긴다
+    // 너무 작으면 선택 의도가 아닐 수 있다 — 예전엔(select/write가 한 도구였을 때)
+    // 무조건 필기로 남겼는데, 지금은 둘이 **분리된 도구**라 이 길로 오는 건 이미
+    // "고르기"를 직접 고른 상태다. 패널(글) 위에서 짧게 그었을 뿐이면 필기 의도가
+    // 아니므로 버린다 — 아래 "글자를 못 잡았을 때"와 같은 규칙. 패널 **밖** 여백에서만
+    // 여전히 필기로 남긴다(퀴즈 화면은 거기 메모를 적는 용도로 써 왔다).
+    // ⚠️ 읽기 화면(하이라이트)에서 이 규칙이 없어서, 짧은 낱말(예: "없음")을 하이라이트
+    // 하려고 짧게 그으면 지워지지 않는 손글씨 자국으로 남았다 — 읽기 화면엔 지우개
+    // 버튼이 없어 지울 방법도 없었다(2026-11-06 신고: "펜이 나와서 낙서가 됐다").
     if (Math.max(w, h) < BOX_MIN) {
+      if (!this.allowScribbleFallback || this._paneAt(box)) { this.redraw(); return; }
       pend.forEach((s) => { if (s.pts.length) this.strokes.push(s); });
       this.onChange();
       this.redraw();
@@ -566,8 +588,8 @@ export class PenLayer {
 
     // 글자를 못 잡았을 때 — 패널 **안**이면 선택 의도였다고 보고 궤적을 지운다.
     // (AI 답변처럼 토큰화되지 않은 영역에 그으면 파란 선만 남아 지저분했다, 2026-10-09)
-    // 여백·빈 곳이면 필기로 남긴다.
-    if (this._paneAt(box)) { this.redraw(); return; }
+    // 여백·빈 곳이면 필기로 남긴다 — 단 allowScribbleFallback이 꺼져 있으면 그마저도 버린다.
+    if (!this.allowScribbleFallback || this._paneAt(box)) { this.redraw(); return; }
     pend.forEach((s) => { if (s.pts.length) this.strokes.push(s); });
     this.onChange();
     this.redraw();
