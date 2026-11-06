@@ -354,11 +354,32 @@ const COLOR_SPAN = /<span\s+style="color:\s*(red|blue|orange|#[0-9a-fA-F]{3,6})\
 
 function inline(s) {
   const colorSpans = [];
-  const protected_ = String(s).replace(COLOR_SPAN, (_, color, innerText) => {
+  let protected_ = String(s).replace(COLOR_SPAN, (_, color, innerText) => {
     const idx = colorSpans.length;
     colorSpans.push({ color, innerText });
     return ` CS${idx} `;
   });
+
+  // 이미지 임베드 ![[파일명]]·위키링크 [[노트]]도 색 span과 같은 이유로 escapeHtml보다
+  // 먼저 뽑아 보호해둔다 — 안 그러면 파일명·노트명 속 특수문자(아포스트로피 등)가
+  // escapeHtml로 한 번 엔티티화된 뒤(여기서) imgTag·위키링크 처리에서 또 escapeHtml이
+  // 걸려 이중 이스케이프(`'`→`&#39;`→`&amp;#39;`)가 되고, 브라우저는 그걸 한 번만
+  // 디코드하므로 "Goodsall&#39;s rule.png"처럼 엔티티가 글자 그대로 남아 이미지를
+  // 못 찾는다(2026-11-06 신고 — 파일명에 작은따옴표가 든 이미지가 "불러오지
+  // 못했습니다"로 떴다).
+  const embeds = [];
+  protected_ = protected_.replace(/!\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]/g, (_, f) => {
+    const idx = embeds.length;
+    embeds.push(f.trim());
+    return ` EMB${idx} `;
+  });
+  const wikilinks = [];
+  protected_ = protected_.replace(/\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g, (_, n, label) => {
+    const idx = wikilinks.length;
+    wikilinks.push({ note: n.trim(), label: (label || n).trim() });
+    return ` WL${idx} `;
+  });
+
   let t = escapeHtml(deTex(protected_));
 
   // 표 칸 안 줄바꿈용 <br> — 마크다운 표 문법엔 칸 안에 실제 개행을 넣을 수 없어서
@@ -378,13 +399,13 @@ function inline(s) {
     });
   }
 
-  // 이미지 임베드 ![[파일명]] — src는 나중에 채운다(지연 로딩)
-  t = t.replace(/!\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]/g, (_, f) =>
-    imgTag(f.trim()));
-
-  // 위키링크 [[노트]] 또는 [[노트|표시]]
-  t = t.replace(/\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g, (_, n, label) =>
-    `<span class="wikilink" data-note="${escapeHtml(n.trim())}">${escapeHtml((label || n).trim())}</span>`);
+  // 이미지 임베드·위키링크 자리 복원 — 위에서 escapeHtml 전에 뽑아둔 원문 이름을
+  // 여기서 처음이자 한 번만 escapeHtml한다(이중 이스케이프 방지, 위 주석 참고).
+  t = t.replace(/\sEMB(\d+)\s/g, (_, idx) => imgTag(embeds[Number(idx)]));
+  t = t.replace(/\sWL(\d+)\s/g, (_, idx) => {
+    const wl = wikilinks[Number(idx)];
+    return `<span class="wikilink" data-note="${escapeHtml(wl.note)}">${escapeHtml(wl.label)}</span>`;
+  });
 
   // 홑대괄호 덧붙임 글 — `[근위소장에서 철·칼슘이 흡수되므로!]`처럼 문장 중간에 짧게
   // 끼워 넣는 보충설명. Obsidian 편집 화면에선 보라색으로 눈에 띄는데 달모엔 아무
