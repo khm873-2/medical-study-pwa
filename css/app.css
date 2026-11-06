@@ -185,6 +185,11 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 #qnum { font-size: 13px; color: var(--sub); margin-bottom: 6px; font-weight: 600; }
 #qsource { font-size: 12px; color: var(--sub); margin-bottom: 10px; padding: 5px 11px; background: var(--badge-bg); border-radius: 6px; display: inline-block; line-height: 1.5; }
 #qtext { font-size: calc(18px * var(--ui-scale)); line-height: 1.6; margin-bottom: 18px; white-space: pre-wrap; }
+/* ⚠️ q.lab(검사수치) 박스 — div#qlab은 index.html에 있었지만 이 클래스 CSS가
+   없어서 테두리 없이 맨 텍스트로만 보였다(2026-11-06 신고 — 드릴 HTML 자체 미리보기엔
+   #qlab 테두리 박스가 있는데 앱에서는 안 보임). 드릴 HTML의 #qlab 스타일과 맞춤. */
+.lab-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 16px; margin: -6px 0 18px; font-size: calc(14px * var(--ui-scale)); line-height: 1.7; }
 #qimgContainer { display: none; margin-bottom: 18px; }
 #qimgContainer img { display: block; max-width: 100%; max-height: 42vh; border-radius: 10px; margin-bottom: 10px; border: 1px solid var(--border); }
 #qimgContainer img:last-child { margin-bottom: 0; }
