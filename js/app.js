@@ -5142,14 +5142,23 @@ async function loadScrapRecent() {
     const all = await listDir(LOG_DIR);
     const items = all
       .filter((f) => f.type === 'file' && f.name.endsWith('_모아두기.md'))
+      // 응급_중환자 과목은 이제 다 필요 없다고 사용자가 명시적으로 요청했다(2026-11-06,
+      // 두 번째 반복 지적) — 목록 자체에서 아예 제외한다.
+      .filter((f) => !f.name.startsWith('응급_중환자_'))
       .map((f) => {
         const m = f.name.match(/(\d{2}-\d{2}-\d{2})_(\d{4})/);
-        return { ...f, sortKey: m ? `${m[1]}_${m[2]}` : f.name };
+        // ⚠️ 매칭 실패 시 과거엔 f.name(원본 파일명)으로 폴백했는데, 한글 글자의
+        // 유니코드 코드포인트가 숫자보다 커서 날짜·시각 없는 옛 파일명(HHMM 세그먼트
+        // 도입 전, 10/14~10/21 이전)이 문자열 비교에서 "가장 최근"으로 떠버렸다
+        // (2026-11-06 신고: 응급_중환자 10-14·10-15 파일이 최상단을 차지).
+        // 빈 문자열로 폴백하면 항상 맨 아래로 가라앉는다.
+        return { ...f, sortKey: m ? `${m[1]}_${m[2]}` : '' };
       })
       .sort((a, b) => (a.sortKey < b.sortKey ? 1 : -1))
-      .slice(0, 8);
+      .slice(0, 10);
     scrapRecentCache = { at: Date.now(), items };
     paintScrapRecent(items);
+    loadScrapWikiStatus(items);
   } catch (e) {
     box.innerHTML = `<p class="muted">못 불러왔습니다: ${escapeHtml(e.message)}</p>`;
     n.textContent = '';
@@ -5168,12 +5177,41 @@ function paintScrapRecent(items) {
     const title = (m ? m[4] : f.name.replace(/_모아두기\.md$/, '')).replace(/_/g, ' ');
     const b = document.createElement('button');
     b.className = 'sc-recent-item';
-    b.innerHTML = `<span class="sc-r-when">${escapeHtml(when)}</span><span class="sc-r-title">${escapeHtml(title)}</span>`;
+    b.dataset.path = f.path;
+    b.innerHTML = `<span class="sc-r-when">${escapeHtml(when)}</span>`
+      + `<span class="sc-r-title">${escapeHtml(title)}</span>`
+      + `<span class="sc-r-status" data-status></span>`;
     // openPeek은 노트 미리보기 창을 그대로 재사용한다 — 저장한 글이 vault에
     // **실제로 그 모양대로** 들어갔는지 눌러서 바로 확인할 수 있다.
     b.onclick = () => openPeek({ path: f.path });
     box.appendChild(b);
   }
+}
+
+/**
+ * 각 항목의 `처리:\n  위키: ...` 반영 여부를 읽어와 뱃지로 채운다.
+ *
+ * 목록을 먼저 그린 뒤 비동기로 따라붙는다(개별 파일을 10개 다 읽는 동안 목록
+ * 자체가 늦게 뜨면 안 된다) — 사용자가 "최근에 모아둔 게 반영됐는지도 보고 싶다"고
+ * 요청(2026-11-06)한 "위키 반영여부 표시"를 이렇게 채운다.
+ */
+async function loadScrapWikiStatus(items) {
+  const box = document.getElementById('scRecentList');
+  await Promise.all(items.map(async (f) => {
+    let label = '';
+    let cls = '';
+    try {
+      const raw = await getText(f.path);
+      const m = raw.match(/위키:\s*(.+)/);
+      const v = m ? m[1].trim() : '';
+      if (v.startsWith('반영됨')) { label = '✅ 반영됨'; cls = 'sc-st-done'; }
+      else if (v.startsWith('대기')) { label = '대기'; cls = 'sc-st-wait'; }
+      else if (v) { label = v.slice(0, 10); cls = 'sc-st-wait'; }
+    } catch { /* 읽기 실패 시 뱃지 없이 둔다 — 목록 자체는 이미 떠 있다 */ }
+    if (!box) return;
+    const el = box.querySelector(`.sc-recent-item[data-path="${CSS.escape(f.path)}"] [data-status]`);
+    if (el) { el.textContent = label; el.className = `sc-r-status ${cls}`.trim(); }
+  }));
 }
 
 function renderShots() {
