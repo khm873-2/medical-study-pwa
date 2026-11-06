@@ -4910,7 +4910,6 @@ function renderReader() {
   if (readerPen) requestAnimationFrame(() => readerPen.resize());
 }
 
-window.__ensureReaderPen = (...a) => ensureReaderPen(...a);
 function ensureReaderPen() {
   if (readerPen) return;
   readerPen = new PenLayer(document.getElementById('readCard'), {
@@ -4921,6 +4920,10 @@ function ensureReaderPen() {
     // 긋거나 글자를 못 찾았을 때 손글씨로 남기지 않는다. 지우개가 없어 지울 방법이
     // 없는 "낙서"가 생기는 사고를 막는다(2026-11-06 신고).
     allowScribbleFallback: false,
+    // 하이라이트 중엔 낱말 단위 네모 대신 네이티브 텍스트 선택으로 글자 단위
+    // 미리보기를 보여준다(2026-11-06) — commitHighlight가 실제로 저장하는 기준과
+    // 똑같아서 "그으는 동안 보이는 것"과 "저장되는 것"이 더는 어긋나지 않는다.
+    previewOverride: () => highlightPreviewOverride(),
   });
   window.__penForTest = readerPen;     // 미리보기 동작을 테스트가 들여다본다
   // 카드 창도 같은 방식으로 열어볼 수 있게 둔다 — 펜 없이 화면을 세우려면 이 길이 필요하다
@@ -6476,7 +6479,6 @@ let activeHighlightColor = HL_COLORS[0].hex;   // 노트 열 때 kv에서 덮어
 // (openInPane) 그 노트의 하이라이트가 바로 보이게. 쓰는 자리마다 notePath로 거른다.
 let readerHighlights = [];
 
-window.__setHighlightMode = (...a) => setHighlightMode(...a);
 function setHighlightMode(on, { quiet = false, erasing = false } = {}) {
   highlightMode = on;
   highlightErasing = on && erasing;
@@ -6493,6 +6495,7 @@ function setHighlightMode(on, { quiet = false, erasing = false } = {}) {
   // 지우개 중엔 색 고를 일이 없다
   document.getElementById('hlSwatches').classList.toggle('hidden', !on || highlightErasing);
   if (on && !highlightErasing) { paintHlSwatches(); placeHlSwatches(); }
+  updateHighlightIconColor();
   if (!quiet) {
     const msg = !on ? '하이라이트를 마쳤습니다'
       : highlightErasing ? '하이라이트 지우개 — 칠한 곳을 누르면 지워집니다'
@@ -6528,11 +6531,27 @@ function paintHlSwatches() {
       b.className = 'hl-swatch';
       b.style.background = c.hex;
       b.title = c.name;
-      b.onclick = () => { activeHighlightColor = c.hex; kvSet('highlight_color', c.hex); paintHlSwatches(); };
+      // 색을 고르면 그 색으로 아이콘을 칠하고 팔레트는 접는다(2026-11-06 요청) — 전에는
+      // 골라도 팔레트가 안 닫혀서 고른 건지 아닌지 알기 어려웠다. 다시 열려면 하이라이트를
+      // 한번 끄고 다시 켜면 된다(끄고 켤 때마다 팔레트가 새로 뜨는 기존 동작 그대로).
+      b.onclick = () => {
+        activeHighlightColor = c.hex;
+        kvSet('highlight_color', c.hex);
+        paintHlSwatches();
+        updateHighlightIconColor();
+        box.classList.add('hidden');
+      };
       box.appendChild(b);
     }
   }
   [...box.children].forEach((b, i) => b.classList.toggle('on', HL_COLORS[i].hex === activeHighlightColor));
+}
+
+/** 하이라이터 아이콘을 지금 고른 색으로 칠한다 — stroke="currentColor"라 버튼 color만 바꾸면 된다. */
+function updateHighlightIconColor() {
+  const btn = document.getElementById('readHighlight');
+  if (!btn) return;
+  btn.style.color = (highlightMode && !highlightErasing) ? activeHighlightColor : '';
 }
 
 /** 색 팝오버를 하이라이터 버튼 아래에 둔다 — 더보기 메뉴 자리 잡기(placeMoreMenu)와 같은 방식. */
@@ -6593,6 +6612,26 @@ function preciseHighlightRange() {
     range.setEnd(r1.startContainer, r1.startOffset);
   }
   return range.collapsed ? null : range;
+}
+
+/**
+ * 그으는 동안 **글자 단위** 미리보기를 보여준다 — PenLayer 자체 미리보기(previewOverride)
+ * 자리에 꽂는다.
+ *
+ * 전에는 commitHighlight만 caretRangeFromPoint로 글자 단위를 썼고, 그으는 **동안의**
+ * 미리보기는 PenLayer의 낱말 단위 네모(_textInBox/nearestTok) 그대로였다 — 둘이 서로
+ * 다른 기준으로 범위를 재다 보니, 사용자 눈에는 "짚은 자리보다 앞 낱말로 튀거나 줄
+ * 전체가 잡히는" 버그처럼 보였다(2026-11-06 신고). 네이티브 텍스트 선택(window.
+ * getSelection)으로 보여주면 commitHighlight가 실제로 저장할 범위와 **완전히 같은**
+ * 기준으로 미리보기가 그려진다.
+ */
+function highlightPreviewOverride() {
+  if (!highlightMode || highlightErasing) return false;
+  const range = preciseHighlightRange();
+  const sel = window.getSelection();
+  try { sel.removeAllRanges(); } catch {}
+  if (range) { try { sel.addRange(range); } catch {} }
+  return true;
 }
 
 /**

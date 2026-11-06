@@ -37,8 +37,14 @@ export class PenLayer {
    *        읽기 화면 하이라이터(readerPen)처럼 **필기 기능 자체가 없는** 레이어는
    *        false로 넘긴다 — 지우개가 없어 지울 길이 없는 "낙서"가 남는 사고를 막는다
    *        (2026-11-06 신고).
+   * @param {Function} opts.previewOverride  () => boolean  그으는 동안 미리보기를
+   *        직접 그리고 싶은 레이어가 준다(읽기 화면 하이라이터 — 글자 단위 미리보기를
+   *        네이티브 텍스트 선택으로 보여준다). true를 돌려주면 이 레이어는 캔버스에
+   *        낱말 단위 네모·궤적을 **그리지 않는다**(2026-11-06).
    */
-  constructor(host, { onSelect, onTap, onChange, onCapture, onCard, allowScribbleFallback = true } = {}) {
+  constructor(host, {
+    onSelect, onTap, onChange, onCapture, onCard, allowScribbleFallback = true, previewOverride,
+  } = {}) {
     this.host = host;
     this.onSelect = onSelect || (() => {});
     this.onTap = onTap || (() => false);
@@ -46,6 +52,8 @@ export class PenLayer {
     this.onCapture = onCapture || (() => {});
     this.onCard = onCard || (() => {});
     this.allowScribbleFallback = allowScribbleFallback;
+    this.previewOverride = previewOverride || null;
+    this._suppressCanvasPreview = false;
 
     // 지금 펜이 할 일 — 하나만 켜진다(setTool 참고)
     this.tool = 'select';
@@ -335,7 +343,20 @@ export class PenLayer {
    * 궤적만 보여주면 "어디까지 복사되는지" 알 수 없다.
    */
   _showPendingBox() {
-    const raw = this._liveBounds();
+    const raw = this._liveBounds();   // _span(글자 단위 시작·끝)을 여기서 갱신한다 — 먼저 부른다
+    // 낱말 단위 네모 대신 **글자 단위** 미리보기를 쓰고 싶은 레이어는 previewOverride를
+    // 준다(읽기 화면 하이라이터). 낱말로 스냅하는 _textInBox 기반 네모는 "짚은 자리보다
+    // 앞 낱말로 튀거나 줄 전체가 잡히는" 것처럼 보였다(2026-11-06 신고) — 실제로는
+    // commitHighlight가 이미 caretRangeFromPoint로 글자 단위를 쓰고 있었는데, 그으는
+    // **동안의 미리보기만** 여전히 낱말 단위 네모를 보여주고 있어 둘이 어긋나 보였다.
+    if (this.previewOverride && this.previewOverride()) {
+      this._previewBox = null;
+      this._coveredLines = null;
+      this._suppressCanvasPreview = true;
+      this.redraw();
+      return;
+    }
+    this._suppressCanvasPreview = false;
     if (!raw) { this._previewBox = null; this._coveredLines = null; this.redraw(); return; }
     this._textInBox(raw);                       // _coveredBox / _coveredLines 를 갱신한다
     const box = this._coveredBox || raw;
@@ -733,6 +754,12 @@ export class PenLayer {
   redraw() {
     const { ctx, canvas } = this;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // previewOverride가 제 손으로 미리보기를 그렸으면(예: 네이티브 텍스트 선택) 이 캔버스엔
+    // 확정된 필기만 그린다 — 궤적까지 그리면 캔버스 선과 그 미리보기가 같이 보인다.
+    if (this._suppressCanvasPreview) {
+      for (const s of this.strokes) this._drawStroke(s);
+      return;
+    }
     // 고를 범위가 잡혔으면 **궤적 대신 하이라이트만** 보여준다(2026-10-13).
     // 둘을 겹쳐 그리면 밑줄이 하이라이트를 가로질러 지저분하다 — 어차피 확정되면
     // 궤적은 지워지므로, 잡힌 순간부터는 "무엇이 잡혔나"만 보이는 게 맞다.
@@ -904,6 +931,7 @@ export class PenLayer {
     this._previewBox = null;
     this._previewKind = null;
     this._coveredLines = null;
+    this._suppressCanvasPreview = false;
     this.redraw();
   }
   _setMode(which) { this.setTool(which === 'capture' ? 'shot' : (which || 'select')); }
