@@ -7274,6 +7274,11 @@ await run('뜯어보기 그만두기', async () => {
   const out = [];
   const el = document.getElementById('breakdown');
   const btn = document.getElementById('toolBreak');
+  // 2026-11-10: 뜯어보기는 이제 "답을 고른 뒤"에만 뜬다(힌트 유출 방지) — app.js가
+  // 실제로 들고 있는 quiz(DOM의 .opt-row는 다른 검사가 남긴 것일 수 있어 못 믿는다)에
+  // 직접 답을 채워 넣는다. 이미 답했으면 select()의 가드로 그냥 무시된다.
+  const liveQuiz = window.__quizForTest();
+  if (liveQuiz) { liveQuiz.select(0); liveQuiz.render(); }
   // 느린 응답을 흉내 — 영영 안 끝나는 스트림
   const realFetch = window.fetch;
   let aborted = false;

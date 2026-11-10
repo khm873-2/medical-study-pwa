@@ -131,6 +131,7 @@ function escapeHtml(s) {
 
 const screens = ['setupScreen', 'listScreen', 'quizScreen', 'resultScreen', 'readScreen', 'cardScreen', 'deckScreen'];
 let quiz = null;
+window.__quizForTest = () => quiz;   // 검사가 지금 app.js가 들고 있는 실제 quiz를 들여다본다
 let lastResult = null;
 let currentExam = null; // {subject, file, path, title}
 
@@ -1531,6 +1532,14 @@ document.getElementById('toolAi').onclick = () => {
 
 /** 문항이 바뀔 때마다 — 필기 복원 + 위키 갱신 + 전체보기가 열려 있으면 같이 갱신 */
 function onQuestionRender(q, idx, { answered }) {
+  // 뜯어보기 — 문제가 바뀌었으면(같은 문제 안에서의 재렌더가 아니면) 패널을 늘 한 번
+  // 닫는다. 활성(armed) 상태면 그 뒤 "답을 고른 문제"에서만 다시 띄운다 — 정답 공개
+  // 전에는 절대 안 뜬다(runBreakdown 자체도 막는다, 위 주석 참고).
+  const bdEl = document.getElementById('breakdown');
+  if (bdEl.dataset.forNum !== String(q.num)) {
+    closeBreakdownPanel();
+    if (breakdownArmed && answered) runBreakdown();
+  }
   if (pen) {
     pen.load(penStrokes[idx] || null);
     requestAnimationFrame(() => pen && pen.resize());
@@ -2483,6 +2492,18 @@ document.getElementById('toolCapture').onclick = () => setTool(penTool === 'shot
 // ---------- 문제 뜯어보기 ----------
 // 지문을 단서별로 끊어 "시험에서 이게 뭘 뜻하는지"를 붙인다.
 // 답을 알려주는 게 아니라 읽는 법을 훈련하는 용도(2026-10-10 요청).
+//
+// ⚠️ **"활성(armed)"과 "지금 떠 있음"은 다른 상태다(2026-11-10 재설계).**
+// 이전엔 toolBreak 클릭 = "지금 당장 뜯어본다"였다. 그래서 ①답을 고르기도 전에
+// 눌러도 뜯어봐져서 힌트가 샜고(선지를 어떻게 거르는지 미리 보여주는 꼴),
+// ②한 번 켠 채로 다음 문제로 넘어가면 패널이 안 닫혀 새 문제 위에 이전 문제의
+// 뜯어보기가 그대로 남아 있었다(사용자 신고: "계속 토글되서 다음 문제로 넘어가도
+// 풀기도 전에 힌트를 줌" / "토글을 끈 상태에서도 다음 문제에서 토글이 동작").
+// 이제 toolBreak 클릭은 **활성화 여부만** 토글하고(세션 내내 유지, kv로 기억),
+// 실제로 뜯어보기가 뜨는 건 활성 상태에서 **그 문제의 정답을 고른 뒤**뿐이다.
+// 문제를 넘기면(답을 고르기 전이든 후든) 패널은 항상 한 번 닫히고, 활성 상태가
+// 켜져 있으면 그 새 문제에서 답을 고르는 순간 다시 자동으로 뜬다.
+let breakdownArmed = false;
 let breakdownBusy = false;
 let breakdownAbort = null;     // 뜯어보는 중에 그만두면 요청까지 끊는다(2026-10-13)
 // 체크된 단서 — "frag"(지문 원문 조각)를 키로 쓴다. numberClues가 매길 때마다 n을
@@ -2490,12 +2511,42 @@ let breakdownAbort = null;     // 뜯어보는 중에 그만두면 요청까지 
 // "지문뜯어보기에서 결과 체크해서... 카드로 만들 수 있도록" 요청으로 도입).
 let bdSelected = new Set();
 
+async function loadBreakdownArmed() {
+  breakdownArmed = !!(await kvGet('breakdown_armed'));
+  document.getElementById('toolBreak').classList.toggle('active', breakdownArmed);
+}
+
+/** toolBreak 클릭 — 활성화 여부만 토글한다(즉시 뜯어보지 않는다). */
+async function toggleBreakdownArmed() {
+  breakdownArmed = !breakdownArmed;
+  await kvSet('breakdown_armed', breakdownArmed);
+  document.getElementById('toolBreak').classList.toggle('active', breakdownArmed);
+  if (!breakdownArmed) { closeBreakdownPanel(); return; }
+  // 켜는 순간 이미 답을 고른 문제라면 바로 보여준다 — 안 그러면 "켰는데 왜 안 뜨지"가 된다.
+  if (quiz && quiz.answers[quiz.qIndex] !== null) runBreakdown();
+  else toast('답을 고르면 자동으로 뜯어봅니다.');
+}
+
+/** 패널만 닫는다 — 활성(armed) 여부는 안 건드린다. 문제를 넘길 때마다 호출. */
+function closeBreakdownPanel() {
+  if (breakdownBusy) { try { breakdownAbort && breakdownAbort.abort(); } catch {} }
+  breakdownBusy = false;
+  breakdownAbort = null;
+  bdSelected.clear();
+  const el = document.getElementById('breakdown');
+  el.classList.add('hidden');
+  el.innerHTML = '';
+  el.dataset.forNum = '';
+  document.querySelectorAll('#qtext .tok.bd-mark').forEach((m) => m.classList.remove('bd-mark'));
+  document.querySelectorAll('#qtext .bd-badge').forEach((b) => b.remove());
+  if (pen) requestAnimationFrame(() => pen.resize());
+}
+
 async function runBreakdown() {
   if (!quiz) return;
-  // 뜯어보는 중에 또 누르면 **그만둔다**. 전에는 아무 반응이 없어서, 안 보고 싶어도
-  // 다 뜰 때까지 기다려야 했다(2026-10-13 지적). 요청도 실제로 끊어 할당량을 아낀다.
-  if (breakdownBusy) { cancelBreakdown(); return; }
   const q = quiz.all[quiz.order[quiz.cur]];
+  // 정답 공개 전에는(답을 아직 안 골랐으면) 절대 뜯어보지 않는다 — 힌트 유출 방지.
+  if (quiz.answers[quiz.qIndex] === null) return;
   const el = document.getElementById('breakdown');
   // 뜯어보기는 "선지를 어떤 기준으로 쳐내는가"를 보여주는 기능이다 —
   // 족보의 서술형 복원 문항처럼 선지가 없으면 보여줄 게 없다(2026-10-12).
@@ -2503,19 +2554,13 @@ async function runBreakdown() {
     toast('선지가 없는 문항이라 뜯어볼 수 없습니다 — 해설을 보세요.');
     return;
   }
-
-  // 이미 떠 있으면 토글로 닫는다
-  if (!el.classList.contains('hidden') && el.dataset.forNum === String(q.num)) {
-    el.classList.add('hidden');
-    document.getElementById('toolBreak').classList.remove('active');
-    return;
-  }
+  // 이미 이 문제로 떠 있으면 다시 부르지 않는다(중복 요청 방지).
+  if (!el.classList.contains('hidden') && el.dataset.forNum === String(q.num)) return;
   breakdownBusy = true;
   breakdownAbort = typeof AbortController === 'function' ? new AbortController() : null;
   bdSelected.clear();
   el.dataset.forNum = String(q.num);
   el.classList.remove('hidden');
-  document.getElementById('toolBreak').classList.add('active');
 
   // ① 미리 만들어둔 게 있으면 그걸 쓴다 — 0초, 할당량 0, 오프라인에서도 된다.
   //    모의고사 문제는 **고정된 콘텐츠**다. 매번 AI를 부를 이유가 없다(2026-10-10).
@@ -2569,19 +2614,8 @@ async function runBreakdown() {
   }
 }
 
-/** 뜯어보기 그만두기 — 화면은 **즉시** 닫고, 네트워크 요청도 끊는다. */
-function cancelBreakdown() {
-  if (breakdownAbort) { try { breakdownAbort.abort(); } catch {} }
-  breakdownBusy = false;
-  breakdownAbort = null;
-  bdSelected.clear();
-  const el = document.getElementById('breakdown');
-  el.classList.add('hidden');
-  el.innerHTML = '';
-  el.dataset.forNum = '';
-  document.getElementById('toolBreak').classList.remove('active');
-  if (pen) requestAnimationFrame(() => pen.resize());
-}
+/** 뜯어보기 그만두기(로딩 중 "그만" 버튼) — 패널만 닫는다. 활성(armed)은 안 건드린다. */
+function cancelBreakdown() { closeBreakdownPanel(); }
 
 /**
  * 미리 만들어둔 뜯어보기를 vault에서 찾는다.
@@ -2628,12 +2662,7 @@ function renderBreakdown(el, data, q) {
   const close = document.createElement('button');
   close.className = 'bd-close';
   close.textContent = '✕';
-  close.onclick = () => {
-    el.classList.add('hidden');
-    document.getElementById('toolBreak').classList.remove('active');
-    document.querySelectorAll('#qtext .tok.bd-mark').forEach((m) => m.classList.remove('bd-mark'));
-    document.querySelectorAll('#qtext .bd-badge').forEach((b) => b.remove());
-  };
+  close.onclick = closeBreakdownPanel;
   head.appendChild(close);
   el.appendChild(head);
 
@@ -2858,7 +2887,8 @@ function breakdownClueCards(selected, q, combine) {
   }));
 }
 
-document.getElementById('toolBreak').onclick = runBreakdown;
+document.getElementById('toolBreak').onclick = toggleBreakdownArmed;
+loadBreakdownArmed();
 
 
 // ═══════════ 손잡이가 가까이 오면 깨어난다 ═══════════
