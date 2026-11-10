@@ -738,7 +738,9 @@ const BREAK_SYSTEM = `당신은 의대생에게 임상 vignette 푸는 법을 �
 [단서]
 원문조각 || 이걸 보면 떠올려야 할 것
 (4~7줄. 원문조각은 지문에 **그대로 있는 연속 문자열**이어야 한다. 요약·변형 금지.
- 정상 수치도 왜 적혀 있는지 밝혀라 — 출제자가 괜히 넣은 값은 없다.)
+ 입력에 [검사결과소견] 블록이 있으면 그 안의 수치도 똑같이 지문의 일부다 — 거기서
+ 뽑은 단서도 함께 써라. 정상 수치도 왜 적혀 있는지 밝혀라 — 출제자가 괜히 넣은
+ 값은 없다.)
 
 [인상]
 한 줄. 지문을 다 읽은 순간 가져야 할 판단. "무엇을 묻고 있고, 머릿속 1순위는 무엇인가".
@@ -771,12 +773,15 @@ export async function breakdown(question, retried = false, onProgress = null, si
 
   const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
   const opts = (question.opts || []).map((o, i) => `${CIRCLED[i] || i + 1} ${o}`).join('\n');
+  // 검사결과소견 박스(q.lab)도 뜯어볼 지문의 일부다(2026-11-10 — 전엔 q.q만 보내서
+  // 네모칸 안 수치는 뜯어보기 대상에서 통째로 빠져 있었다).
+  const labBlock = (question.lab || []).length ? `\n\n[검사결과소견]\n${question.lab.join('\n')}` : '';
 
   try {
     // 스트리밍 — 줄이 완성되는 대로 바로 보여준다(다 기다리면 40초가 걸린다)
     const text = await callGeminiStream({
       model, system: BREAK_SYSTEM, maxTokens: 1100, temperature: 0.2,
-      text: `[지문]\n${question.q}\n\n[선지]\n${opts}`,
+      text: `[지문]\n${question.q}${labBlock}\n\n[선지]\n${opts}`,
       onChunk: onProgress ? (_piece, full) => onProgress(parseBreakdown(full, question)) : null,
       signal,
     });
@@ -811,7 +816,9 @@ export async function breakdown(question, retried = false, onProgress = null, si
  * 없는 문장에 밑줄을 그으면 오히려 헷갈린다.
  */
 export function parseBreakdown(text, question) {
-  const hay = String(question?.q || '');
+  // 단서가 지문에 실제 있는지 검증하는 대상 — q뿐 아니라 검사결과소견(lab) 박스도
+  // 뜯어볼 지문의 일부이므로 같이 본다(위 BREAK_SYSTEM 프롬프트도 함께 보낸다).
+  const hay = String(question?.q || '') + (question?.lab || []).join('');
   const nOpts = (question?.opts || []).length;
   const clues = [];
   let impression = '';

@@ -521,17 +521,21 @@ export class Quiz {
     });
   }
 
-  /** 원본 문항의 '검사결과소견' 박스 — 증례 글 바로 아래, 사진 위에 둔다. */
+  /**
+   * 원본 문항의 검사수치 박스 — 증례 글 바로 아래, 사진 위에 둔다.
+   * ⚠️ "검사결과소견:" 타이틀을 여기서 자동으로 붙이지 않는다(2026-11-10 수정) —
+   * 원본 PDF에 그 글자가 실제로 없는 문항도 많다. 있을 때만 q.lab의 첫 줄로
+   * 이미 들어 있어야 한다(드릴 HTML 쪽은 이 규칙으로 이미 고쳐져 있었는데,
+   * 앱 본체의 이 렌더러만 안 고쳐져 있었다 — CLAUDE.md 07_드릴 규칙 참고).
+   */
   _renderLab(q) {
     const box = this.el.qlab;
     if (!box) return;
     box.innerHTML = '';
     if (!q.lab || !q.lab.length) { box.style.display = 'none'; return; }
-    const t = document.createElement('div');
-    t.className = 'lab-title';
-    t.textContent = '검사결과소견:';
-    box.appendChild(t);
-    q.lab.forEach((l) => { const d = document.createElement('div'); d.textContent = l; box.appendChild(d); });
+    // tokenize로 넣는다 — 뜯어보기가 여기 수치도 단서로 밑줄 긋고 올가미도 걸 수 있게
+    // (전엔 textContent 평문이라 #qlab 안엔 .tok이 없어 뜯어보기가 못 들어갔다).
+    q.lab.forEach((l) => { const d = document.createElement('div'); tokenize(d, l); box.appendChild(d); });
     box.style.display = 'block';
   }
 

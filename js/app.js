@@ -2537,8 +2537,8 @@ function closeBreakdownPanel() {
   el.classList.add('hidden');
   el.innerHTML = '';
   el.dataset.forNum = '';
-  document.querySelectorAll('#qtext .tok.bd-mark').forEach((m) => m.classList.remove('bd-mark'));
-  document.querySelectorAll('#qtext .bd-badge').forEach((b) => b.remove());
+  document.querySelectorAll('#qtext .tok.bd-mark, #qlab .tok.bd-mark').forEach((m) => m.classList.remove('bd-mark'));
+  document.querySelectorAll('#qtext .bd-badge, #qlab .bd-badge').forEach((b) => b.remove());
   if (pen) requestAnimationFrame(() => pen.resize());
 }
 
@@ -2783,38 +2783,61 @@ function renderBreakdown(el, data, q) {
   tokenizeTree(el);     // 분석 결과도 펜으로 긁어서 다시 물어볼 수 있게
 }
 
-/** 지문에서의 위치를 찾아 **읽는 순서대로** 1,2,3… 번호를 매긴다. */
-function numberClues(clues) {
-  const host = document.getElementById('qtext');
+// 뜯어보기가 단서를 찾는 두 곳 — 문진(qtext)과 검사결과소견 박스(qlab), 이 순서로
+// 본다(2026-11-10 도입 — 전엔 qtext만 봐서 네모칸 안 수치는 뜯어볼 때 통째로
+// 빠졌다). qlab은 qtext 아래에 있으므로, qlab에서 찾은 단서는 항상 qtext 단서
+// 뒤로 번호가 매겨지게 호스트 인덱스로 큰 자리를 준다.
+const BD_HOSTS = ['qtext', 'qlab'];
+
+/** host의 .tok들을 이어붙여 "원문 전체 문자열 + 각 토큰 시작위치" 로 만든다. */
+function bdHostToks(hostId) {
+  const host = document.getElementById(hostId);
   const toks = host ? [...host.querySelectorAll('.tok')] : [];
   let acc = '';
-  toks.forEach((t) => { acc += t.textContent; });
+  const starts = [];
+  toks.forEach((t) => { starts.push(acc.length); acc += t.textContent; });
+  return { host, toks, starts, acc };
+}
+
+/** frag가 qtext·qlab 중 어디에 있는지 찾는다(먼저 찾아지는 쪽). 없으면 null. */
+function findBdFragment(frag) {
+  const needle = frag.replace(/\s+/g, '');
+  for (let hi = 0; hi < BD_HOSTS.length; hi++) {
+    const { host, toks, starts, acc } = bdHostToks(BD_HOSTS[hi]);
+    if (!host) continue;
+    const at = acc.indexOf(needle);
+    if (at >= 0) return { hostIdx: hi, toks, starts, at, end: at + needle.length };
+  }
+  return null;
+}
+
+/** 지문에서의 위치를 찾아 **읽는 순서대로** 1,2,3… 번호를 매긴다. */
+function numberClues(clues) {
   return clues
-    .map((c) => ({ ...c, pos: acc.indexOf(c.frag.replace(/\s+/g, '')) }))
+    .map((c) => {
+      const f = findBdFragment(c.frag);
+      return { ...c, pos: f ? f.hostIdx * 1e6 + f.at : -1 };
+    })
     .sort((a, b) => (a.pos < 0 ? 1e9 : a.pos) - (b.pos < 0 ? 1e9 : b.pos))
     .map((c, i) => ({ ...c, n: i + 1 }));
 }
 
 /**
- * 지문 안의 해당 조각에 밑줄 + 번호 배지를 단다.
+ * 지문(또는 검사결과소견 박스) 안의 해당 조각에 밑줄 + 번호 배지를 단다.
  * 토큰 구조를 깨지 않게 클래스만 붙이고, 배지는 마지막 토큰 뒤에 끼워 넣는다.
  */
 function highlightFragments(numbered) {
-  const host = document.getElementById('qtext');
-  if (!host) return;
-  host.querySelectorAll('.bd-mark').forEach((m) => m.classList.remove('bd-mark'));
-  host.querySelectorAll('.bd-badge').forEach((b) => b.remove());
-  const toks = [...host.querySelectorAll('.tok')];
-  if (!toks.length) return;
-  let acc = '';
-  const starts = [];
-  toks.forEach((t) => { starts.push(acc.length); acc += t.textContent; });
+  BD_HOSTS.forEach((id) => {
+    const h = document.getElementById(id);
+    if (!h) return;
+    h.querySelectorAll('.bd-mark').forEach((m) => m.classList.remove('bd-mark'));
+    h.querySelectorAll('.bd-badge').forEach((b) => b.remove());
+  });
 
   for (const c of numbered) {
-    const needle = c.frag.replace(/\s+/g, '');
-    const at = acc.indexOf(needle);
-    if (at < 0) continue;
-    const end = at + needle.length;
+    const f = findBdFragment(c.frag);
+    if (!f) continue;
+    const { toks, starts, at, end } = f;
     let last = null;
     toks.forEach((t, i) => {
       const a = starts[i], b = a + t.textContent.length;
@@ -2835,7 +2858,8 @@ function highlightFragments(numbered) {
 function scrollToClue(n) {
   const row = [...document.querySelectorAll('#breakdown .bd-row')]
     .find((r) => r.querySelector('.bd-idx') && r.querySelector('.bd-idx').textContent === String(n));
-  const badge = document.querySelector(`#qtext .bd-badge[data-n="${n}"]`);
+  const badge = document.querySelector(`#qtext .bd-badge[data-n="${n}"]`)
+    || document.querySelector(`#qlab .bd-badge[data-n="${n}"]`);
   [row, badge].forEach((el) => {
     if (!el) return;
     el.classList.remove('bd-flash');
