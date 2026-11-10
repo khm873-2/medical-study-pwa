@@ -34,7 +34,7 @@ import {
   allSessions, clearSession, allAttempts, attemptId, finishedExams,
   saveHighlight, allHighlights, deleteHighlight,
 } from './db.js';
-import { weakQueue, weakBySubject, sumBySubject, examProgress } from './attempts.js';
+import { weakQueue, weakBySubject, sumBySubject, examProgress, examsStats } from './attempts.js';
 
 // 모의고사와 퀴즈를 둘 다 읽는다 — vault에서 내가 만든 퀴즈도 앱에서 풀 수 있어야 한다.
 // 두 폴더의 HTML이 같은 QUESTIONS 스키마를 쓰므로 파서는 그대로 재사용한다(2026-10-10).
@@ -835,7 +835,8 @@ function renderList(index, sessions, kind = '모의고사', attempts = [], finis
     sum.innerHTML = '<span class="head-row">' +
       `<span>${escapeText(group.subject.replace(/_/g, ' '))}</span>` +
       `<span class="subject-count">${total}개` +
-      (inProgress ? ` · 풀던 중 ${inProgress}` : '') + '</span></span>';
+      (inProgress ? ` · 풀던 중 ${inProgress}` : '') +
+      examsStatsSuffix(attempts, group.exams) + '</span></span>';
     det.appendChild(sum);
     body.appendChild(det);
 
@@ -847,6 +848,14 @@ function renderList(index, sessions, kind = '모의고사', attempts = [], finis
 /** exams 중 몇 개가 풀던 중인지 — 뿌리·과목 묶음 머리글이 공유해서 쓴다. */
 function examCounts(exams, sessions) {
   return { total: exams.length, inProgress: exams.filter((e) => sessions[e.path]).length };
+}
+
+/** 과목(또는 드릴 하위 과목) 머리글에 붙이는 "총 N문제 · 맞음 M · 다시풀 W" 조각.
+ * 아직 한 문제도 안 풀었으면 빈 문자열(기존처럼 파일 개수만 보임). */
+function examsStatsSuffix(attempts, exams) {
+  const { seen, correct, weak } = examsStats(attempts, exams.map((e) => e.path));
+  if (!seen) return '';
+  return ` · 문제 ${correct}/${seen} 맞음` + (weak ? ` · 다시풀 ${weak}` : '');
 }
 
 /**
@@ -872,9 +881,11 @@ function renderMockExamRoots(body, index, sessions, finished, attempts) {
     rsum.className = 'root-head';
     const totalCount = r.members.reduce((n, g) => n + g.exams.length, 0);
     const inProg = r.members.reduce((n, g) => n + g.exams.filter((e) => sessions[e.path]).length, 0);
+    const rootExams = r.members.flatMap((g) => g.exams);
     rsum.innerHTML = '<span class="head-row">' +
       `<span>${escapeText(r.label)}</span>` +
-      `<span class="subject-count">${totalCount}개` + (inProg ? ` · 풀던 중 ${inProg}` : '') + '</span></span>';
+      `<span class="subject-count">${totalCount}개` + (inProg ? ` · 풀던 중 ${inProg}` : '') +
+      examsStatsSuffix(attempts, rootExams) + '</span></span>';
     rootDet.appendChild(rsum);
     body.appendChild(rootDet);
 
@@ -891,7 +902,8 @@ function renderMockExamRoots(body, index, sessions, finished, attempts) {
       sum.innerHTML = '<span class="head-row">' +
         `<span>${escapeText(group.subject.replace(/_/g, ' '))}</span>` +
         `<span class="subject-count">${total}개` +
-        (inProgress ? ` · 풀던 중 ${inProgress}` : '') + '</span></span>';
+        (inProgress ? ` · 풀던 중 ${inProgress}` : '') +
+        examsStatsSuffix(attempts, group.exams) + '</span></span>';
       det.appendChild(sum);
       rootDet.appendChild(det);
       renderExamRows(det, group.exams, group, sessions, finished, attempts);
@@ -992,7 +1004,8 @@ function renderDrillSubjectGroups(rootDet, group, sessions, finished, attempts) 
       sum.innerHTML = '<span class="head-row">' +
         `<span>${escapeText(subj)}</span>` +
         `<span class="subject-count">${total}개` +
-        (inProgress ? ` · 풀던 중 ${inProgress}` : '') + '</span></span>';
+        (inProgress ? ` · 풀던 중 ${inProgress}` : '') +
+        examsStatsSuffix(attempts, exams) + '</span></span>';
       det.appendChild(sum);
       rootDet.appendChild(det);
       renderExamRows(det, exams, group, sessions, finished, attempts);

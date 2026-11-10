@@ -66,6 +66,10 @@ async function fetchNoteList() {
         // {뿌리}/{과목}/{이름}.md  또는  {뿌리}/{과목}/{묶음}/{이름}.md
         if (parts.length < 3 || parts.length > 4) continue;
         if (!NOTE_ROOTS.includes(parts[0])) continue;
+        // `_백업` 등 밑줄로 시작하는 묶음 폴더는 노트 읽기 목록에서 뺀다(2026-11-10 요청).
+        // 재작성 전 원본을 보존해두는 작업용 폴더라 내용 자체는 vault에 남겨두되, 읽을
+        // 노트를 고르는 화면에선 안 보이게 — 진짜 노트와 섞이면 찾기 어렵다.
+        if (parts.length === 4 && parts[2].startsWith('_')) continue;
         // 한글 이름은 자소 분리형(NFD)으로 올 수 있다 — 묶는 열쇠로 쓰므로 맞춰둔다.
         // 안 맞추면 눈에 똑같은 과목이 두 묶음으로 갈린다(2026-10-12에 겪은 그 문제다).
         files.push({

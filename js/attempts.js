@@ -124,3 +124,22 @@ export function examProgress(attempts, exam) {
     weak: list.filter(isWeak).length,
   };
 }
+
+/**
+ * 여러 시험 파일을 묶어 "총 문제·맞힌 문제·다시풀 문제" 집계 — 드릴/모의고사/퀴즈/족보
+ * 목록의 과목(또는 드릴 하위 과목) 머리글에 쓴다(2026-11-10 요청).
+ *
+ * ⚠️ attempts의 subject 필드로 거르지 않고 **문항이 속한 시험 파일 경로(examPaths)로
+ * 거른다** — 드릴은 group.subject가 "임종평_전범위" 같은 뿌리 폴더명이라 하위 과목
+ * (내분비·마이너 등) 단위로는 subject 필드만으로 못 가른다. exam 경로는 항상 정확하다.
+ */
+export function examsStats(attempts, examPaths) {
+  const paths = new Set(examPaths || []);
+  const list = (attempts || []).filter((a) => paths.has(a.exam));
+  const wrong = list.filter((a) => a.last && !a.last.correct).length;
+  return {
+    seen: list.length,
+    correct: list.length - wrong,
+    weak: list.filter(isWeak).length,
+  };
+}

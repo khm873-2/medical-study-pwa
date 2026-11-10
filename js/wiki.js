@@ -46,7 +46,9 @@ export async function listNoteFiles(root) {
       }
     };
     files.forEach((f) => push(f, null));
-    for (const d of files.filter((e) => e.type === 'dir')) {
+    // `_백업` 등 밑줄로 시작하는 묶음 폴더는 읽을 노트 목록에서 뺀다(2026-11-10) —
+    // fetchNoteList()의 git tree 경로와 같은 규칙, 여기는 git tree가 막혔을 때의 폴백.
+    for (const d of files.filter((e) => e.type === 'dir' && !e.name.startsWith('_'))) {
       let inner;
       try { inner = await listDir(d.path); } catch { continue; }
       inner.forEach((f) => push(f, d.name));
