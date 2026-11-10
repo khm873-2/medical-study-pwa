@@ -10291,11 +10291,23 @@ function reserveForTools(el) {
       //
       // ⚠️ 바로 위에서 머리줄 padding을 바꿨다 — 그 반영이 끝난 **다음 프레임**에 재야
       //    맞는 값이 나온다. 같은 프레임에서 재면 4px쯤 어긋나 패널을 덮는다.
-      requestAnimationFrame(() => {
-        el.style.setProperty('--rt-base', `${Math.round(head.getBoundingClientRect().bottom - 2)}px`);
-      });
+      requestAnimationFrame(() => setRtBase(el, head));
     } else el.style.removeProperty('--rt-base');
   });
+}
+
+/**
+ * --rt-base를 머리줄 바닥에 맞춰 적는다. 머리줄이 아직 레이아웃을 끝내기 전에
+ * 재면 bottom이 0 이하로 잡혀(비어 있던 순간의 값) 막대가 화면 밖(음수 top)으로
+ * 날아간다 — 실측 사고(2026-11-10): 소화기 드릴을 옆 노트 패널과 같이 열면
+ * --rt-base가 -2px로 굳어 도구막대 전체가 안 보였다(사용자 신고: "도구모음이
+ * 안보이는거임?... 캡쳐도 안되고 모아두기도 안되고"). 헤더 레이아웃이 아직 안
+ * 끝났다는 뜻이므로, 그 비정상 값으로 확정하지 않고 다음 프레임에 한 번 더 잰다.
+ */
+function setRtBase(el, head, retried = false) {
+  const b = Math.round(head.getBoundingClientRect().bottom - 2);
+  if (b <= 0 && !retried) { requestAnimationFrame(() => setRtBase(el, head, true)); return; }
+  el.style.setProperty('--rt-base', `${b}px`);
 }
 
 /** 놓은 자리에서 가장 가까운 변을 고른다. */
@@ -10318,6 +10330,12 @@ function initReadTools(panelId = 'readTools', gripId = 'rtGrip', key = 'read_too
   // 보이게 되는 순간 다시 재서 머리줄 자리를 비운다(2026-10-13).
   if (typeof ResizeObserver === 'function') {
     new ResizeObserver(() => reserveForTools(el)).observe(el);
+    // 머리줄 자체의 크기가 나중에 바뀌어도(제목·배지가 늦게 붙는 등) 다시 잰다 —
+    // 위 setRtBase의 1회 재시도로 못 잡는, 더 늦게 벌어지는 변화까지 잡는 보강책
+    // (2026-11-10, 도구막대가 화면 밖으로 날아가던 사고의 재발 방지).
+    const screen = panelId === 'quizTools' ? document.getElementById('quizScreen') : el.closest('section');
+    const head = screen && screen.querySelector(':scope > header');
+    if (head) new ResizeObserver(() => reserveForTools(el)).observe(head);
   }
 
   grip.addEventListener('pointerdown', (e) => {
