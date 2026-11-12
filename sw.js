@@ -7,10 +7,10 @@
 // 또한 api.github.com 요청은 절대 가로채지 않는다 — 인증 헤더가 붙은 요청을 캐시하면
 // 토큰이 섞인 응답이 남을 수 있어서다.
 
-const VERSION = 'v163';
+const VERSION = 'v164';
 // 배포 시각 — 앱 화면에 "언제 것인지"를 보여주는 데 쓴다(2026-10-14).
 // deploy.sh가 VERSION과 함께 갈아 끼운다.
-const BUILT = '2026-11-10 22:17';
+const BUILT = '2026-11-12 18:42';
 const SHELL = `shell-${VERSION}`;
 
 const SHELL_FILES = [
@@ -38,9 +38,12 @@ const SHELL_FILES = [
   './js/jokbo.js',
 ];
 
+// ⚠️ install에서 skipWaiting()을 부르지 않는다(2026-11-12). 부르면 배포 직후 앱에 돌아올 때
+//    필기·풀이 도중에도 새 워커가 바로 제어권을 잡고 앱이 통째로 새로고침됐다. 새 버전은
+//    "지금 적용" 막대(→ SKIP_WAITING 메시지)를 눌렀을 때만 넘어간다.
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(SHELL).then((c) => c.addAll(SHELL_FILES.map((u) => new Request(u, { cache: 'no-cache' })))).then(() => self.skipWaiting())
+    caches.open(SHELL).then((c) => c.addAll(SHELL_FILES.map((u) => new Request(u, { cache: 'no-cache' }))))
   );
 });
 
@@ -65,16 +68,22 @@ self.addEventListener('fetch', (e) => {
   //    무력화된다 — 배포해도 아이패드에서 안 바뀌던 원인이다(2026-10-10).
   //    no-cache는 캐시를 안 쓰는 게 아니라 **매번 서버에 물어본다**(ETag 검증).
   //    안 바뀌었으면 304라서 데이터도 거의 안 쓴다.
+  //
+  //  네트워크가 6초 넘게 걸리면 캐시본으로 먼저 연다(2026-11-12) — 느린 망에서 앱 셸이 안 떠
+  //  "구조선"이 멀쩡한 앱을 덮던 문제. 늦게 도착한 응답은 그대로 캐시를 갱신한다.
   e.respondWith(
-    fetch(e.request, { cache: 'no-cache' })
-      .then((res) => {
+    caches.match(e.request).then((cached) => {
+      const net = fetch(e.request, { cache: 'no-cache' }).then((res) => {
         if (res && res.ok) {
           const copy = res.clone();
           caches.open(SHELL).then((c) => c.put(e.request, copy)).catch(() => {});
         }
         return res;
-      })
-      .catch(() => caches.match(e.request).then((r) => r || caches.match('./index.html')))
+      });
+      if (!cached) return net.catch(() => caches.match('./index.html'));
+      return Promise.race([net, new Promise((r) => setTimeout(() => r(cached), 6000))])
+        .catch(() => cached);
+    })
   );
 });
 
