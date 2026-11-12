@@ -22,6 +22,13 @@ export function isAns(q, i) {
   return q.ansAll ? q.ansAll.includes(i) : i === q.ans;
 }
 
+/**
+ * 선지 해설 앞의 "정답 — "/"오답 — " 머리말을 뗀다(2026-11-12). 앱이 이미 초록/빨강 행과
+ * "정답 ③" 머리줄로 알려주는데, 파일 쪽 해설에도 같은 말이 붙어 "정답 — 정답 ③…"처럼
+ * 겹쳐 보였다. 머리말이 없는 기존 파일은 그대로 둔다.
+ */
+const stripVerdict = (t) => String(t).replace(/^\s*(정답|오답)\s*[—–-]\s*/, '');
+
 /** 'multi' 문항인가 — 답을 **전부** 골라야 맞는 것(모두 고르시오). */
 export const isMulti = (q) => !!q && q.type === 'multi';
 
@@ -144,10 +151,32 @@ export class Quiz {
     });
   }
 
+  /**
+   * 시험 내용의 서명 — 문항 수 + 문항 앞머리 몇 개. 이어풀기 저장본이 **지금 파일과 같은
+   * 시험의 것인지** 가리는 데 쓴다(2026-11-12). 임종평 모의고사처럼 같은 경로의 파일을
+   * 다시 만들면(문항 수가 같아도 내용·순서가 바뀐다) 옛 답이 엉뚱한 문항에 얹혔고, 문항
+   * 수가 달라지면 이어풀기가 아무 말 없이 사라졌다.
+   */
+  _sig() {
+    const heads = this.all.map((q, i) => (i % 7 === 0 ? String(q.q || '').slice(0, 24) : ''))
+      .filter(Boolean).join('|');
+    let h = 0;
+    for (let i = 0; i < heads.length; i++) h = (h * 31 + heads.charCodeAt(i)) | 0;
+    return `${this.all.length}:${h}`;
+  }
+
   /** 저장된 이어풀기 상태가 있으면 복원. 반환값: 복원했는지 여부 */
   async restore() {
     const s = await loadSession(this.examKey);
-    if (!s || !Array.isArray(s.answers) || s.answers.length !== this.all.length) return false;
+    if (!s || !Array.isArray(s.answers)) return false;
+    // 내용이 바뀐 파일의 옛 진행은 버린다 — 서명이 없는 옛 저장본은 문항 수만 맞으면 그대로 쓴다
+    const changed = s.answers.length !== this.all.length || (s.sig && s.sig !== this._sig());
+    if (changed) {
+      if (s.answers.some((a) => a !== null)) {
+        this.onToast('시험 내용이 바뀌어 이어풀기를 처음부터 다시 시작합니다.');
+      }
+      return false;
+    }
     this.answers = s.answers;
     this.bookmarks = s.bookmarks || this.bookmarks;
     this.memos = s.memos || this.memos;
@@ -167,6 +196,7 @@ export class Quiz {
       cur: this.cur,
       title: this.title,
       total: this.all.length,
+      sig: this._sig(),
     }).catch(() => {});
     scheduleBackup();   // 이어풀기 상태도 재설치 때 되살릴 수 있게
   }
@@ -356,7 +386,7 @@ export class Quiz {
       if (locked && Array.isArray(q.opt) && q.opt[i]) {
         const ex = document.createElement('div');
         ex.className = 'opt-explain';
-        ex.textContent = q.opt[i];
+        ex.textContent = stripVerdict(q.opt[i]);
         wrap.appendChild(ex);
       }
 
@@ -432,7 +462,7 @@ export class Quiz {
       if (locked && Array.isArray(q.opt) && q.opt[i]) {
         const ex = document.createElement('div');
         ex.className = 'opt-explain';
-        ex.textContent = q.opt[i];
+        ex.textContent = stripVerdict(q.opt[i]);
         wrap.appendChild(ex);
       }
 
@@ -685,12 +715,12 @@ export class Quiz {
 
   /** 이 문항만 답을 비운다 — 선지를 잘못 눌렀을 때. */
   resetOne() {
-    const idx = this.qIndex;
-    this.answers[idx] = null;
-    this.eliminated[idx] = new Set();
-    this._draft[idx] = [];            // 모두 고르기는 체크도 같이 비운다
-    this.persist();
-    this.render();
+    // ⚠️ unselect()에 맡긴다(2026-11-12). 전에는 답·소거선만 비워서 이력(attempts)에서
+    //    시도를 취소하지 않았고(undoAttempt), `_recorded`·찍었음 표시도 그대로라 다시 풀면
+    //    같은 문항이 한 번 더 기록돼 오답 횟수가 이중으로 쌓였다. 두 버튼("다시 풀기"·
+    //    "잘못 눌렀어요")이 같은 일을 하되 한쪽만 이력을 정리하고 있었다.
+    this._draft[this.qIndex] = [];    // 모두 고르기는 체크도 같이 비운다
+    return this.unselect();
   }
 
   _showExplain(q) {
@@ -744,7 +774,7 @@ export class Quiz {
       this.el.expText.appendChild(mk(`<span class="muted">지난 풀이 — ${escapeHtml(trail)}</span>`));
     }
     if (q.explain) this.el.expText.appendChild(mk(`${ico('pin')}${escapeHtml(q.explain)}`));
-    if (Array.isArray(q.opt) && q.opt.some(Boolean) && q.type !== 'mc') {
+    if (Array.isArray(q.opt) && q.opt.some(Boolean) && q.type !== 'mc' && q.type !== 'multi') {
       this.el.expText.appendChild(mk('오답노트:\n' + q.opt.map((t, i) => (t ? `${CIRCLED[i]} ${t}` : '')).filter(Boolean).join('\n')));
     }
     // 잘못 눌렀을 때 물릴 자리 — 해설 맨 아래에 둔다(2026-10-28 요청).

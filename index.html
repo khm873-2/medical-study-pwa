@@ -995,8 +995,21 @@
       + '<button id="__fixBtn" style="width:100%;padding:15px;border-radius:12px;border:0;'
       + 'background:#2f5fd0;color:#fff;font:700 17px/1 inherit;cursor:pointer">앱 고치기</button>'
       + '<p id="__fixMsg" style="color:#8d9ab0;font-size:13.5px;margin:14px 0 0"></p>'
+      // 멀쩡한 앱을 덮었을 때 빠져나가는 길(2026-11-12) — 느린 망에서 10초가 지났을 뿐
+      // 앱은 서 있는 경우가 있었다. 닫으면 아래 앱이 그대로 보인다.
+      + '<button id="__closeBtn" style="margin-top:12px;padding:12px 22px;border-radius:12px;'
+      + 'border:1px solid #2a3550;background:transparent;color:#8d9ab0;font:600 15px/1 inherit;'
+      + 'cursor:pointer">닫기</button>'
       + '</div>';
     document.body.appendChild(box);
+    document.getElementById('__closeBtn').onclick = function () { box.remove(); };
+    // 오프라인에서 "고치기"를 누르면 서비스워커·캐시를 지운 뒤 새로 못 받아 앱이 아예 못
+    // 뜬다 — 연결이 없을 땐 단추를 숨기고 이유를 적는다.
+    if (navigator.onLine === false) {
+      document.getElementById('__fixBtn').style.display = 'none';
+      document.getElementById('__fixMsg').textContent =
+        '지금은 인터넷에 연결돼 있지 않아 고칠 수 없습니다. 연결한 뒤 다시 열어 주세요.';
+    }
     document.getElementById('__fixBtn').onclick = function () {
       var msg = document.getElementById('__fixMsg');
       var btn = document.getElementById('__fixBtn');

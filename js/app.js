@@ -25,7 +25,7 @@ import {
   splitWord, wordScore, blockContext, blankNode, tidyCardHtml,
   refitVisibleTables,
 } from './reader.js';
-import { search, cacheSubject, storageInfo, matcher, findAll, buildIndex, indexInfo } from './search.js';
+import { search, cacheSubject, storageInfo, matcher, findAll, buildIndex, indexInfo, clearSearchIndex } from './search.js';
 import { JOKBO_ROOT, parseJokbo, chapterTitle } from './jokbo.js';
 import { nameSimilarity } from './wiki.js';
 import {
@@ -598,6 +598,7 @@ document.getElementById('listModelsBtn').onclick = async () => {
 
 document.getElementById('clearCacheBtn').onclick = async () => {
   await cacheClear();
+  await clearSearchIndex().catch(() => {});   // 본문만 지우면 검색 색인이 빈 껍데기를 믿는다
   updateStorageInfo();
   const msg = document.getElementById('setupMsg');
   msg.className = 'ok'; msg.textContent = '캐시를 비웠습니다.';
@@ -694,18 +695,45 @@ async function _buildExamIndex(force) {
   //    "장기공여자관리 퀴즈는 보이지도 않음" — 그날 만든 파일이었다).
   //    노트 목록에서 먼저 겪은 것과 같은 일이라 같은 처방을 쓴다(reader.js noteList).
   const EXAM_TTL = 3 * 60 * 1000;
-  let index = force ? null : await kvGet(cacheKey);
-  if (index) {
-    const at = Number((await kvGet(stampKey)) || 0);
-    if (Date.now() - at >= EXAM_TTL) index = null;     // 낡았으면 다시 읽는다
-  }
-  if (!index) {
-    index = await fetchExamIndexViaTree().catch(() => null);
-    if (!index) index = await fetchExamIndexViaListDir();   // tree 실패·잘림 → 옛 방식 폴백
-    await kvSet(cacheKey, index);
-    await kvSet(stampKey, Date.now());
-  }
+  const cached = await kvGet(cacheKey);              // 낡았어도 폴백으로 쓴다
+  const at = Number((await kvGet(stampKey)) || 0);
+  const haveCache = Array.isArray(cached) && cached.length > 0;
+  if (!force && haveCache && Date.now() - at < EXAM_TTL) return cached;
+  // ⚠️ 낡은 캐시가 있으면 **그걸 먼저 보여주고** 뒤에서 새로 읽는다(2026-11-12). 전에는
+  //    TTL(3분)이 지나면 네트워크를 끝까지 기다렸다 — 느린 망에서 탭을 누를 때마다 목록이
+  //    "불러오는 중…"에서 멈췄다.
+  if (!force && haveCache) { refreshExamIndexInBackground(); return cached; }
+  return fetchExamIndexFresh(haveCache ? cached : null);
+}
+
+/** vault에서 목록을 새로 읽는다. 실패·빈 결과면 옛 캐시를 그대로 돌려주고 **저장하지 않는다**. */
+async function fetchExamIndexFresh(fallback) {
+  let index = await fetchExamIndexViaTree().catch(() => null);
+  if (!index) index = await fetchExamIndexViaListDir();   // tree 실패·잘림 → 옛 방식 폴백
+  // ⚠️ 빈 결과를 캐시에 쓰지 않는다(2026-11-12). 트리와 listDir이 둘 다 실패하면
+  //    listDir 폴백이 오류를 삼키고 `[]`를 돌려줘서, 그게 새 타임스탬프와 함께 저장돼
+  //    3분 동안 모든 탭이 "찾지 못했습니다"만 보여줬다. 빈 목록은 대부분 네트워크 실패다.
+  if (!index.length) return fallback || index;
+  await kvSet(EXAM_INDEX_KEY, index);
+  await kvSet('exam_index_at', Date.now());
   return index;
+}
+
+let examBgRefresh = null;
+let examBgFailedAt = 0;
+function refreshExamIndexInBackground() {
+  if (examBgRefresh || Date.now() - examBgFailedAt < 60 * 1000) return;
+  examBgRefresh = (async () => {
+    try {
+      const prev = await kvGet(EXAM_INDEX_KEY);
+      const next = await fetchExamIndexFresh(prev);
+      if (next === prev) { examBgFailedAt = Date.now(); return; }   // 실패 — 1분간 다시 안 건다
+      if (JSON.stringify(next) !== JSON.stringify(prev)) {
+        const w = localStorage.getItem('last_tab');
+        if (document.body.dataset.screen === 'listScreen' && KIND_OF[w]) redrawList(w).catch(() => {});
+      }
+    } catch { examBgFailedAt = Date.now(); } finally { examBgRefresh = null; }
+  })();
 }
 
 /**
@@ -1419,10 +1447,25 @@ function examTitle(parsed, fromFile) {
   return cands.find(fits) || fromFile || anchors[0];
 }
 
+// ⚠️ 목록 본문을 "불러오는 중…"으로 갈아끼웠다가 실패하면 innerHTML로 되돌리던 방식은
+//    버튼의 onclick·details의 ontoggle을 전부 죽였다 — 되돌린 목록은 눌러도 반응이 없고
+//    redrawList의 지문 검사는 "그대로"라며 다시 안 그렸다(2026-11-12 점검). 그리고 퀴즈·드릴·
+//    족보 탭에서 열어도 늘 모의고사 본문(listBody)만 덮었다. 이제 **본문은 건드리지 않고**
+//    지금 보는 탭을 흐리게 + 눌러지지 않게만 한다. 더블탭도 같은 플래그로 막는다.
+let examOpening = false;
+function setListBusy(on) {
+  const active = document.querySelector('.tab.active')?.dataset.tab;
+  const host = document.getElementById(TAB_BODY[active] || 'listBody');
+  if (!host) return;
+  host.style.opacity = on ? '.45' : '';
+  host.style.pointerEvents = on ? 'none' : '';
+}
+
 async function openExam(subject, ex) {
-  const body = document.getElementById('listBody');
-  const prev = body.innerHTML;
-  body.innerHTML = '<p class="muted">시험을 불러오는 중…</p>';
+  if (examOpening) return;
+  examOpening = true;
+  setListBusy(true);
+  toast('시험을 불러오는 중…');
   try {
     const raw = await getText(ex.path);
     // 족보는 HTML이 아니라 가공된 마크다운이다 — 파서만 갈아끼우면 나머지(펜·뜯어보기·
@@ -1439,12 +1482,13 @@ async function openExam(subject, ex) {
     if (quiz) quiz.destroy();
     destroyPen();
     closeOverview();   // 전체보기는 지금 연 시험 것이어야 한다 — 이전 시험 내용이 남으면 안 된다
+    closeBreakdownPanel();   // 이전 시험의 뜯어보기가 새 시험 화면에 남지 않게(2026-11-12)
     quiz = new Quiz({
       examKey: ex.path,
       questions,
       title: currentExam.title,
       onFinish: showResult,
-      onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); stopTimer(); loadList(false); },
+      onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); stopTimer(); closeBreakdownPanel(); loadList(false); },
       onRender: onQuestionRender,
       onCopy: copyQuestionText,
       onToast: toast,
@@ -1463,8 +1507,10 @@ async function openExam(subject, ex) {
     }
     if (had) toast('이어서 풉니다.');
   } catch (e) {
-    body.innerHTML = prev;
     alertBox(`시험을 열지 못했습니다: ${e.message}`);
+  } finally {
+    setListBusy(false);
+    examOpening = false;
   }
 }
 
@@ -1500,9 +1546,16 @@ function handlePenTap(el) {
   if (!el || !quiz) return false;
   const row = el.closest && el.closest('.opt-row');
   if (row && !row.classList.contains('locked')) {
-    const rows = [...document.getElementById('optsContainer').children];
+    // `.opt-row`만 센다 — 모두 고르기 문항은 첫 자식이 안내 문단(<p class="multi-note">)이라
+    // children으로 세면 한 칸씩 밀려 엉뚱한 선지가 골라졌다(2026-11-12 점검).
+    const rows = [...document.querySelectorAll('#optsContainer > .opt-row')];
     const i = rows.indexOf(row);
-    if (i >= 0) { quiz.select(i); return true; }
+    if (i >= 0) {
+      // 모두 고르기는 답을 바로 내지 않고 체크만 켜고 끈다 — select(i)로 숫자를 넣으면
+      // answers에 배열이 아닌 값이 들어가 다시 그릴 때 TypeError가 났다.
+      if (quiz.q && quiz.q.type === 'multi') quiz.togglePick(i); else quiz.select(i);
+      return true;
+    }
   }
   const ox = el.closest && el.closest('.ox-btn');
   if (ox && !ox.disabled) { quiz.select(Number(ox.dataset.ox)); return true; }
@@ -1539,7 +1592,9 @@ function onQuestionRender(q, idx, { answered }) {
   // 닫는다. 활성(armed) 상태면 그 뒤 "답을 고른 문제"에서만 다시 띄운다 — 정답 공개
   // 전에는 절대 안 뜬다(runBreakdown 자체도 막는다, 위 주석 참고).
   const bdEl = document.getElementById('breakdown');
-  if (bdEl.dataset.forNum !== String(q.num)) {
+  // 다른 문항으로 넘어갔거나, **답이 지워진**(다시 풀기·잘못 눌렀어요) 문항이면 닫는다 —
+  // 답이 비었는데 힌트 패널이 남아 정답 공개 뒤에만 뜬다는 약속이 깨졌다(2026-11-12).
+  if (bdEl.dataset.forNum !== bdKey(q) || !answered) {
     closeBreakdownPanel();
     if (breakdownArmed && answered) runBreakdown();
   }
@@ -2507,6 +2562,14 @@ document.getElementById('toolCapture').onclick = () => setTool(penTool === 'shot
 // 문제를 넘기면(답을 고르기 전이든 후든) 패널은 항상 한 번 닫히고, 활성 상태가
 // 켜져 있으면 그 새 문제에서 답을 고르는 순간 다시 자동으로 뜬다.
 let breakdownArmed = false;
+// 문항 키 — 문항 번호만으로는 시험이 달라도 1교시 5번·2교시 5번이 같아 보였다(다시 볼 문항
+// 모드는 한 화면에 여러 시험이 섞여 번호가 더 겹친다). 시험 경로를 같이 쓴다(2026-11-12).
+function bdKey(q) {
+  return `${(q && q.__exam) || (quiz && quiz.examKey) || ''}#${q ? q.num : ''}`;
+}
+// 실행 번호 — 뜯어보는 도중에 다른 문제로 넘어가거나 닫으면 올려서, 늦게 끝난 옛 실행이
+// 새 문제 화면에 결과를 그리거나 새 실행의 취소 컨트롤러를 지우지 못하게 한다.
+let breakdownRun = 0;
 let breakdownBusy = false;
 let breakdownAbort = null;     // 뜯어보는 중에 그만두면 요청까지 끊는다(2026-10-13)
 // 체크된 단서 — "frag"(지문 원문 조각)를 키로 쓴다. numberClues가 매길 때마다 n을
@@ -2532,6 +2595,7 @@ async function toggleBreakdownArmed() {
 
 /** 패널만 닫는다 — 활성(armed) 여부는 안 건드린다. 문제를 넘길 때마다 호출. */
 function closeBreakdownPanel() {
+  breakdownRun++;
   if (breakdownBusy) { try { breakdownAbort && breakdownAbort.abort(); } catch {} }
   breakdownBusy = false;
   breakdownAbort = null;
@@ -2558,24 +2622,27 @@ async function runBreakdown() {
     return;
   }
   // 이미 이 문제로 떠 있으면 다시 부르지 않는다(중복 요청 방지).
-  if (!el.classList.contains('hidden') && el.dataset.forNum === String(q.num)) return;
+  if (!el.classList.contains('hidden') && el.dataset.forNum === bdKey(q)) return;
+  const run = ++breakdownRun;
+  const stale = () => run !== breakdownRun;      // 그 사이 닫혔거나 다른 문제로 넘어갔다
   breakdownBusy = true;
   breakdownAbort = typeof AbortController === 'function' ? new AbortController() : null;
   bdSelected.clear();
-  el.dataset.forNum = String(q.num);
+  el.dataset.forNum = bdKey(q);
   el.classList.remove('hidden');
 
   // ① 미리 만들어둔 게 있으면 그걸 쓴다 — 0초, 할당량 0, 오프라인에서도 된다.
   //    모의고사 문제는 **고정된 콘텐츠**다. 매번 AI를 부를 이유가 없다(2026-10-10).
   try {
     const pre = await prebuiltBreakdown(q);
+    if (stale()) return;
     if (pre) {
       renderBreakdown(el, pre, q);
       breakdownBusy = false;
       if (pen) requestAnimationFrame(() => pen.resize());
       return;
     }
-  } catch { /* 없으면 아래에서 AI로 */ }
+  } catch { if (stale()) return; /* 없으면 아래에서 AI로 */ }
 
   // 기다리는 동안에도 그만둘 수 있다는 걸 보여준다
   el.innerHTML = '';
@@ -2590,20 +2657,22 @@ async function runBreakdown() {
     load.appendChild(stop);
     el.appendChild(load);
   }
-  if (!(await gem.hasKey())) { askNoKey(q.q); breakdownBusy = false; return; }
+  const hasKey = await gem.hasKey();
+  if (stale()) return;
+  if (!hasKey) { askNoKey(q.q); breakdownBusy = false; return; }
   try {
     // 스트리밍 — 줄이 오는 대로 다시 그린다. 다 기다리면 40초가 걸렸다(2026-10-10).
     let painted = false;
     const data = await gem.breakdown(q, false, (partial) => {
-      if (breakdownAbort && breakdownAbort.signal.aborted) return;
+      if (stale() || (breakdownAbort && breakdownAbort.signal.aborted)) return;
       if (!partial.clues.length && !partial.impression && !partial.options.length) return;
       renderBreakdown(el, partial, q);
       painted = true;
     }, breakdownAbort ? breakdownAbort.signal : null);
-    if (breakdownAbort && breakdownAbort.signal.aborted) return;
+    if (stale() || (breakdownAbort && breakdownAbort.signal.aborted)) return;
     if (!painted || data.clues.length || data.options.length) renderBreakdown(el, data, q);
   } catch (e) {
-    if (e.name === 'AbortError' || (breakdownAbort && breakdownAbort.signal.aborted)) return;
+    if (stale() || e.name === 'AbortError' || (breakdownAbort && breakdownAbort.signal.aborted)) return;
     const wait = /^RATE_WAIT:(\d+)$/.exec(e.message);
     el.innerHTML = '';
     const w = document.createElement('div');
@@ -2611,9 +2680,12 @@ async function runBreakdown() {
     w.textContent = wait ? `요청이 많습니다 — ${wait[1]}초 뒤에 다시 눌러주세요.` : e.message;
     el.appendChild(w);
   } finally {
-    breakdownBusy = false;
-    breakdownAbort = null;
-    if (pen) requestAnimationFrame(() => pen.resize());
+    // 옛 실행이 늦게 끝나며 **새 실행의** busy·abort를 지우던 문제 — 최신 실행일 때만 정리한다
+    if (!stale()) {
+      breakdownBusy = false;
+      breakdownAbort = null;
+      if (pen) requestAnimationFrame(() => pen.resize());
+    }
   }
 }
 
@@ -3645,13 +3717,14 @@ async function openNoteByName(name, { groups: given, force = false } = {}) {
  * @param {string} [opts.exam]    한 시험(경로)으로 좁힌다 — 목록 화면의 "오답 N" 칩이 쓴다
  */
 async function openWeakQueue({ subject, kind, exam } = {}) {
-  const body = document.getElementById('todayBody');
-  const keep = body.innerHTML;
-  body.innerHTML = '<p class="muted">약한 문항을 모으는 중…</p>';
+  if (examOpening) return;                 // openExam과 같은 이유(위 주석)
+  examOpening = true;
+  setListBusy(true);
+  toast('약한 문항을 모으는 중…');
   try {
     const attempts = await allAttempts();
     const want = weakQueue(attempts, { subject, kind, exam, limit: 40 });
-    if (!want.length) { body.innerHTML = keep; toast('다시 볼 문항이 없습니다.'); return; }
+    if (!want.length) { toast('다시 볼 문항이 없습니다.'); return; }
 
     const byExam = new Map();
     want.forEach((a) => {
@@ -3672,7 +3745,7 @@ async function openWeakQueue({ subject, kind, exam } = {}) {
           __title: meta.title || prettyExamName(path.split('/').pop()) });
       }
     }
-    if (!picked.length) { body.innerHTML = keep; toast('문항을 불러오지 못했습니다.'); return; }
+    if (!picked.length) { toast('문항을 불러오지 못했습니다.'); return; }
 
     // 모아 풀기는 순서 자체가 섞여 있어야 "무슨 유형인지 고르는" 연습이 된다
     shuffle(picked);
@@ -3686,13 +3759,14 @@ async function openWeakQueue({ subject, kind, exam } = {}) {
     if (quiz) quiz.destroy();
     destroyPen();
     closeOverview();
+    closeBreakdownPanel();
     await clearSession(WEAK_KEY);         // 이전 모아풀기 상태가 남아 섞이지 않게
     quiz = new Quiz({
       examKey: WEAK_KEY,
       questions: picked,
       title: `다시 볼 문항 — ${label} (${picked.length})`,
       onFinish: showResult,
-      onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); loadList(false); },
+      onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); closeBreakdownPanel(); loadList(false); },
       onRender: onQuestionRender,
       onCopy: copyQuestionText,
       onToast: toast,
@@ -3702,8 +3776,10 @@ async function openWeakQueue({ subject, kind, exam } = {}) {
     quiz.start();
     ensurePen();
   } catch (e) {
-    body.innerHTML = keep;
     toast(`모아 풀기에 실패했습니다: ${e.message}`);
+  } finally {
+    setListBusy(false);
+    examOpening = false;
   }
 }
 
@@ -5554,14 +5630,26 @@ async function toggleTask(btn) {
     //    어긋나서 "그 줄을 못 찾았습니다"가 났다(2026-10-14에 계속 실패).
     //    이제 **앞 섹션들의 상자 수를 더해** 전체에서 몇 번째인지로 바로 간다 —
     //    섹션 본문은 앱이 이미 들고 있으니 셈이 어긋날 데가 없다.
-    const BOX = /^\s*[-*+]\s*\[([ xX])\]\s*(.*)$/;
+    // ⚠️ 렌더러(markdown.js)가 세는 줄과 **똑같이** 센다(2026-11-12). 렌더러는 콜아웃·인용
+    //    안(`> - [ ]`)과 번호 목록(`1. [ ]`)의 상자도 세는데 여기선 빠져 있었고, 코드 블록
+    //    안의 `- [ ]`는 렌더러가 안 세는데 여기선 셌다 — 한 줄만 어긋나도 뒤의 모든 상자가
+    //    엉뚱한 줄을 가리켰다.
+    const BOX = /^\s*(?:>\s*)*(?:[-*+]|\d+\.)\s+\[([ xX])\]\s*(.*)$/;
+    const boxIdx = (arr) => {
+      const out = [];
+      let fence = false;
+      arr.forEach((l, k) => {
+        if (/^\s*```/.test(l)) { fence = !fence; return; }
+        if (!fence && BOX.test(l)) out.push(k);
+      });
+      return out;
+    };
     const secIdx = doc.secIdx;
     let before = 0;
     for (let k = 0; k < secIdx; k++) {
-      before += (doc.sections[k].text.split('\n').filter((l) => BOX.test(l))).length;
+      before += boxIdx(doc.sections[k].text.split('\n')).length;
     }
-    const boxes = [];
-    lines.forEach((l, k) => { if (BOX.test(l)) boxes.push(k); });
+    const boxes = boxIdx(lines);
 
     const norm = (t) => String(t).replace(/\s+/g, ' ').trim().normalize('NFC');
     const labelOf = (k) => norm((lines[k].match(BOX) || [])[2] || '');
@@ -5575,7 +5663,7 @@ async function toggleTask(btn) {
       if (cands.length === 1) at = cands[0];
       else if (cands.length > 1) {
         // 여러 개면 **섹션 안에서의 순서**로 고른다 — 그 섹션 몫만큼 잘라 nth 번째
-        const inSec = doc.sections[secIdx].text.split('\n').filter((l) => BOX.test(l)).length;
+        const inSec = boxIdx(doc.sections[secIdx].text.split('\n')).length;
         const slice = boxes.slice(before, before + inSec)
           .filter((k) => labelOf(k) === norm(label) && stateOf(k) === want);
         at = slice.length ? slice[Math.min(nth, slice.length - 1)] : cands[0];
@@ -5595,12 +5683,12 @@ async function toggleTask(btn) {
     // 앱이 들고 있는 섹션 본문도 같이 고친다 — 안 그러면 섹션을 넘겼다 오면 되돌아간다
     const sec = doc.sections[secIdx];
     if (sec) {
-      let seen = -1;
-      sec.text = sec.text.split('\n').map((l) => {
-        if (!BOX.test(l)) return l;
-        seen++;
-        return seen === nth ? l.replace(/\[([ xX])\]/, want ? '[x]' : '[ ]') : l;
-      }).join('\n');
+      const secLines = sec.text.split('\n');
+      const target = boxIdx(secLines)[nth];     // 위와 같은 계수 — 코드 블록 밖 상자만
+      if (target !== undefined) {
+        secLines[target] = secLines[target].replace(/\[([ xX])\]/, want ? '[x]' : '[ ]');
+        sec.text = secLines.join('\n');
+      }
     }
 
     if (want) await recordPick(doc, at, lines, label);
@@ -6745,9 +6833,44 @@ function highlightPreviewOverride() {
 /**
  * 하이라이트 저장 — 제스처 좌표로 다시 읽은 **글자 단위** Range를 우선 쓰고,
  * (사파리가 아니라서) 못 구하면 펜이 넘겨준 낱말 단위 글로 대신한다.
- * occurrence는 "저장된 순서" 기준 단순 카운트다 — 같은 구절을 문서 순서와 다르게
- * 골라 칠하면 어긋날 수 있는 걸 알고 가는 단순화(드문 경우라 지금은 감수한다).
+ * occurrence는 칠한 자리의 문서 순서 번호다(highlightOccurrenceFromRange) — 자리를 못
+ * 구한 경우에만 "저장된 개수" 카운트로 돌아간다.
  */
+/**
+ * 선택한 자리가 본문에서 **문서 순서로 몇 번째** 같은 글인지 센다(2026-11-12).
+ *
+ * 전에는 "저장된 하이라이트 개수"를 occurrence로 썼다. 같은 구절 두 번째를 먼저 칠하면
+ * 첫 번째 자리에 칠해졌고, 지운 뒤 다시 칠하면 이미 쓰인 번호와 겹쳤다. 이제 칠한 자리의
+ * 글자 위치 앞에 같은 글이 몇 번 나왔는지를 DOM에서 직접 센다 — applyHighlightsToSection이
+ * 다시 칠할 때 쓰는 계산(한 칸씩 밀며 겹침 포함)과 같은 기준이다. 자리를 못 구하면 null.
+ */
+function highlightOccurrenceFromRange(range, text) {
+  if (!range) return null;
+  const sc = range.startContainer;
+  const startEl = sc.nodeType === 1 ? sc : sc.parentElement;
+  const body = startEl && startEl.closest && startEl.closest('.read-body');
+  const startTok = startEl && startEl.closest && startEl.closest('.tok');
+  if (!body || !startTok) return null;
+  const toks = [...body.querySelectorAll('.tok')];
+  const ti = toks.indexOf(startTok);
+  if (ti < 0) return null;
+  let acc = '';
+  const starts = [];
+  toks.forEach((t) => { starts.push(acc.length); acc += t.textContent; });
+  const at = starts[ti] + (sc.nodeType === 3 ? range.startOffset : 0);
+  const needle = String(text).normalize('NFC').replace(/\s+/g, '');
+  if (!needle || !acc.startsWith(needle, at)) return null;
+  let occ = 0;
+  let from = 0;
+  for (;;) {
+    const idx = acc.indexOf(needle, from);
+    if (idx < 0 || idx >= at) break;
+    occ++;
+    from = idx + 1;
+  }
+  return occ;
+}
+
 async function commitHighlight(term) {
   const range = preciseHighlightRange();
   const precise = range ? range.toString() : '';
@@ -6757,7 +6880,9 @@ async function commitHighlight(term) {
   const { note, secIdx } = reader;
   const sec = note.sections[secIdx];
   if (!sec) return;
-  const occurrence = readerHighlights.filter(
+  // 문서 순서 기준 번호를 우선 쓴다(위 함수). 못 구하면(낱말 단위 글만 넘어온 경우 등)
+  // 옛 방식 — 같은 글로 저장된 개수 — 으로 돌아간다.
+  const occurrence = highlightOccurrenceFromRange(range, clean) ?? readerHighlights.filter(
     (h) => h.notePath === note.path && h.sectionHeading === sec.heading && h.text === clean).length;
   const rec = {
     id: `${note.path}#${sec.heading}#hl${Date.now()}`,
@@ -9143,7 +9268,10 @@ function clearDocMarks() {
 async function openExamAt(path, qnum) {
   const subject = path.split('/')[1];
   const file = path.split('/').pop();
-  await openExam(subject, { file, path });
+  // kind를 안 넘기면 meta.kind가 ''가 돼 풀이 이력(attempts)이 "모의고사|과목" 묶음에서
+  // 빠졌다 — 검색에서 연 시험만 약점 모아보기에 안 잡혔다(2026-11-12).
+  const kind = (EXAM_ROOTS.find((r) => path.startsWith(`${r.root}/`)) || {}).kind || '';
+  await openExam(subject, { file, path, kind });
   if (quiz) {
     const i = quiz.all.findIndex((x) => x.num === qnum);
     if (i >= 0) { quiz.cur = quiz.order.indexOf(i); if (quiz.cur < 0) quiz.cur = 0; quiz.render(); }
@@ -10567,10 +10695,14 @@ function initServiceWorker() {
       });
     });
   }).catch(() => {});
-  // 새 워커가 제어권을 잡으면 화면을 새로 그린다
+  // 새 워커가 제어권을 잡으면 화면을 새로 그린다.
+  // ⚠️ 이미 워커가 제어하던 앱에서만 새로고침한다(2026-11-12) — 첫 설치 때 claim으로
+  //    일어나는 controllerchange에서 쓸데없이 다시 뜨지 않게. 새 버전은 skipWaiting을
+  //    사용자가 "지금 적용"을 눌렀을 때만 부르므로, 쓰는 도중에 저절로 바뀌지 않는다.
   let reloaded = false;
+  const hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloaded) return;
+    if (reloaded || !hadController) return;
     reloaded = true;
     location.reload();
   });
@@ -10714,13 +10846,15 @@ window.__bootFails = bootFails;          // 검사와 디버깅이 들여다보�
     // 옛 껍데기가 캐시에 남은 것이 가장 흔한 원인이다 — 새로 받으면 풀린다
     setTimeout(() => toast(`일부 기능을 못 켰습니다(${bootFails.length}개) — ↻ 로 새로고침해 보세요.`), 1200);
   }
+  // index.html의 구조선에게 "앱이 섰다"고 알린다 — 이게 안 켜지면 복구 단추가 뜬다.
+  // ⚠️ 네트워크가 필요한 loadList **앞**에서 켠다(2026-11-12). 뒤에 두면 느린 망에서
+  //    목록을 기다리는 동안 10초가 지나 멀쩡한 앱 위에 구조선이 떴다.
+  window.__bootOK = true;
   try {
     if (await hasToken()) await loadList(false);
     else openSetup();
   } finally {
     hideSplash();                        // 실패해도 스플래시에 갇히지 않게
-    // index.html의 구조선에게 "앱이 섰다"고 알린다 — 이게 안 켜지면 복구 단추가 뜬다
-    window.__bootOK = true;
   }
   // 전체 색인을 한 번 받아둔 사람이면 **조용히 맞춰둔다** — 요청 한 번(git tree)으로
   // 달라진 파일만 가려내므로, 보통 아무것도 안 받고 끝난다. 오늘 올라온 노트가

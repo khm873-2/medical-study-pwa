@@ -78,6 +78,9 @@ const BIG = 600 * 1024;               // 이보다 큰 글은 건너뛴다(검�
 export function indexable(path) {
   if (!path.endsWith('.md')) return false;
   if (path.startsWith('.')) return false;
+  // `_백업` 폴더(다시 쓰기 전 옛 판을 보관한 사본)는 검색에 뜨면 같은 글이 두 번 나온다
+  // — 노트 목록에서 숨긴 것과 같은 이유(2026-11-12).
+  if (/(^|\/)_백업\//.test(path)) return false;
   return INDEX_ROOTS.some((r) => path === r || path.startsWith(`${r}/`));
 }
 
@@ -303,3 +306,14 @@ export async function storageInfo() {
 }
 
 export async function clearCachedPaths() { await kvSet('cached_paths', []); }
+
+/**
+ * 검색 색인을 **통째로** 비운다(2026-11-12). "캐시 비우기"가 글 본문 캐시만 지우고
+ * `vault_tree`(받아둔 파일 sha 목록)는 남겨서, 색인은 "다 받아뒀다"고 믿는데 본문은 없어
+ * 검색 결과가 조용히 비던 문제 — 둘이 같이 지워져야 다음 색인이 처음부터 다시 받는다.
+ */
+export async function clearSearchIndex() {
+  await kvSet('cached_paths', []);
+  await kvSet(TREE_KEY, null);
+  await kvSet(INDEX_AT, 0);
+}

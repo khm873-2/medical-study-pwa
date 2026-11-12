@@ -23,10 +23,27 @@ function encPath(path) {
   return path.split('/').map(encodeURIComponent).join('/');
 }
 
+/**
+ * 시간 제한이 있는 fetch — 목록 조회(listDir·listTree)용이다(2026-11-12).
+ * 느린 망에서 응답이 영영 안 오면 "불러오는 중…"에서 UI가 멈췄다. 파일 본문은 커서
+ * (시험 HTML ~900KB) 일부러 제한을 두지 않는다.
+ */
+async function fetchLimited(url, init, ms = 20000) {
+  if (typeof AbortController !== 'function') return fetch(url, init);
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ctl.signal });
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw new Error('응답이 너무 오래 걸립니다(시간 초과)');
+    throw e;
+  } finally { clearTimeout(t); }
+}
+
 /** 디렉터리 목록. [{name, path, type:'file'|'dir', size}] */
 export async function listDir(path) {
   const repo = await getRepo();
-  const res = await fetch(`${API}/repos/${repo}/contents/${encPath(path)}`, {
+  const res = await fetchLimited(`${API}/repos/${repo}/contents/${encPath(path)}`, {
     headers: await headers({ Accept: 'application/vnd.github+json' }),
   });
   if (!res.ok) throw new Error(`목록 조회 실패 (${res.status}) — ${path}`);
@@ -46,9 +63,9 @@ export async function listDir(path) {
  */
 export async function listTree(ref = 'HEAD') {
   const repo = await getRepo();
-  const res = await fetch(`${API}/repos/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`, {
+  const res = await fetchLimited(`${API}/repos/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`, {
     headers: await headers({ Accept: 'application/vnd.github+json' }),
-  });
+  }, 40000);   // 트리는 수 MB라 listDir보다 넉넉히
   if (!res.ok) throw new Error(`목록 조회 실패 (${res.status})`);
   const json = await res.json();
   if (!Array.isArray(json.tree)) throw new Error('파일 목록을 읽지 못했습니다.');

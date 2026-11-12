@@ -96,12 +96,21 @@ function normalize(raw, i, forcedType) {
   //   번호     {correct:1}     → 그 번호가 곧 자리 (0=O, 1=X)
   //   글자     {ans:"X"}       → ← 이걸 놓쳐서 Number("X")=NaN → 전부 O로 읽혔다
   const oxAns = oxIndex(rawAns);
+  // R형(복수정답, "모두 고르시오"/"두 가지 고르시오") — `type:'multi'` + `ansAll:[…]`.
+  // ⚠️ 전에는 type을 'mc'로 고정하고 ansAll을 버렸다(2026-11-12 점검): `ans:[1,3]`은
+  //    Number(...)=NaN이라 문항이 통째로 조용히 사라졌고, 숫자 `ans`만 있는 R형은 단일정답으로
+  //    채점됐다. 퀴즈 엔진(quiz.js)은 이미 multi를 지원하는데 파서가 못 넘겨주고 있었다.
+  const ansAllRaw = Array.isArray(raw.ansAll) ? raw.ansAll
+    : (Array.isArray(rawAns) && rawAns.length > 1 ? rawAns : null);
+  const ansAll = ansAllRaw ? ansAllRaw.map(Number).filter(Number.isInteger) : [];
+  const isMulti = !isOx && ansAll.length > 0 && (raw.type === 'multi' || ansAll.length > 1);
   return {
     num: raw.num ?? i + 1,
-    type: isOx ? 'ox' : 'mc',
+    type: isOx ? 'ox' : isMulti ? 'multi' : 'mc',
     q: String(q),
     opts: isOx ? ['O', 'X'] : (Array.isArray(opts) ? opts.map(String) : []),
-    ans: isOx ? oxAns : Number(rawAns ?? 0),
+    ans: isOx ? oxAns : isMulti ? ansAll[0] : Number(rawAns ?? 0),
+    ...(isMulti ? { ansAll } : {}),
     explain: raw.explain ?? raw.exp ?? '',
     opt: raw.opt ?? raw.optExplain ?? raw.optExp ?? [],
     summary: raw.summary ?? raw.sum ?? '',
@@ -143,6 +152,13 @@ const ANS_MARK = /^\s*[✅⭕○◎▶]?\s*정답\s*([.\-—:·,)]|$)/;
 const SHIFT_MIN = 3;            // 이만큼은 모여야 "파일이 그렇다"고 본다
 const SHIFT_RATIO = 0.8;        // 이 비율 넘게 한 목소리여야 한다
 
+/** 1부터 센 답을 0부터로 한 칸 내린다 — R형이면 ansAll도 같이(어긋나면 채점이 틀어진다). */
+function shiftOneBased(q) {
+  if (q.type === 'ox') return;
+  if (Number.isInteger(q.ans) && q.ans > 0) q.ans -= 1;
+  if (Array.isArray(q.ansAll)) q.ansAll = q.ansAll.map((a) => (a > 0 ? a - 1 : a));
+}
+
 export function fixOneBased(items) {
   let zero = 0;
   let one = 0;
@@ -156,9 +172,7 @@ export function fixOneBased(items) {
   }
   const seen = zero + one;
   if (one >= SHIFT_MIN && seen && one / seen >= SHIFT_RATIO) {
-    for (const q of items) {
-      if (q.type !== 'ox' && Number.isInteger(q.ans) && q.ans > 0) q.ans -= 1;
-    }
+    for (const q of items) shiftOneBased(q);
     return true;
   }
   // 표시가 아예 없는 파일을 위한 안전망 — **자리를 벗어난 답**은 1부터 센 것이 확실하다
@@ -169,9 +183,7 @@ export function fixOneBased(items) {
       && Number.isInteger(q.ans) && q.ans >= q.opts.length);
     const zeroish = items.some((q) => q.type !== 'ox' && q.ans === 0);
     if (over.length && !zeroish) {
-      for (const q of items) {
-        if (q.type !== 'ox' && Number.isInteger(q.ans) && q.ans > 0) q.ans -= 1;
-      }
+      for (const q of items) shiftOneBased(q);
       return true;
     }
   }
@@ -205,7 +217,8 @@ export function parseExamHtml(html) {
 
   // 쓸 수 없는 문항(선지가 없거나 정답 번호가 범위를 벗어남)은 버린다 — 조용히 깨지는 것보다 낫다
   const good = items.filter((q) => q.q && q.opts.length >= 2
-    && Number.isInteger(q.ans) && q.ans >= 0 && q.ans < q.opts.length);
+    && Number.isInteger(q.ans) && q.ans >= 0 && q.ans < q.opts.length
+    && (!q.ansAll || q.ansAll.every((a) => a >= 0 && a < q.opts.length)));
   if (!good.length) throw new Error('읽을 수 있는 문항이 없습니다.');
   good.forEach((q, i) => { q.num = q.num || i + 1; });
 
@@ -294,6 +307,10 @@ export function imagePaths(q) {
  * 날짜는 YYMMDD(새 형식)와 MMDD(옛 형식)를 모두 받는다.
  */
 export function prettyExamName(filename) {
+  // 임종평 연도×회차 통합 모의고사(06_모의고사/임종평_전범위/) — "임종평25-2_1교시_모의고사"가
+  // 밑줄 그대로 목록에 뜨던 것을 "임종평25-2 · 1교시"로(2026-11-12).
+  const jj = filename.match(/^(임종평\d{2}-\d)_(\d)교시/);
+  if (jj) return `${jj[1]} · ${jj[2]}교시`;
   let n = filename.replace(/\.html$/, '').replace(/^(\d{6}|\d{4})_/, '');
   n = n.replace(/_(모의고사|예습퀴즈|퀴즈)$/, '');
   // 퀴즈 파일은 "교수명_주제" 꼴이라 앞의 사람 이름을 뗀다(2~4자 한글 + _)
@@ -339,6 +356,10 @@ export function examDate(filename) {
 
 /** 날짜순 정렬용 키. YYMMDD면 그대로, MMDD면 26을 붙여 본다(이 vault는 전부 2026년). */
 export function examSortKey(filename) {
+  // 임종평 통합 모의고사는 날짜가 아니라 연도·회차·교시다 — **최신 회차가 먼저**, 교시는
+  // 오름차순이 되게 키를 만든다(오름차순 정렬 키라 연도·회차를 뒤집어 넣는다).
+  const jj = filename.match(/^임종평(\d{2})-(\d)_(\d)교시/);
+  if (jj) return `${String(99 - Number(jj[1])).padStart(2, '0')}${3 - Number(jj[2])}${jj[3]}`;
   const six = filename.match(/^(\d{6})_/);
   if (six) return six[1];
   const four = filename.match(/^(\d{4})_/);

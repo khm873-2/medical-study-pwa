@@ -2005,7 +2005,7 @@ await run('모델 오류', async () => {
   const appSrc = await fetch('/js/app.js').then((r) => r.text());
   out.push({ name: '미리 만든 파일을 먼저 찾는다', ok: /prebuiltBreakdown\(q\)/.test(appSrc) });
   out.push({ name: '파일 이름 규칙이 있다', ok: /_뜯어보기\.json/.test(appSrc) });
-  out.push({ name: '없으면 AI로 떨어진다', ok: /catch \{ \/\* 없으면 아래에서 AI로 \*\/ \}/.test(appSrc) });
+  out.push({ name: '없으면 AI로 떨어진다', ok: /catch \{[^}]*\/\* 없으면 아래에서 AI로 \*\/ \}/.test(appSrc) });
   out.push({ name: '미리 준비된 것임을 표시한다', ok: /미리 준비됨/.test(appSrc) });
   return out;
 });
@@ -2331,6 +2331,120 @@ await run('지난 풀이가 화면에 보인다', async () => {
     detail: (txt.match(/지난 풀이[^\n]*/) || [''])[0] });
   out.push({ name: '지금 회차는 지난 풀이에 안 섞인다(바로 위에 이미 떠 있다)',
     ok: !/3회/.test((txt.match(/지난 풀이[^\n]*/) || [''])[0]) });
+  qz.destroy();
+  return out;
+});
+
+// ══════════ 2026-11-12 점검 수정분 ══════════
+await run('점검 수정 — 파서·라벨·마크다운·머리말', async () => {
+  const out = [];
+  const P = await import('/js/parser.js');
+
+  // R형(복수정답)을 파서가 버리지 않는다
+  const html = `const QUESTIONS = [
+    {num:1,type:'multi',q:'두 가지를 고르시오',opts:['가','나','다','라','마'],ans:1,ansAll:[1,3],opt:[]},
+    {num:2,q:'배열 정답',opts:['가','나','다','라'],ans:[0,2],opt:[]},
+    {num:3,q:'일반',opts:['가','나'],ans:1,opt:[]},
+  ];`;
+  const qs = P.parseExamHtml(html).questions;
+  out.push({ name: '파서: type:"multi"와 ansAll을 보존한다',
+    ok: qs[0].type === 'multi' && JSON.stringify(qs[0].ansAll) === '[1,3]' && qs[0].ans === 1,
+    detail: JSON.stringify(qs[0]).slice(0, 80) });
+  out.push({ name: '파서: ans가 배열이면 R형으로 읽는다(예전엔 NaN으로 버렸다)',
+    ok: qs.length === 3 && qs[1].type === 'multi' && JSON.stringify(qs[1].ansAll) === '[0,2]' });
+  out.push({ name: '파서: 일반 문항은 그대로 mc', ok: qs[2].type === 'mc' && !qs[2].ansAll });
+
+  // 임종평 통합 모의고사 라벨·정렬
+  out.push({ name: '임종평 라벨: 밑줄 없이 "임종평25-2 · 1교시"',
+    ok: P.prettyExamName('임종평25-2_1교시_모의고사.html') === '임종평25-2 · 1교시',
+    detail: P.prettyExamName('임종평25-2_1교시_모의고사.html') });
+  const files = ['임종평23-2_1교시_모의고사.html', '임종평25-1_2교시_모의고사.html',
+    '임종평25-2_2교시_모의고사.html', '임종평25-2_1교시_모의고사.html', '임종평24-1_1교시_모의고사.html'];
+  const sorted = [...files].sort((a, b) => P.examSortKey(a).localeCompare(P.examSortKey(b)));
+  out.push({ name: '임종평 정렬: 최신 회차 먼저, 같은 회차는 교시 오름차순',
+    ok: JSON.stringify(sorted.map((f) => f.slice(0, 11))) === JSON.stringify([
+      '임종평25-2_1교시', '임종평25-2_2교시', '임종평25-1_2교시', '임종평24-1_1교시', '임종평23-2_1교시']),
+    detail: sorted.map((f) => f.slice(3, 9)).join(' ') });
+  out.push({ name: '날짜형 파일 정렬은 그대로(오름차순)',
+    ok: P.examSortKey('1012_a.html') < P.examSortKey('1013_a.html') && P.examSortKey('260917_b.html') === '260917' });
+
+  // 체크 상자 번호 — 콜아웃 안에서도 겹치지 않는다
+  const { renderMarkdown } = await import('/js/markdown.js');
+  const h = renderMarkdown('- [ ] a\n- [ ] b\n\n> [!note] 제목\n> - [ ] c\n\n- [ ] d');
+  const idxs = [...h.matchAll(/data-idx="(\d+)"/g)].map((m) => Number(m[1]));
+  out.push({ name: '체크 상자 번호가 콜아웃을 지나도 0,1,2,3으로 이어진다',
+    ok: JSON.stringify(idxs) === '[0,1,2,3]', detail: JSON.stringify(idxs) });
+  const h2 = renderMarkdown('- [ ] x');
+  out.push({ name: '다시 그리면 번호가 0부터', ok: /data-idx="0"/.test(h2) });
+
+  // 노트 머리말(첫 ## 앞 본문)이 사라지지 않는다
+  const { splitSectionsWithPreamble, splitSections } = await import('/js/wiki.js');
+  const md = '---\ntags: [a]\n---\n# 제목\n#flashcards\n\n> **족보타당도**: 왕족\n\n## 1. 본문\n내용\n';
+  const secs = splitSectionsWithPreamble(md);
+  out.push({ name: '노트: 첫 ## 앞의 메타 본문이 "머리말" 섹션으로 보인다',
+    ok: secs.length === 2 && secs[0].heading === '머리말' && /족보타당도/.test(secs[0].text)
+      && !/flashcards|^# 제목/m.test(secs[0].text),
+    detail: JSON.stringify(secs.map((x) => x.heading)) });
+  const secs2 = splitSectionsWithPreamble('---\ntags: [a]\n---\n# 제목\n#flashcards\n\n## 1. 본문\n내용');
+  out.push({ name: '노트: 제목·태그뿐이면 머리말 섹션을 만들지 않는다', ok: secs2.length === 1 && secs2[0].heading === '1. 본문' });
+  out.push({ name: '위키 패널용 splitSections는 그대로(머리말 안 붙임)', ok: splitSections(md).length === 1 });
+  return out;
+});
+
+await run('점검 수정 — 목록 캐시·다시풀기', async () => {
+  const out = [];
+  const d = await import('/js/db.js');
+  const a = await import('/js/auth.js');
+  const App = await import('/js/app.js');
+  await a.setToken('fake'); await a.setRepo('me/v');
+  const real = window.fetch;
+  const good = [{ subject: '테스트', kind: '퀴즈', exams: [{ file: 'a.html', path: '05_퀴즈/테스트/a.html', kind: '퀴즈' }] }];
+  try {
+    // 네트워크가 죽었을 때 빈 목록으로 캐시를 덮어쓰지 않는다
+    await d.kvSet(App.EXAM_INDEX_KEY, good);
+    await d.kvSet('exam_index_at', 0);
+    window.fetch = async (u, i) => {
+      if (!String(u).includes('api.github.com')) return real(u, i);
+      return { ok: false, status: 500, json: async () => ({}), text: async () => '' };
+    };
+    const r = await window.__examIndex(true);
+    const kept = await d.kvGet(App.EXAM_INDEX_KEY);
+    out.push({ name: '목록 조회가 실패해도 옛 목록을 돌려준다', ok: Array.isArray(r) && r.length === 1 });
+    out.push({ name: '실패한 빈 결과를 캐시에 쓰지 않는다', ok: Array.isArray(kept) && kept.length === 1 });
+  } finally {
+    window.fetch = real;
+    await d.kvSet(App.EXAM_INDEX_KEY, null);
+    await d.kvSet('exam_index_at', 0);
+  }
+
+  // 다시 풀기가 이력을 정리한다(이중 집계 방지)
+  const { Quiz } = await import('/js/quiz.js');
+  const EX = '테스트_다시풀기정리.html';
+  const qz = new Quiz({
+    examKey: EX, title: '다시풀기', questions: [{ num: 1, type: 'mc', q: '물음', opts: ['가', '나'], ans: 0, opt: ['정답 — 가라서', '오답 — 나라서'] }],
+    onFinish() {}, onExit() {}, onRender() {}, onCopy: async () => true, meta: { subject: 'S', kind: '모의고사' },
+  });
+  qz.start();
+  await new Promise((r) => setTimeout(r, 200));
+  qz.select(1);                                  // 틀리게 고른다
+  await new Promise((r) => setTimeout(r, 200));
+  const wrongBefore = (await d.allAttempts()).find((x) => x.exam === EX);
+  qz.resetOne();                                 // 다시 풀기
+  await new Promise((r) => setTimeout(r, 400));
+  const after = (await d.allAttempts()).find((x) => x.exam === EX);
+  out.push({ name: '다시 풀기: 안 푼 상태로 돌아간다', ok: qz.answers[0] === null });
+  out.push({ name: '다시 풀기: 시도가 이력에서 취소된다(이중집계 안 함)',
+    ok: !!wrongBefore && (!after || !after.last || after.wrongN === 0 || (after.history || []).length === 0),
+    detail: after ? `wrongN=${after.wrongN} hist=${(after.history || []).length}` : '이력 없음' });
+  qz.select(0);                                  // 다시 맞게 고른다
+  await new Promise((r) => setTimeout(r, 300));
+  const again = (await d.allAttempts()).find((x) => x.exam === EX);
+  out.push({ name: '다시 풀고 나면 오답 횟수가 쌓이지 않는다', ok: !again || !again.wrongN, detail: `wrongN=${again && again.wrongN}` });
+  // 선지 해설의 "정답 —" 머리말은 화면에서 뗀다
+  const exTxt = [...document.querySelectorAll('.opt-explain')].map((e) => e.textContent);
+  out.push({ name: '선지 해설 머리말("정답 — ")은 화면에서 뗀다',
+    ok: exTxt.length === 2 && exTxt.every((t) => !/^(정답|오답)\s*—/.test(t)) && exTxt[0] === '가라서',
+    detail: JSON.stringify(exTxt) });
   qz.destroy();
   return out;
 });
@@ -5742,7 +5856,15 @@ await run('새 퀴즈가 저절로 뜬다', async () => {
       ok: quizOf(cached) === 1, detail: `${quizOf(cached)}개` });
 
     await d.kvSet('exam_index_at', Date.now() - 10 * 60 * 1000);   // 10분 전 것이라 치면
-    const fresh = await window.__examIndex();
+    // 2026-11-12: 낡은 캐시는 **먼저 보여주고** 뒤에서 새로 읽는다(느린 망에서 목록이 멈추던 것)
+    const stale = await window.__examIndex();
+    out.push({ name: '낡은 목록은 기다리지 않고 바로 보여준다(뒤에서 갱신)',
+      ok: quizOf(stale) === 1, detail: `${quizOf(stale)}개` });
+    let fresh = stale;
+    for (let i = 0; i < 20 && quizOf(fresh) !== 2; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      fresh = await window.__examIndex();
+    }
     out.push({ name: '**새로 만든 퀴즈가 저절로 뜬다**', ok: quizOf(fresh) === 2,
       detail: `${quizOf(fresh)}개` });
     out.push({ name: '목록이 스스로 낡는다(force 없이도)',
@@ -8588,18 +8710,32 @@ await run('빈 화면 안내', async () => {
   await d.kvSet((await import('/js/app.js')).EXAM_INDEX_KEY, []);
   await d.kvSet('note_index_v2', []);
   const says = {};
+  // 앞선 검사들이 남긴 목록을 비워 둔다 — 전에는 openExam이 listBody를 "불러오는 중…"으로
+  // 갈아끼웠다 되돌리는 부작용 덕에 우연히 "낡은 본문"으로 취급돼 통과했다. 지금은 본문을
+  // 건드리지 않으므로, "목록이 아직 없다"는 상태를 직접 만든다.
+  ['quizBody', 'listBody', 'jokboBody', 'notesBody', 'drillBody']
+    .forEach((id) => { const b = document.getElementById(id); if (b) b.innerHTML = ''; });
   const bodyOf = () => document.querySelector('#quizBody:not(.hidden), #listBody:not(.hidden), #jokboBody:not(.hidden), #notesBody:not(.hidden)');
-  for (const tab of ['quizzes', 'exams', 'jokbo', 'notes']) {
-    document.querySelector(`.tabs [data-tab="${tab}"]`).click();
-    // 불러오는 동안은 "…중"이 떠 있다 — 끝날 때까지 기다렸다 읽는다
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 120));
-      const b = bodyOf();
-      if (b && !/중…/.test(b.textContent)) break;
+  // 2026-11-12: 빈 목록은 캐시에 안 쓴다 — 그래서 이 검사는 vault가 **정말 비어 있는 것처럼**
+  // 목록 조회가 곧바로 404를 내게 해야 한다(가짜 토큰으로 진짜 GitHub를 두드리면 시간이 걸려
+  // "불러오는 중…"이 3.6초 넘게 남는다).
+  const realFetch = window.fetch;
+  window.fetch = async (u, i) => (String(u).includes('api.github.com')
+    ? { ok: false, status: 404, json: async () => ({}), text: async () => '' }
+    : realFetch(u, i));
+  try {
+    for (const tab of ['quizzes', 'exams', 'jokbo', 'notes']) {
+      document.querySelector(`.tabs [data-tab="${tab}"]`).click();
+      // 불러오는 동안은 "…중"이 떠 있다 — 끝날 때까지 기다렸다 읽는다
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 120));
+        const b = bodyOf();
+        if (b && b.textContent.trim() && !/중…/.test(b.textContent)) break;
+      }
+      const box = bodyOf();
+      says[tab] = box ? box.textContent.replace(/\s+/g, ' ').trim() : '';
     }
-    const box = bodyOf();
-    says[tab] = box ? box.textContent.replace(/\s+/g, ' ').trim() : '';
-  }
+  } finally { window.fetch = realFetch; }
   for (const [tab, t] of Object.entries(says)) {
     out.push({ name: `${tab}: 어디를 보는지 알려준다`, ok: /vault의/.test(t),
       detail: t.slice(0, 50) });

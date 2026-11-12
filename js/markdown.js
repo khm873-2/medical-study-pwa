@@ -68,8 +68,17 @@ export function escapeHtml(s) {
 let taskSeq = 0;
 const escapeAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
+// ⚠️ 체크 상자 번호는 **가장 바깥 호출에서만** 0으로 되돌린다(2026-11-12). 콜아웃·인용·중첩
+//    목록은 renderMarkdown을 다시 부르는데, 그때마다 0으로 돌리면 한 섹션 안에서 번호가
+//    겹치거나 거꾸로 가서 app.js toggleTask가 원본의 엉뚱한 줄을 토글했다(vault에 그대로 저장).
+let renderDepth = 0;
 export function renderMarkdown(md, opts = {}) {
-  taskSeq = 0;              // 이 글 안에서 체크 상자가 나온 순서(원본과 맞춰 센다)
+  if (renderDepth === 0) taskSeq = 0;   // 이 글 안에서 체크 상자가 나온 순서(원본과 맞춰 센다)
+  renderDepth++;
+  try { return renderMarkdownBody(md, opts); } finally { renderDepth--; }
+}
+
+function renderMarkdownBody(md, opts) {
   const lines = String(md).replace(/\r\n/g, '\n').split('\n');
   const out = [];
   let i = 0;

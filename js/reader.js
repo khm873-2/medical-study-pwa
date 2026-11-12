@@ -7,7 +7,7 @@
 //  - ⭐ ==하이라이트== 를 뽑아 플래시카드로 돌릴 수 있다(노트에 이미 818개 깔려 있다).
 
 import { getText, getBlobUrl, listTree } from './github.js';
-import { splitSections, listNoteFiles } from './wiki.js';
+import { splitSectionsWithPreamble, listNoteFiles } from './wiki.js';
 import { renderMarkdown, hydrateEmbeds } from './markdown.js';
 import { kvGet, kvSet } from './db.js';
 
@@ -134,7 +134,7 @@ export function findNoteInGroups(groups, name) {
 
 export async function loadNote(path) {
   const md = await getText(path);
-  const secs = splitSections(md);
+  const secs = splitSectionsWithPreamble(md);
   // ## 가 아예 없는 노트는 통째로 한 섹션으로
   const sections = secs.length ? secs : [{ heading: '전문', text: md }];
   return {

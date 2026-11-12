@@ -206,7 +206,8 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 }
 .opt-text { flex: 1; font-size: calc(16px * var(--ui-scale)); line-height: 1.45; }
 /* 원본 문항 양식: 검사결과소견 카드 · 선지 선택률 (2026-11-03) */
-.lab-card { background: var(--card, #fff); border: 1px solid var(--border, #e2e8f0); border-radius: 12px; padding: 14px 16px; margin: 0 0 14px; font-size: calc(14px * var(--ui-scale)); line-height: 1.7; }
+/* .lab-card 본체는 위(#qtext 바로 아래)에 한 번만 정의한다 — 같은 규칙이 두 번 있어 뒤의 것이
+   앞의 간격을 덮어쓰고 있었다(2026-11-12). */
 .lab-card .lab-title { font-weight: 700; margin-bottom: 4px; }
 .rate { font-size: calc(12px * var(--ui-scale)); font-weight: 700; color: var(--sub, #64748b); min-width: 38px; text-align: right; align-self: center; }
 .opt-row.correct .rate { color: var(--correct, #16a34a); }

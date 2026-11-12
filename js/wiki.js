@@ -196,6 +196,41 @@ export async function noteByExamName(examHtmlPath) {
   return bestScore >= DICE_MIN ? best : null;
 }
 
+/**
+ * 첫 `##` **앞**의 본문(메타헤더 blockquote·맨 위 콜아웃·"관련 노트" 줄 등) — 앞머리(YAML)와
+ * `# 제목`·`#태그` 줄만 있으면 빈 문자열.
+ *
+ * ⚠️ splitSections는 첫 `##`를 만나기 전의 줄을 전부 버린다. 그래서 노트 맨 위에 둔 족보
+ * 타당도·출처·예습노트 경고 콜아웃이 읽기 화면에 아예 안 보였다(2026-11-12 점검).
+ */
+function preambleOf(md) {
+  let lines = String(md).replace(/\r\n/g, '\n').split('\n');
+  if (lines[0] === '---') {
+    const end = lines.indexOf('---', 1);
+    if (end > 0) lines = lines.slice(end + 1);
+  }
+  const head = [];
+  let inFence = false;
+  for (const line of lines) {
+    if (/^```/.test(line)) inFence = !inFence;
+    if (!inFence && /^##\s+(?!#)/.test(line)) break;
+    head.push(line);
+  }
+  const isTitleOrTag = (l) => /^#\s/.test(l) || /^(#[^\s#]+\s*)+$/.test(l.trim());
+  if (!head.some((l) => l.trim() && !isTitleOrTag(l))) return '';
+  // `# 제목`(화면 위쪽 노트 제목과 겹친다)과 `#태그` 줄은 뗀다
+  return head.filter((l) => !isTitleOrTag(l)).join('\n').trim();
+}
+
+/** splitSections + 머리말 섹션 — 읽기 화면(reader.js loadNote)용. 퀴즈 옆 위키 패널은 기존 splitSections를 그대로 쓴다. */
+export function splitSectionsWithPreamble(md) {
+  const secs = splitSections(md);
+  if (!secs.length) return secs;                 // `##`가 없으면 loadNote가 통째로 한 섹션으로 쓴다
+  const pre = preambleOf(md);
+  // 제목을 '머리말'로 — 노트에 실제 `## 개요`가 있을 수 있어 같은 이름은 피한다(하이라이트가 제목으로 키를 잡는다)
+  return pre ? [{ heading: '머리말', text: pre }, ...secs] : secs;
+}
+
 /** 노트 본문을 `## 대단원` 단위로 쪼갠다(### 소제목은 섹션 안에 그대로 둔다). */
 export function splitSections(md) {
   const lines = String(md).replace(/\r\n/g, '\n').split('\n');
