@@ -572,7 +572,9 @@ export class Quiz {
   async _renderImages(q) {
     const paths = imagePaths(q);
     this.el.qimg.innerHTML = '';
-    if (!paths.length) { this.el.qimg.style.display = 'none'; return; }
+    // 그림 없는 문항에서도 다음 문항 그림은 미리 받는다 — 여기서 그냥 return하면
+    // "그림 없는 문항 → 사진 문항"으로 넘어갈 때 또 처음부터 기다린다.
+    if (!paths.length) { this.el.qimg.style.display = 'none'; this._prefetchNearby(); return; }
     this.el.qimg.style.display = 'block';
 
     const note = document.createElement('div');
@@ -582,17 +584,12 @@ export class Quiz {
 
     const token = Symbol();
     this._imgToken = token;
-    const urls = [];
-    for (const p of paths) {
-      try {
-        // 캐시는 github.js(getBlobUrl)에만 둔다 — 여기 또 들고 있으면 저쪽 LRU가
-        // 버린 **죽은 주소**를 여기가 계속 내준다(2026-10-22). 같은 그림을 동시에
-        // 두 번 받지 않는 것도 저쪽이 이미 한다(blobWait).
-        urls.push(await getBlobUrl(p));
-      } catch (e) {
-        urls.push(null);
-      }
-    }
+    // 캐시는 github.js(getBlobUrl)에만 둔다 — 여기 또 들고 있으면 저쪽 LRU가
+    // 버린 **죽은 주소**를 여기가 계속 내준다(2026-10-22). 같은 그림을 동시에
+    // 두 번 받지 않는 것도 저쪽이 이미 한다(blobWait).
+    // ⚠️ 한 장씩 await하면 그림 2장짜리 문항은 2배로 기다린다 — 동시에 받는다(2026-11-16).
+    const urls = await Promise.all(paths.map((p) => getBlobUrl(p).catch(() => null)));
+    this._prefetchNearby();
     if (this._imgToken !== token) return; // 그 사이 문항이 바뀜
     this.el.qimg.innerHTML = '';
     urls.forEach((u, i) => {
@@ -608,6 +605,21 @@ export class Quiz {
       im.alt = '문제 이미지';
       this.el.qimg.appendChild(im);
     });
+  }
+
+  /**
+   * 다음 2문항·이전 1문항의 그림을 미리 받아 둔다(결과는 버린다 — getBlobUrl의 LRU에 남는다).
+   * 그림은 문항을 펼친 순간에야 GitHub에서 받기 시작해서 사진 문항마다 몇 초씩 비어 있었다
+   * (2026-11-16 신고: "사진이 뜨긴 뜨는데 왜 이렇게 늦게 뜨냐"). LRU가 60장이라 앞뒤 3문항은 넉넉하다.
+   */
+  _prefetchNearby() {
+    for (const d of [1, 2, -1]) {
+      const k = this.cur + d;
+      if (k < 0 || k >= this.order.length) continue;
+      const q = this.all[this.order[k]];
+      if (!q) continue;
+      for (const p of imagePaths(q)) getBlobUrl(p).catch(() => {});
+    }
   }
 
   _toggleEliminate(i) {
