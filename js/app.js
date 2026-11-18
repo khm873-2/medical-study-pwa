@@ -3310,7 +3310,10 @@ async function todayData(force) {
     const gotS = [];
     const gotE = [];
     for (const f of (await listDir('00_Raw_Text/시간표')).filter((x) => x.type === 'file' && x.name.endsWith('.md'))) {
-      const md = await getText(f.path);
+      // ⚠️ 시간표는 캐시 우선으로 읽으면 안 된다 — 실강 칸은 수업 당일 맥에서 채워지는데,
+      //    캐시 우선이면 옛 판(실강 칸 '—')이 계속 쓰여 퀴즈만 뜨고 실강노트가 안 떴다
+      //    (2026-11-18 신고). 네트워크 먼저, 실패하면 캐시.
+      const md = await getText(f.path, { fresh: true });
       const subject = f.name.replace(/_?시간표\.md$/, '');
       gotS.push(...parseSchedule(md).map((l) => ({ ...l, src: subject })));
       gotE.push(...parseExamDates(md).map((e) => ({ ...e, src: subject })));

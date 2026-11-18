@@ -80,8 +80,12 @@ export async function listTree(ref = 'HEAD') {
  * 텍스트 파일 읽기. raw 미디어 타입을 쓰면 base64 디코딩이 필요 없고 1MB 제한도 없다.
  * useCache=true면 IndexedDB 캐시를 먼저 보고, 실패(오프라인) 시에도 캐시로 폴백한다.
  */
-export async function getText(path, { useCache = true } = {}) {
-  if (useCache) {
+export async function getText(path, { useCache = true, fresh = false } = {}) {
+  // fresh: 캐시를 먼저 내주지 않고 네트워크부터 본다(받은 건 캐시에 쓰고, 실패하면
+  // 캐시로 폴백). 시간표처럼 **하루에도 여러 번 바뀌는데 옛 판이 보이면 화면이 틀리는**
+  // 파일용이다 — 캐시 우선이면 맥에서 실강 칸을 채워도 오늘 탭엔 옛 시간표가 계속 떠서
+  // 퀴즈만 보이고 실강노트 칩이 안 나왔다(2026-11-18 신고).
+  if (useCache && !fresh) {
     const hit = await cacheGet(path);
     if (hit) {
       // 캐시가 있어도 네트워크가 되면 갱신을 시도하되, 실패하면 캐시를 그대로 쓴다.
