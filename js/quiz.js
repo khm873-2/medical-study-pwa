@@ -301,13 +301,26 @@ export class Quiz {
     const q = this.q;
     const idx = this.qIndex;
     const out = [`문제 ${q.num}. ${q.q}`.trim()];
+    // 검사수치 박스(q.lab)도 문제의 일부다 — 빠지면 문항이 안 풀린다(2026-11-22 요청)
+    if (Array.isArray(q.lab) && q.lab.length) {
+      out.push('');
+      q.lab.forEach((l) => out.push(`  ${l}`));
+    }
+    const nImg = imagePaths(q).length;
+    if (nImg) out.push(`[사진 ${nImg}장 — 함께 복사됨]`);
+    out.push('');
     if (Array.isArray(q.opts) && q.opts.length) {
       q.opts.forEach((o, i) => out.push(`${CIRCLED[i] || i + 1} ${o}`));
     } else if (q.type === 'ox') {
       out.push('O / X');
     }
-    if (this.answers[idx] !== null) {          // 푼 뒤에만 답과 해설을 붙인다
+    const mine = this.answers[idx];
+    if (mine !== null) {          // 푼 뒤에만 답과 해설을 붙인다
       out.push('');
+      // 내가 고른 답 + 맞았는지(2026-11-22 요청: "내가 고른 답/실제답까지")
+      if (q.type !== 'open') {
+        out.push(`내 답: ${pickLabel(q, mine)} (${this.isCorrect(idx) ? '맞음' : '틀림'})`);
+      }
       out.push(`정답: ${q.type === 'ox' ? (isAns(q, 0) ? 'O' : 'X') : ansLabel_(q)}`);
       if (q.summary) out.push(`요약: ${q.summary}`);
       if (q.explain) out.push(`해설: ${q.explain}`);
@@ -316,6 +329,7 @@ export class Quiz {
         q.opt.forEach((t, i) => { if (t) out.push(`  ${CIRCLED[i] || i + 1} ${t}`); });
       }
     }
+    if (this.memos[idx]) out.push(`내 메모: ${this.memos[idx]}`);
     const src = q.source || q.srcTag;
     if (src) out.push(`[${src}]`);
     out.push(`— ${this.title}`);
@@ -348,7 +362,8 @@ export class Quiz {
     copy.textContent = '📋 복사';
     copy.title = answered ? '문제·선지·해설을 글로 복사합니다' : '문제와 선지를 글로 복사합니다';
     copy.onclick = async () => {
-      const ok = await this.onCopy(this.copyText());
+      // 사진 경로도 같이 넘긴다 — 글과 사진을 한 번에 클립보드에 담는다(2026-11-22)
+      const ok = await this.onCopy(this.copyText(), imagePaths(this.q));
       copy.textContent = ok ? '✓ 복사함' : '복사 실패';
       setTimeout(() => { copy.textContent = '📋 복사'; }, 1400);
     };

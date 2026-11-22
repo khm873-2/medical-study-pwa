@@ -5407,6 +5407,30 @@ await run('문제 복사 단추', async () => {
       detail: (copied || '').split('\n').filter((x) => /^정답|^해설/.test(x)).join(' / ') });
     out.push({ name: '선지별 해설도 담긴다', ok: /정답\. V5다/.test(copied || '') });
     out.push({ name: '어느 시험인지 적힌다', ok: /중환자 감시 퀴즈/.test(copied || '') });
+    // ③ 내가 고른 답·검사수치·사진(2026-11-22 요청)
+    out.push({ name: '**내가 고른 답과 맞았는지가 담긴다**', ok: /내 답: ② \(맞음\)/.test(copied || ''),
+      detail: (copied || '').split('\n').find((x) => /^내 답/.test(x)) || '없음' });
+    copied = null;
+    let gotPaths = null;
+    qz.destroy();
+    qz = new Quiz({
+      examKey: 'copy-test-2', title: 'T',
+      questions: [{ num: 3, type: 'mc', q: '치료는?', lab: ['TSH 0.01', 'fT4 3.2'],
+        imgs: ['attachments/x.png'], opts: ['A', 'B', 'C'], ans: 2 }],
+      onFinish() {}, onExit() {}, onRender() {},
+      onCopy: async (t, p) => { copied = t; gotPaths = p; return true; },
+      meta: {},
+    });
+    qz.start();
+    await new Promise((r) => setTimeout(r, 200));
+    qz.select(0);
+    await new Promise((r) => setTimeout(r, 200));
+    document.querySelector('#inlineNext .q-copy').click();
+    await new Promise((r) => setTimeout(r, 200));
+    out.push({ name: '**검사수치 박스가 담긴다**', ok: /TSH 0\.01/.test(copied || '') && /fT4 3\.2/.test(copied || '') });
+    out.push({ name: '**틀린 답은 "틀림"으로 담긴다**', ok: /내 답: ① \(틀림\)/.test(copied || '') && /정답: ③/.test(copied || '') });
+    out.push({ name: '**사진 경로가 함께 넘어간다**', ok: Array.isArray(gotPaths) && gotPaths.length === 1,
+      detail: JSON.stringify(gotPaths) });
   } catch (e) {
     out.push({ name: '복사 단추 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 130) });
   } finally {
