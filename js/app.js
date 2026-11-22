@@ -1491,6 +1491,7 @@ async function openExam(subject, ex) {
       onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); stopTimer(); closeBreakdownPanel(); loadList(false); },
       onRender: onQuestionRender,
       onCopy: copyQuestionText,
+      onCopyImages: copyQuestionImages,
       onToast: toast,
       meta: { subject, kind: ex.kind || '' },
     });
@@ -2110,52 +2111,30 @@ function selPreview(text, head = 70, tail = 45) {
  * 문항을 글로 복사한다 — 퀴즈 아래 "복사" 단추가 쓴다(2026-10-21 요청).
  * 글을 만드는 건 quiz.js가 하고(데이터를 들고 있으니), 클립보드는 여기서 맡는다.
  */
-async function copyQuestionText(text, paths = []) {
-  // 사진 문항은 글과 사진을 **한 번에** 담는다(2026-11-22 요청: "포함된 사진까지 다 복사").
-  // 클립보드 항목 하나에 세 갈래를 넣고, 붙여넣는 앱이 알아서 고르게 한다:
-  //   text/plain  — 글만 받는 앱(채팅 입력창 등)
-  //   text/html   — 글+사진을 함께 받는 앱(메모·노트앱) — 사진은 data: URL로 박는다
-  //   image/png   — 사진만 받는 앱 — 여러 장이면 세로로 이어 붙인 한 장
-  // ⚠️ 사파리는 탭한 그 순간에만 쓰기를 허용한다 — 사진을 다 받기 전에 write를 **먼저**
-  //    부르고, 값은 아직 안 끝난 Promise로 넘긴다(copyBlobToClipboard와 같은 이유).
-  if (paths && paths.length && navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
-    try {
-      const blobs = Promise.all(paths.map((p) =>
-        getBlobUrl(p).then((u) => fetch(u)).then((r) => r.blob()).catch(() => null)));
-      const html = blobs.then((bs) => questionHtmlBlob(text, bs));
-      const png = blobs.then(stackImagesPng);
-      await navigator.clipboard.write([new ClipboardItem({
-        'text/plain': new Blob([text], { type: 'text/plain' }),
-        'text/html': html,
-        'image/png': png,
-      })]);
-      capToast(`문제와 사진 ${paths.length}장을 복사했습니다`, 1600);
-      return true;
-    } catch { /* 사진을 못 담았으면 글만이라도 — 아래로 */ }
-  }
+async function copyQuestionText(text) {
   const ok = await autoCopy(text);
-  capToast(ok ? (paths && paths.length ? '사진은 못 담고 글만 복사했습니다' : '문제를 복사했습니다')
-    : '복사하지 못했습니다 — 길게 눌러 복사해 보세요', 1600);
+  capToast(ok ? '문제를 복사했습니다' : '복사하지 못했습니다 — 길게 눌러 복사해 보세요', 1600);
   return ok;
 }
 
-/** 복사용 HTML — 글은 줄 그대로, 사진은 그 아래 data: URL로 박는다. */
-async function questionHtmlBlob(text, blobs) {
-  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const toData = (b) => new Promise((res) => {
-    const fr = new FileReader();
-    fr.onload = () => res(fr.result);
-    fr.onerror = () => res(null);
-    fr.readAsDataURL(b);
-  });
-  const urls = await Promise.all((blobs || []).filter(Boolean).map(toData));
-  // 사진은 "[사진 N장 …]" 줄 바로 뒤(문제·검사수치 아래, 선지 위)에 둔다 — 화면과 같은 순서
-  const lines = String(text).split('\n');
-  const at = lines.findIndex((l) => /^\[사진 \d+장/.test(l));
-  const imgs = urls.filter(Boolean)
-    .map((u) => `<div><img src="${u}" style="max-width:100%;height:auto"></div>`).join('');
-  const body = lines.map((l, i) => (i === at ? imgs || esc(l) : `<div>${esc(l) || '<br>'}</div>`)).join('');
-  return new Blob([`<meta charset="utf-8"><div>${at < 0 ? body + imgs : body}</div>`], { type: 'text/html' });
+/**
+ * 문항 사진을 그림으로 복사한다 — "🖼 사진 복사" 단추(2026-11-22).
+ * 글과 한 항목에 같이 넣었더니 붙여넣는 앱이 사진만 가져가서 단추를 나눴다.
+ * ⚠️ 사파리는 탭한 그 순간에만 쓰기를 허용한다 — 사진을 다 받기 전에 write를 **먼저**
+ *    부르고 값은 아직 안 끝난 Promise로 넘긴다(copyBlobToClipboard와 같은 이유).
+ */
+async function copyQuestionImages(paths) {
+  try {
+    const png = Promise.all(paths.map((p) =>
+      getBlobUrl(p).then((u) => fetch(u)).then((r) => r.blob()).catch(() => null)))
+      .then(stackImagesPng);
+    await copyBlobToClipboard(png);
+    capToast(paths.length > 1 ? `사진 ${paths.length}장을 한 장으로 이어 복사했습니다` : '사진을 복사했습니다', 1600);
+    return true;
+  } catch {
+    capToast('사진을 복사하지 못했습니다 — 사진을 길게 눌러 복사해 보세요', 2200);
+    return false;
+  }
 }
 
 /** 사진 여러 장을 세로로 이어 붙인 PNG 한 장. 한 장도 못 받았으면 실패(→ 글만 복사). */
@@ -3847,6 +3826,7 @@ async function openWeakQueue({ subject, kind, exam } = {}) {
       onExit: () => { quiz.destroy(); destroyPen(); closeOverview(); closeBreakdownPanel(); loadList(false); },
       onRender: onQuestionRender,
       onCopy: copyQuestionText,
+      onCopyImages: copyQuestionImages,
       onToast: toast,
       meta: { subject: subj, kind: '모아풀기' },
     });

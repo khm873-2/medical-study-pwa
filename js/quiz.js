@@ -67,7 +67,7 @@ export class Quiz {
    * @param {Function} opts.onExit   목록으로 나갈 때
    * @param {object} [opts.meta]     {subject, kind} — 풀이 이력을 과목 단위로 모으기 위해
    */
-  constructor({ examKey, questions, title, onFinish, onExit, onRender, onCopy, onToast, meta }) {
+  constructor({ examKey, questions, title, onFinish, onExit, onRender, onCopy, onCopyImages, onToast, meta }) {
     this.examKey = examKey;
     this.meta = meta || {};
     this.all = questions;
@@ -79,6 +79,8 @@ export class Quiz {
     this.onRender = onRender || (() => {});
     // 클립보드는 앱이 맡는다 — 이 모듈은 **글만** 만든다(브라우저 밖 검사에서도 돌게)
     this.onCopy = onCopy || (async () => false);
+    // 사진 복사 — 경로를 받아 그림으로 담는다(앱이 맡는다)
+    this.onCopyImages = onCopyImages || (async () => false);
     // 짧은 안내 띄우기 — 앱이 넣어준다(없으면 조용히 넘어간다)
     this.onToast = onToast || (() => {});
 
@@ -307,7 +309,7 @@ export class Quiz {
       q.lab.forEach((l) => out.push(`  ${l}`));
     }
     const nImg = imagePaths(q).length;
-    if (nImg) out.push(`[사진 ${nImg}장 — 함께 복사됨]`);
+    if (nImg) out.push(`[사진 ${nImg}장 — "사진 복사" 단추로 따로 복사]`);
     out.push('');
     if (Array.isArray(q.opts) && q.opts.length) {
       q.opts.forEach((o, i) => out.push(`${CIRCLED[i] || i + 1} ${o}`));
@@ -357,15 +359,30 @@ export class Quiz {
       bar.appendChild(hint);
     }
     // 복사 — "다음 문제" **왼쪽**에 붙인다(2026-10-21 요청). 거기로 손이 이미 가 있다.
+    // ⚠️ 글과 사진은 **단추를 나눈다**(2026-11-22). 한 번에 담아봤더니 붙여넣는 앱이
+    //    사진만 집어 가고 글을 버렸다("복사 눌렀더니 사진만 되네"). 사진 단추는 사진 문항에만.
+    const paths = imagePaths(this.q);
+    if (paths.length) {
+      const pic = document.createElement('button');
+      pic.className = 'btn q-copy-img';
+      const label = `🖼 사진 복사${paths.length > 1 ? ` (${paths.length})` : ''}`;
+      pic.textContent = label;
+      pic.title = '문제 사진을 그림으로 복사합니다' + (paths.length > 1 ? ' — 여러 장은 세로로 이어 붙입니다' : '');
+      pic.onclick = async () => {
+        const ok = await this.onCopyImages(paths);
+        pic.textContent = ok ? '✓ 복사함' : '복사 실패';
+        setTimeout(() => { pic.textContent = label; }, 1400);
+      };
+      bar.appendChild(pic);
+    }
     const copy = document.createElement('button');
     copy.className = 'btn q-copy';
-    copy.textContent = '📋 복사';
-    copy.title = answered ? '문제·선지·해설을 글로 복사합니다' : '문제와 선지를 글로 복사합니다';
+    copy.textContent = '📋 글 복사';
+    copy.title = answered ? '문제·선지·내 답·정답·해설을 글로 복사합니다' : '문제와 선지를 글로 복사합니다';
     copy.onclick = async () => {
-      // 사진 경로도 같이 넘긴다 — 글과 사진을 한 번에 클립보드에 담는다(2026-11-22)
-      const ok = await this.onCopy(this.copyText(), imagePaths(this.q));
+      const ok = await this.onCopy(this.copyText());
       copy.textContent = ok ? '✓ 복사함' : '복사 실패';
-      setTimeout(() => { copy.textContent = '📋 복사'; }, 1400);
+      setTimeout(() => { copy.textContent = '📋 글 복사'; }, 1400);
     };
     bar.appendChild(copy);
 

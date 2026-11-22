@@ -5418,7 +5418,8 @@ await run('문제 복사 단추', async () => {
       questions: [{ num: 3, type: 'mc', q: '치료는?', lab: ['TSH 0.01', 'fT4 3.2'],
         imgs: ['attachments/x.png'], opts: ['A', 'B', 'C'], ans: 2 }],
       onFinish() {}, onExit() {}, onRender() {},
-      onCopy: async (t, p) => { copied = t; gotPaths = p; return true; },
+      onCopy: async (t) => { copied = t; return true; },
+      onCopyImages: async (p) => { gotPaths = p; return true; },
       meta: {},
     });
     qz.start();
@@ -5429,8 +5430,17 @@ await run('문제 복사 단추', async () => {
     await new Promise((r) => setTimeout(r, 200));
     out.push({ name: '**검사수치 박스가 담긴다**', ok: /TSH 0\.01/.test(copied || '') && /fT4 3\.2/.test(copied || '') });
     out.push({ name: '**틀린 답은 "틀림"으로 담긴다**', ok: /내 답: ① \(틀림\)/.test(copied || '') && /정답: ③/.test(copied || '') });
-    out.push({ name: '**사진 경로가 함께 넘어간다**', ok: Array.isArray(gotPaths) && gotPaths.length === 1,
+    out.push({ name: '**글 복사는 사진을 건드리지 않는다**', ok: gotPaths === null });
+    // 글·사진 단추를 나눴다(2026-11-22: 한 번에 담았더니 붙여넣는 앱이 사진만 가져갔다)
+    const pic = document.querySelector('#inlineNext .q-copy-img');
+    out.push({ name: '**사진 문항엔 "사진 복사" 단추가 따로 있다**', ok: !!pic });
+    if (pic) pic.click();
+    await new Promise((r) => setTimeout(r, 200));
+    out.push({ name: '**사진 복사는 사진 경로를 넘긴다**', ok: Array.isArray(gotPaths) && gotPaths.length === 1,
       detail: JSON.stringify(gotPaths) });
+    const nb = [...document.querySelectorAll('#inlineNext button')];
+    out.push({ name: '사진 → 글 → 다음 순서', ok: nb.length === 3 && nb[0] === pic && nb[1].classList.contains('q-copy'),
+      detail: nb.map((b) => b.textContent).join(' | ') });
   } catch (e) {
     out.push({ name: '복사 단추 검사 (실행 실패)', ok: false, detail: String(e.message).slice(0, 130) });
   } finally {
