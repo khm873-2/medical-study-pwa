@@ -325,7 +325,7 @@ export class Quiz {
       }
       out.push(`정답: ${q.type === 'ox' ? (isAns(q, 0) ? 'O' : 'X') : ansLabel_(q)}`);
       if (q.summary) out.push(`요약: ${q.summary}`);
-      if (q.explain) out.push(`해설: ${q.explain}`);
+      if (q.explain) out.push(`해설: ${q.explain.replace(/^!\[\[[^\]\n]+\]\]$/gm, '[표 — 앱 해설에서 그림으로 확인]')}`);
       if (Array.isArray(q.opt) && q.opt.some(Boolean)) {
         out.push('선지별 해설:');
         q.opt.forEach((t, i) => { if (t) out.push(`  ${CIRCLED[i] || i + 1} ${t}`); });
@@ -767,6 +767,34 @@ export class Quiz {
     return this.unselect();
   }
 
+  /**
+   * 해설 글을 붙인다 — 한 줄 전체가 `![[파일]]`이면 그 자리에 원본 그림을 그린다(2026-11-22).
+   * 알렌 해설의 표를 글자로 옮기면 칸이 뭉개져서("복통으로 인해 잠에서 깸RUQ 또는…")
+   * 읽을 수가 없었다 — 원본 PDF에서 잘라낸 표 그림을 그 자리에 넣는다.
+   */
+  _appendExplain(text, mk) {
+    const parts = String(text).split(/^!\[\[([^\]\n]+)\]\]$/m);   // [글, 파일, 글, 파일, 글]
+    let first = true;
+    parts.forEach((p, i) => {
+      if (i % 2) {
+        const box = document.createElement('div');
+        box.className = 'line exp-fig';
+        const im = document.createElement('img');
+        im.alt = '해설 표';
+        box.appendChild(im);
+        this.el.expText.appendChild(box);
+        getBlobUrl(imagePaths({ img: p })[0])
+          .then((u) => { im.src = u; })
+          .catch(() => { box.textContent = `그림을 불러오지 못했습니다 (${p})`; });
+        return;
+      }
+      const t = p.replace(/^\n+|\n+$/g, '');
+      if (!t) return;
+      this.el.expText.appendChild(mk(`${first ? ico('pin') : ''}${escapeHtml(t)}`));
+      first = false;
+    });
+  }
+
   _showExplain(q) {
     const idx = this.qIndex;
     this.el.expText.innerHTML = '';
@@ -817,7 +845,7 @@ export class Quiz {
       }).join(' · ');
       this.el.expText.appendChild(mk(`<span class="muted">지난 풀이 — ${escapeHtml(trail)}</span>`));
     }
-    if (q.explain) this.el.expText.appendChild(mk(`${ico('pin')}${escapeHtml(q.explain)}`));
+    if (q.explain) this._appendExplain(q.explain, mk);
     if (Array.isArray(q.opt) && q.opt.some(Boolean) && q.type !== 'mc' && q.type !== 'multi') {
       this.el.expText.appendChild(mk('오답노트:\n' + q.opt.map((t, i) => (t ? `${CIRCLED[i]} ${t}` : '')).filter(Boolean).join('\n')));
     }

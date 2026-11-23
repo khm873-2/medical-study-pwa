@@ -229,6 +229,8 @@ header h1 { font-size: 15px; margin: 0; color: var(--sub); font-weight: 600; fle
 
 #explainBox { display: none; margin-top: 14px; padding: 15px; background: var(--badge-bg); border-radius: 10px; font-size: calc(15px * var(--ui-scale)); line-height: 1.65; }
 #explainBox .line { margin-bottom: 7px; white-space: pre-wrap; }
+/* 해설 속 원본 표 그림(2026-11-22) — 흰 바탕 그대로, 다크모드에서도 읽히게 */
+#explainBox .exp-fig img { display: block; max-width: 100%; height: auto; background: #fff; border-radius: 6px; }
 #explainBox b.opt-num { color: var(--accent); }
 /* 족보 원문에 번호가 없어 해설·검증에서 미뤄 짚은 답 — 못 박힌 정답과 구별해야 한다
    (2026-10-22). 숨기면 학생이 추측을 정답으로 외운다. */
